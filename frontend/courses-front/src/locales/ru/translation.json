@@ -1,0 +1,23 @@
+{
+  "course": "Курс",
+  "semester": "Семестр",
+  "email": "Email",
+  "githubOrganization": "GitHub организация",
+  "googleSpreadsheet": "Google Таблица",
+  "loadCourse": "Загрузить курс",
+  "select": "Выбрать",
+  "edit": "Редактировать",
+  "delete": "Удалить",
+  "save": "Сохранить",
+  "cancel": "Отменить",
+  "fullscreen": "Полный экран",
+  "collapse": "Свернуть",
+  "details": "Подробнее",
+  "hide": "Скрыть",
+  "logout": "Выйти",
+  "confirmDeleteTitle": "Подтверждение удаления",
+  "confirmDeleteText": "Вы уверены, что хотите удалить этот курс?",
+  "yes": "Да",
+  "no": "Нет",
+  "expand": "Развернуть"
+}

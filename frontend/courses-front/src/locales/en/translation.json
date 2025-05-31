@@ -1,0 +1,23 @@
+{
+  "course": "Course",
+  "semester": "Semester",
+  "email": "Email",
+  "githubOrganization": "GitHub organization",
+  "googleSpreadsheet": "Google Spreadsheet",
+  "loadCourse": "Load course",
+  "select": "Select",
+  "edit": "Edit",
+  "delete": "Delete",
+  "save": "Save",
+  "cancel": "Cancel",
+  "fullscreen": "Fullscreen",
+  "collapse": "Collapse",
+  "details": "Details",
+  "hide": "Hide",
+  "logout": "Logout",
+  "confirmDeleteTitle": "Delete confirmation",
+  "confirmDeleteText": "Are you sure you want to delete this course?",
+  "yes": "Yes",
+  "no": "No",
+  "expand": "Expand"
+}

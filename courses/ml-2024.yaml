@@ -1,0 +1,124 @@
+course:
+    name: Machine learning 
+    logo: "/assets/machine-learning.png"
+    alt-names:
+        - ML
+        - Машинное обучение 
+        - Мо
+    semester: Spring 2025
+    email: k43guap@ya.ru
+    timezone: UTC+3
+    github:
+        organization: suai-diplom-2025
+        teachers:
+            - "Mark Polyak"
+            - markpolyak
+    google:
+        spreadsheet: 10iVAKvJVUyrjf7kEqm1TGOYk0lufyDJDbBItI5tnqAc
+        info-sheet: График
+        task-id-column: 0
+        student-name-column: 2
+        lab-column-offset: 1
+    staff:
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лектор
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лабораторные работы
+    labs:
+        "ЛР1":
+            github-prefix: ml-task1
+            short-name: ЛР1
+            taskid-max: 25
+            penalty-max: 6
+            ci:
+                - workflows
+            files:
+                - lab1.sh
+            moss:
+                language: c
+                max-matches: 1000
+                local-path: lab1
+                additional:
+                  - suai-os-2020
+                  - suai-os-2021
+                  - suai-os-2022
+                  - suai-os-2023
+                basefiles:
+                    -
+                        repo: k43guap/os-course-task1
+                        filename: lab1.sh
+            report:
+                - Цель работы
+                - Индивидуальное задание
+                - Описание входных данных
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+        "ЛР2":
+            github-prefix: ml-task2
+            short-name: ЛР2
+            taskid-max: 20
+            taskid-shift: 4
+            penalty-max: 9
+            ci:
+                - workflows
+            files:
+                - lab2.cpp
+            moss:
+                language: cc
+                max-matches: 1000
+                local-path: lab2
+                additional:
+                  - suai-os-2020
+                  - suai-os-2021
+                  - suai-os-2022
+                  - suai-os-2023
+                basefiles:
+                    -
+                        repo: k43guap/os-course-task2
+                        filename: lab2.cpp
+                    -
+                        repo: k43guap/os-course-task2
+                        filename: examples/ex3.cpp
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Граф запуска потоков
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+        "3":
+            github-prefix: ml-task3
+            short-name: ЛР3
+            taskid-max: 20
+            penalty-max: 7
+            ci:
+                - workflows
+            files:
+                - lab3.cpp
+            moss:
+                language: cc
+                max-matches: 1000
+                local-path: lab3
+                additional:
+                  - suai-os-2020
+                  - suai-os-2021
+                  - suai-os-2022
+                  - suai-os-2023
+                basefiles:
+                    -
+                        repo: k43guap/os-course-task3
+                        filename: lab3.cpp
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Граф запуска потоков
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+misc:
+    requests-timeout: 5
+
+
