@@ -9,8 +9,20 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:8000',
         changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
         secure: false,
+        rewrite: (path) => {
+          if (path.startsWith('/api/admin')) {
+            return path;
+          }
+          if (
+            path.startsWith('/api/courses') ||
+            path.startsWith('/api/groups') ||
+            path.startsWith('/api/labs')
+          ) {
+            return path.replace(/^\/api/, '');
+          }
+          return path;
+        },
       },
     },
   },
