@@ -5,16 +5,16 @@ course:
         - OS
         - Операционные системы
         - Ос
-    semester: Spring 2024
+    semester: Autumn 2024
     email: k43guap@ya.ru
     timezone: UTC+3
     github:
-        organization: suai-os-2024
+        organization: suai-os-2024f
         teachers:
             - "Mark Polyak"
             - markpolyak
     google:
-        spreadsheet: 1t1ex3r62B6Ujd6piB7PGxptjgIjNXUGt4j1aEGGsTIk
+        spreadsheet: 1jojsG5IZXvDiK9tIHAdCp4ZJcKDY_U-veKz0v6tUFQY # тестовая таблица
         info-sheet: График
         task-id-column: 0
         student-name-column: 2
@@ -38,30 +38,12 @@ course:
                 - goals.md
                 - info.md
                 - report.pdf
+            tests: []
             moss:
                 language: c
             report:
                 - Задание
                 - Результат
-        "01":
-            github-prefix: os-task-I-1
-            short-name: ЛР0.1
-            taskid-max: 20
-            penalty-max: 6
-            # ignore-task-id: True
-            ci:
-                - workflows
-            files:
-                - typescript
-            moss:
-                language: c
-                max-matches: 1000
-            report:
-                - Цель работы
-                - Индивидуальное задание
-                - Результат выполнения работы
-                - Содержимое файла typescript c записанной последовательностью команд
-                - Выводы
         "1":
             github-prefix: os-task1
             short-name: ЛР1
@@ -71,6 +53,8 @@ course:
                 - workflows
             files:
                 - lab1.sh
+            tests:
+                - test.sh
             moss:
                 language: c
                 max-matches: 1000
@@ -101,6 +85,8 @@ course:
                 - workflows
             files:
                 - lab2.cpp
+            tests:
+              - test/tests.cpp
             moss:
                 language: cc
                 max-matches: 1000
@@ -133,6 +119,8 @@ course:
                 - workflows
             files:
                 - lab3.cpp
+            tests:
+              - test/tests.cpp
             moss:
                 language: cc
                 max-matches: 1000
@@ -162,6 +150,8 @@ course:
                 - workflows
             files:
                 - lab4.cpp
+            tests:
+                - tests.sh
             moss:
                 language: cc
                 max-matches: 100
@@ -194,6 +184,7 @@ course:
             files:
                 - client.cpp
                 - server.cpp
+            tests: []
             moss:
                 language: cc
                 max-matches: 1000
@@ -213,7 +204,13 @@ course:
             github-prefix: os-task5
             short-name: ЛР6
             taskid-max: 30
-            penalty-max: 7
+            penalty-max: 6
+            ci:
+              workflows:
+                - run-autograding-tests
+                - cpplint
+            files:
+                - .github/workflows/tests.yml
             moss:
                 language: cc
                 max-matches: 1000

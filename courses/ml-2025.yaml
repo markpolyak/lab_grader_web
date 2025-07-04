@@ -1,0 +1,123 @@
+course:
+    name: Machine learning
+    logo: "/assets/machine-learning.png"
+    alt-names:
+        - ML
+        - Машинное обучение
+    semester: Spring 2025
+    email: k43guap@ya.ru
+    timezone: UTC+3
+    github:
+        organization: suai-mlb-2025
+        teachers:
+            - "Mark Polyak"
+            - markpolyak
+    google:
+        spreadsheet: 1h1Zuweo4DRko2lFffETbE3I4566w1zAKuG6kJmDD76A # тестовая таблица
+        info-sheet: График
+        task-id-column: 0
+        student-name-column: 2
+        lab-column-offset: 1
+    staff:
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лектор
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лабораторные работы
+    labs:
+        "1":
+            github-prefix: mlb-task1
+            short-name: ЛР1
+            taskid-max: 25
+            penalty-max: 7
+            ci:
+                - workflows
+            files:
+                - jupyter_assignment.ipynb
+                - matplotlib_assignment.ipynb
+                - pandas_assignment.ipynb
+            tests:
+                - jupyter_tests.py
+            moss:
+                language: py
+                max-matches: 1000
+                local-path: lab1
+                additional:
+                  - suai-mlb-2024
+                basefiles:
+                    -
+                        repo: k43guap/mlb-course-task1
+                        filename: jupyter_assignment.ipynb
+                    -
+                        repo: k43guap/mlb-course-task1
+                        filename: matplotlib_assignment.ipynb
+                    -
+                        repo: k43guap/mlb-course-task1
+                        filename: pandas_assignment.ipynb
+            report:
+                - Цель работы
+                - Индивидуальное задание
+                - Описание входных данных
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+        "2":
+            github-prefix: mlb-task2
+            short-name: ЛР2
+            taskid-max: 20
+            taskid-shift: 4
+            penalty-max: 8
+            ci:
+                - workflows
+            files:
+                - regression_assignment.ipynb
+            tests: []
+            moss:
+                language: py
+                max-matches: 1000
+                local-path: lab2
+                additional:
+                  - suai-mlb-2024
+                basefiles:
+                    -
+                        repo: k43guap/mlb-course-task2
+                        filename: regression_assignment.ipynb
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Граф запуска потоков
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+        "3":
+            github-prefix: mlb-task3
+            short-name: ЛР3
+            taskid-max: 20
+            penalty-max: 9
+            ci:
+                - workflows
+            files:
+                - classification_assignment.ipynb
+            tests: []
+            moss:
+                language: py
+                max-matches: 1000
+                local-path: lab3
+                additional:
+                  - suai-mlb-2024
+                basefiles:
+                    -
+                        repo: k43guap/mlb-course-task3
+                        filename: classification_assignment.ipynb
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Граф запуска потоков
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+misc:
+    requests-timeout: 5
+
+
