@@ -488,3 +488,5 @@ async def upload_course(file: UploadFile = File(...)):
         f.write(content)
 
     return {"detail": "Курс успешно загружен"}
+
+#reshetka
