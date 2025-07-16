@@ -1,18 +1,85 @@
 from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import UploadFile, File, Query
+from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
+from typing import List, Dict, Any
 import os
 import yaml
 import gspread
 import requests
 from oauth2client.service_account import ServiceAccountCredentials
-from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import UploadFile, File
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
+import pandas as pd
+from io import BytesIO
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+# --- Helper functions for uploading scores ---
+def normalize_whitespace(s: str) -> str:
+    return " ".join(str(s).strip().split())
+
+def parse_scores(file: UploadFile) -> pd.DataFrame:
+    filename = file.filename.lower()
+    content = file.file.read()
+    if filename.endswith(".csv"):
+        df = pd.read_csv(BytesIO(content))
+    elif filename.endswith((".xls", ".xlsx")):
+        df = pd.read_excel(BytesIO(content))
+    else:
+        raise HTTPException(400, "Неподдерживаемый формат: .csv или .xlsx")
+
+    for col in ("Фамилия", "Имя", "Отчество или второе имя"):
+        if col not in df.columns:
+            raise HTTPException(400, f"Отсутствует колонка '{col}'")
+
+    df["Фамилия"] = df["Фамилия"].astype(str).apply(normalize_whitespace)
+    df["Имя"] = df["Имя"].astype(str).apply(normalize_whitespace)
+    df["Отчество или второе имя"] = (
+        df["Отчество или второе имя"].fillna("").astype(str).apply(normalize_whitespace)
+    )
+    df["full_name"] = (
+        df["Фамилия"]
+        + " "
+        + df["Имя"]
+        + df["Отчество или второе имя"].apply(lambda m: f" {m}" if m else "")
+    )
+
+    score_col = next(
+        (c for c in df.columns if c.strip().lower().startswith("оценка")), None
+    )
+    if not score_col:
+        raise HTTPException(400, "Отсутствует столбец, начинающийся на 'Оценка'")
+
+    raw = df[score_col].astype(str).str.replace(",", ".", regex=False)
+    df["score"] = pd.to_numeric(raw, errors="coerce").fillna(0)
+    return df[["full_name", "score"]]
 
 load_dotenv()
+
+# --- Google Sheets API ---
+SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+KEY_FILE = os.getenv("CREDENTIALS_FILE") or os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if not KEY_FILE:
+    raise RuntimeError("CREDENTIALS_FILE or GOOGLE_APPLICATION_CREDENTIALS must be set")
+
+_creds = service_account.Credentials.from_service_account_file(KEY_FILE, scopes=SCOPES)
+_sheets_service = build("sheets", "v4", credentials=_creds).spreadsheets()
+
+def get_sheet_titles(spreadsheet_id: str) -> List[str]:
+    meta = _sheets_service.get(spreadsheetId=spreadsheet_id, fields="sheets.properties.title").execute()
+    return [s["properties"]["title"] for s in meta.get("sheets", [])]
+
+def get_sheet_values(spreadsheet_id: str, rng: str) -> List[List[Any]]:
+    res = _sheets_service.values().get(spreadsheetId=spreadsheet_id, range=rng).execute()
+    return res.get("values", [])
+
+def batch_update(spreadsheet_id: str, data: List[Dict[str, Any]]) -> None:
+    body = {"valueInputOption": "RAW", "data": data}
+    _sheets_service.values().batchUpdate(spreadsheetId=spreadsheet_id, body=body).execute()
+
 app = FastAPI()
 COURSES_DIR = "courses"
 CREDENTIALS_FILE = "credentials.json"  # Файл с учетными данными Google API
@@ -489,4 +556,55 @@ async def upload_course(file: UploadFile = File(...)):
 
     return {"detail": "Курс успешно загружен"}
 
-#reshetka
+
+# --- Endpoint: Upload scores to Google Sheets ---
+class MissingResponse(BaseModel):
+    missing_students: List[str]
+
+@app.post(
+    "/subjects/{subject_id}/upload_scores",
+    response_model=MissingResponse,
+    summary="Загрузить оценки из файла в Google Sheets"
+)
+async def upload_scores(
+    subject_id: str,
+    column: str = Query(..., description="Название столбца для оценок"),
+    file: UploadFile = File(...),
+):
+    df = parse_scores(file)
+    sheets = get_sheet_titles(subject_id)
+    if not sheets:
+        raise HTTPException(404, "В таблице нет листов")
+    sheet_contexts = []
+    for sheet in sheets:
+        headers = get_sheet_values(subject_id, f"{sheet}!1:1")
+        if not headers or not headers[0]:
+            continue
+        hdr = headers[0]
+        col_letter = None
+        if column in hdr:
+            idx = hdr.index(column)
+            col_letter = chr(ord("A") + idx)
+        names = get_sheet_values(subject_id, f"{sheet}!B2:B1000")
+        name_map = {
+            name.strip(): i + 2
+            for i, row in enumerate(names)
+            if (name := (row[0] if row else "")).strip()
+        }
+        sheet_contexts.append((sheet, col_letter, name_map))
+    updates, missing = [], []
+    for full_name, score in zip(df["full_name"], df["score"]):
+        placed = False
+        for sheet, col_letter, name_map in sheet_contexts:
+            if col_letter and full_name in name_map:
+                updates.append({
+                    "range": f"{sheet}!{col_letter}{name_map[full_name]}",
+                    "values": [[score]]
+                })
+                placed = True
+                break
+        if not placed:
+            missing.append(full_name)
+    if updates:
+        batch_update(subject_id, updates)
+    return {"missing_students": missing}
