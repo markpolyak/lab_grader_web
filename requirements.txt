@@ -10,4 +10,3 @@ itsdangerous
 pandas
 openpyxl
 google-api-python-client
-httpx
