@@ -7,3 +7,6 @@ requests
 python-multipart
 python-dotenv
 itsdangerous
+pandas
+openpyxl
+google-api-python-client
