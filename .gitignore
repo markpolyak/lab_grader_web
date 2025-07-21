@@ -187,3 +187,4 @@ credentials.json
 tg_bot/*.db
 tg_bot/*.db-*
 tg_bot/__pycache__/
+.DS_Store
