@@ -55,3 +55,28 @@ export async function gradeLab(courseId, groupId, labId, github) {
   return response.json();
 }
 
+/*
+export const checkPlagiarism = async (repoUrl, files, sensitivity) => {
+  const response = await fetch(`${API_BASE_URL}/admin/plagiarism-check`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${localStorage.getItem('token')}`
+    },
+    body: JSON.stringify({ repoUrl, files, sensitivity }),
+  });
+  
+  if (!response.ok) {
+    const errorData = await response.json();
+    throw new Error(errorData.message || 'Plagiarism check failed');
+  }
+  
+  return response.json();
+};
+
+/*export const getPlagiarismConfig = async (courseId, labId) => {
+  const response = await fetch(
+    `${API_BASE_URL}/courses/${courseId}/labs/${labId}/plagiarism-config`
+  );
+  return response.json();
+};*/

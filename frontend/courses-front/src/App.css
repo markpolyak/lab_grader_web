@@ -45,3 +45,26 @@
 .read-the-docs {
   color: #888;
 }
+/* Plagiarism specific styles 
+.plagiarism-link {
+  color: #3182ce;
+  text-decoration: none;
+  font-weight: 500;
+  padding: 0.5rem;
+  border-radius: 4px;
+  transition: #ebf8ff 0.2s;
+}
+
+.plagiarism-link:hover {
+  background: #ebf8ff;
+  text-decoration: underline;
+}
+
+.error-message {
+  color: #e53e3e;
+  background: #fff5f5;
+  padding: 1rem;
+  border-radius: 4px;
+  margin-bottom: 1rem;
+  border-left: 4px solid #e53e3e;
+}*/
