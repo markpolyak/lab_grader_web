@@ -21,3 +21,21 @@ services:
       - .:/app
     env_file:
       - .env
+    environment:
+      - API_BASE_URL=http://backend:8000
+  
+  bot:
+    build:
+      context: .
+      dockerfile: bot.Dockerfile
+    volumes:
+      - ./tg_bot:/app
+
+    env_file:
+      - .env
+    # environment:
+    #   - API_BASE_URL=http://backend:8000  # Для доступа к бэкенду
+    depends_on:
+      - backend
+
+
