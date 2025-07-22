@@ -432,8 +432,8 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
 
     total_checks = len(check_runs)
     result_string = f"{passed_count}/{total_checks} тестов пройдено"
-
-    final_result = "✓" if passed_count == total_checks else "✗"
+    # изменено
+    ci_result = "✓" if passed_count == total_checks else "✗"
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
@@ -454,32 +454,45 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     if username not in github_values:
         raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
 
-    lab_number = parse_lab_id(lab_id)
     row_idx = github_values.index(username) + 3
-    lab_col = student_col + lab_number + lab_offset
-    sheet.update_cell(row_idx, lab_col, final_result)
 
-    # Проверка содержимого PDF
+    # проверка содержимого PDF
     pdf_check = check_pdf_content(
         name_file="report.pdf",
         name_repository=f"{org}/{repo_prefix}-{username}",
         name_item=course_info.get("name", "Unknown Course"),
-        name_lab=lab_config.get("name", "Unknown Lab"),
+        name_lab=lab_config.get("short-name", "Unknown Lab"),
         num_group=group_id,
         name_student=sheet.cell(row_idx, student_col).value,
-        main_sections=["Цель работы", "Выполнение"],
+        main_sections=lab_config.get("report", []),
         name_branch="main",
         sha_commit=latest_sha,
         token=GITHUB_TOKEN
     )
 
+    # комбинируем результаты CI и PDF
+    final_result = "✓" if ci_result == "✓" and pdf_check["first_page"] and not pdf_check["missing_sections"] else "✗"
+    pdf_message = []
+    if not pdf_check["first_page"]:
+        pdf_message.append("Не все данные присутствуют на первой странице PDF")
+    if pdf_check["missing_sections"]:
+        pdf_message.append(f"Отсутствуют разделы в PDF: {', '.join(pdf_check['missing_sections'])}")
+
+    lab_number = parse_lab_id(lab_id)
+    lab_col = student_col + lab_number + lab_offset
+    sheet.update_cell(row_idx, lab_col, final_result)
+
     return {
         "status": "updated",
         "result": final_result,
-        "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
+        "message": f"Результат CI: {'✅ Все проверки пройдены' if ci_result == '✓' else '❌ Обнаружены ошибки'}; Результат PDF: {'✅ PDF соответствует требованиям' if pdf_check['first_page'] and not pdf_check['missing_sections'] else '❌ Ошибки в PDF'}",
         "passed": result_string,
         "checks": summary,
-        "pdf_check": pdf_check
+        "pdf_check": {
+            "first_page_valid": pdf_check["first_page"],
+            "missing_sections": pdf_check["missing_sections"],
+            "pdf_message": pdf_message if pdf_message else ["PDF соответствует требованиям"]
+        }
     }
 
 @app.post("/courses/upload")
