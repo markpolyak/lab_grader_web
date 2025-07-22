@@ -11,6 +11,7 @@ from fastapi import UploadFile, File
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
+from grading import check_pdf_content
 
 load_dotenv()
 app = FastAPI()
@@ -458,16 +459,28 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     lab_col = student_col + lab_number + lab_offset
     sheet.update_cell(row_idx, lab_col, final_result)
 
+    # Проверка содержимого PDF
+    pdf_check = check_pdf_content(
+        name_file="report.pdf",
+        name_repository=f"{org}/{repo_prefix}-{username}",
+        name_item=course_info.get("name", "Unknown Course"),
+        name_lab=lab_config.get("name", "Unknown Lab"),
+        num_group=group_id,
+        name_student=sheet.cell(row_idx, student_col).value,
+        main_sections=["Цель работы", "Выполнение"],
+        name_branch="main",
+        sha_commit=latest_sha,
+        token=GITHUB_TOKEN
+    )
+
     return {
         "status": "updated",
         "result": final_result,
         "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
         "passed": result_string,
-        "checks": summary
+        "checks": summary,
+        "pdf_check": pdf_check
     }
-
-
-
 
 @app.post("/courses/upload")
 async def upload_course(file: UploadFile = File(...)):
