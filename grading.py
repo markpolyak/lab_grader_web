@@ -8,8 +8,8 @@ def extract_latex_content(text):
     # Удаление комментариев
     text = re.sub(r'%.*', '', text)
     
-    # Извлечение содержимого между \begin{document} и \end{document}
-    doc_match = re.search(r'\\begin{document}(.*?)\\end{document}', text, re.DOTALL)
+    # Извлечение содержимого между \begin{titlepage} и \end{document}
+    doc_match = re.search(r'\\begin{titlepage}(.*?)\\end{document}', text, re.DOTALL)
     if not doc_match:
         return ""
     content = doc_match.group(1)
@@ -18,14 +18,6 @@ def extract_latex_content(text):
     content = re.sub(r'\\begin{tabular}.*?\\end{tabular}', 
                     lambda m: ' '.join(re.findall(r'\{([^{}]*)\}', m.group())), 
                     content, flags=re.DOTALL)
-    
-    # Удаление LaTeX-команд с сохранением их аргументов
-    content = re.sub(r'\\[a-zA-Z]+\*?\s*\{([^{}]*)\}', r'\1', content)
-    content = re.sub(r'\\[a-zA-Z]+\*?\s*', ' ', content)
-    
-    # Удаление оставшихся спецсимволов
-    content = re.sub(r'[{}]', '', content)
-    content = re.sub(r'\\[^\s]*', '', content)
     
     # Нормализация пробелов
     content = ' '.join(content.split())
@@ -42,7 +34,7 @@ def extract_titlepage_content(text):
         return ""
     content = titlepage_match.group(1)
     
-    # Обработка содержимого (аналогично extract_latex_content)
+    # Обработка содержимого
     content = re.sub(r'\\[a-zA-Z]+\*?\s*\{([^{}]*)\}', r'\1', content)
     content = re.sub(r'\\[a-zA-Z]+\*?\s*', ' ', content)
     content = re.sub(r'[{}]', '', content)
@@ -101,7 +93,7 @@ def grade_report_latex(repo, filename, subject, lab_name, group, student_name, r
     }
     
     # Проверка разделов (ищем как \section{Name}, так и \section*{Name})
-    sections = re.findall(r'\\section\*?\{([^{}]*)\}', content)
+    sections = re.findall(r'\\section\*?\{([^{}]*)\}', full_text)
     section_checks = {sec: any(sec.lower() in s.lower() for s in sections) 
                      for sec in required_sections}
     
@@ -109,3 +101,4 @@ def grade_report_latex(repo, filename, subject, lab_name, group, student_name, r
         "title_page": title_checks,
         "sections": section_checks
     }
+
