@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
+from grading import grade_report_latex
 import re
 
 load_dotenv()
@@ -456,6 +457,45 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     lab_number = parse_lab_id(lab_id)
     row_idx = github_values.index(username) + 3
     lab_col = student_col + lab_number + lab_offset
+    
+    report_checks = {}
+    if lab_config.get("report"):
+        report_file = "report.tex"  # или можно брать из конфига
+        report_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/{report_file}"
+        report_resp = requests.get(report_url, headers=headers)
+        
+        if report_resp.status_code == 200:
+            try:
+                # Получаем информацию о студенте из таблицы
+                student_name = sheet.cell(row_idx, student_col).value
+                report_checks = grade_report_latex(
+                    repo=f"{org}/{repo_name}",
+                    filename=report_file,
+                    subject=course_info.get("name", ""),
+                    # Учитывать, что все названия предметов на английском в конфигах
+                    lab_name=lab_config.get("short-name", ""),  
+                    # Полного названия лабы в конфиге нет, поэтому пока берем short-name
+                    group=group_id,
+                    student_name=student_name,
+                    required_sections=lab_config.get("report", []),
+                    branch="main",
+                    github_token=GITHUB_TOKEN
+                )
+                
+                # Проверяем результаты
+                title_ok = all(report_checks["title_page"].values())
+                sections_ok = all(report_checks["sections"].values())
+                
+                if not title_ok or not sections_ok:
+                    final_result = "✗"
+                    summary.append("❌ Отчет не соответствует требованиям")
+                else:
+                    summary.append("✅ Отчет соответствует требованиям")
+                    
+            except Exception as e:
+                final_result = "✗"
+                summary.append(f"❌ Ошибка при проверке отчета: {str(e)}")
+    
     sheet.update_cell(row_idx, lab_col, final_result)
 
     return {
