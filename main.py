@@ -434,7 +434,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     result_string = f"{passed_count}/{total_checks} тестов пройдено"
     # изменено
     ci_result = "✓" if passed_count == total_checks else "✗"
-
+    
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
     client = gspread.authorize(creds)
@@ -454,45 +454,61 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     if username not in github_values:
         raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
 
-    row_idx = github_values.index(username) + 3
-
-    # проверка содержимого PDF
-    pdf_check = check_pdf_content(
-        name_file="report.pdf",
-        name_repository=f"{org}/{repo_prefix}-{username}",
-        name_item=course_info.get("name", "Unknown Course"),
-        name_lab=lab_config.get("short-name", "Unknown Lab"),
-        num_group=group_id,
-        name_student=sheet.cell(row_idx, student_col).value,
-        main_sections=lab_config.get("report", []),
-        name_branch="main",
-        sha_commit=latest_sha,
-        token=GITHUB_TOKEN
-    )
-
-    # комбинируем результаты CI и PDF
-    final_result = "✓" if ci_result == "✓" and pdf_check["first_page"] and not pdf_check["missing_sections"] else "✗"
-    pdf_message = []
-    if not pdf_check["first_page"]:
-        pdf_message.append("Не все данные присутствуют на первой странице PDF")
-    if pdf_check["missing_sections"]:
-        pdf_message.append(f"Отсутствуют разделы в PDF: {', '.join(pdf_check['missing_sections'])}")
-
     lab_number = parse_lab_id(lab_id)
+    row_idx = github_values.index(username) + 3
     lab_col = student_col + lab_number + lab_offset
+    
+  pdf_results = {}
+    if lab_config.get("report"):
+        report_file = "report.pdf"
+        report_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/{report_file}"
+        report_resp = requests.get(report_url, headers=headers)
+
+        if report_resp.status_code == 200:
+            try:
+                # Получаем ФИО студента из таблицы
+                student_name = sheet.cell(row_idx, student_col).value
+                pdf_results = check_pdf_content(
+                    name_file=report_file,
+                    name_repository=f"{org}/{repo_name}",
+                    name_item=course_info.get("name", ""),
+                    name_lab=lab_config.get("short-name", ""),
+                    num_group=group_id,
+                    name_student=student_name,
+                    main_sections=lab_config.get("report", []),
+                    name_branch="main",
+                    sha_commit=latest_sha,
+                    token=GITHUB_TOKEN
+                )
+
+                # Проверяем результаты
+                title_valid = pdf_results["first_page"]
+                sections_valid = not pdf_results["missing_sections"]
+
+                if not title_valid or not sections_valid:
+                    final_result = "✗"
+                    summary.append("❌ Отчет не соответствует требованиям")
+                else:
+                    summary.append("✅ Отчет соответствует требованиям")
+            except Exception as e:
+                final_result = "✗"
+                summary.append(f"❌ Ошибка при проверке PDF: {str(e)}")
+        else:
+            final_result = "✗"
+            summary.append(f"❌ Файл {report_file} не найден в репозитории")
+    else:
+        final_result = ci_result
+
+    # Обновление Google Таблицы
     sheet.update_cell(row_idx, lab_col, final_result)
 
     return {
         "status": "updated",
         "result": final_result,
-        "message": f"Результат CI: {'✅ Все проверки пройдены' if ci_result == '✓' else '❌ Обнаружены ошибки'}; Результат PDF: {'✅ PDF соответствует требованиям' if pdf_check['first_page'] and not pdf_check['missing_sections'] else '❌ Ошибки в PDF'}",
+        "message": f"Результат: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
         "passed": result_string,
         "checks": summary,
-        "pdf_check": {
-            "first_page_valid": pdf_check["first_page"],
-            "missing_sections": pdf_check["missing_sections"],
-            "pdf_message": pdf_message if pdf_message else ["PDF соответствует требованиям"]
-        }
+        "pdf_results": pdf_results if pdf_results else {}
     }
 
 @app.post("/courses/upload")
