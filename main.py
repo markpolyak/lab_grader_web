@@ -458,7 +458,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     row_idx = github_values.index(username) + 3
     lab_col = student_col + lab_number + lab_offset
     
-  pdf_results = {}
+    pdf_results = {}
     if lab_config.get("report"):
         report_file = "report.pdf"
         report_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/{report_file}"
@@ -468,6 +468,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
             try:
                 # Получаем ФИО студента из таблицы
                 student_name = sheet.cell(row_idx, student_col).value
+                
                 pdf_results = check_pdf_content(
                     name_file=report_file,
                     name_repository=f"{org}/{repo_name}",
@@ -490,6 +491,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
                     summary.append("❌ Отчет не соответствует требованиям")
                 else:
                     summary.append("✅ Отчет соответствует требованиям")
+                    
             except Exception as e:
                 final_result = "✗"
                 summary.append(f"❌ Ошибка при проверке PDF: {str(e)}")
