@@ -179,3 +179,12 @@ pnpm-debug.log*
 .vite/
 dist/
 .cache/
+.idea/
+
+credentials.json
+
+# В корне .gitignore
+tg_bot/*.db
+tg_bot/*.db-*
+tg_bot/__pycache__/
+.DS_Store
