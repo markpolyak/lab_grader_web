@@ -85,9 +85,12 @@ def check_pdf_content(name_file, name_repository, name_item, name_lab, num_group
         print("Не удалось извлечь текст с остальных страниц")
         return {"first_page": False, "missing_sections": main_sections}
 
+    formatted_name = format_name(name_student)
+
     # удаляем знаки препинания и
-    # переводим в нижний регистр входные параметров
-    substrings = [re.sub(r'[^\w\s]', '', s.lower()) for s in [name_item, name_lab, num_group, name_student] if s]
+    # переводим в нижний регистр входные параметры
+    substrings = [re.sub(r'[^\w\s]', '', s.lower()) for s in [name_item, name_lab, num_group, formatted_name] if s]
+
 
     # вызываем функцию для проверки присутствия
     # всех подстрок на одной странице
@@ -128,20 +131,15 @@ def check_substring_exist(text, substrings):
             return False
     return True
 
-# тестовые данные
-name_file = "report.pdf"
-name_repository = "suai-mlb-2025/mlb-task2-istoki0bespokoystva"
-name_item = "ОСНОВЫ МАШИННОГО ОБУЧЕНИЯ"
-name_lab = "РЕГРЕССИОННЫЙ АНАЛИЗ В PYTHON"
-num_group = "4232"
-name_student = "А. В. Коновалова"
-main_sections = ["Цель работы", "Выполнение"]
-name_branch = "main"
-token = "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"
-
-# проверяем файл
-print("Проверка")
-result = check_pdf_content(
-    name_file, name_repository, name_item, name_lab, num_group, name_student,
-    main_sections, name_branch, token=token
-)
+def format_name(full_name):
+    # разделяем полное имя на части
+    parts = full_name.strip().split()
+    
+    # проверяем, что имя состоит из трех частей
+    if len(parts) != 3:
+        return full_name  # Возвращаем исходное имя, если формат неверный
+    
+    surname, first_name, patronymic = parts
+    
+    # Формируем имя в формате И. О. Фамилия
+    return f"{first_name[0]}. {patronymic[0]}. {surname}"
