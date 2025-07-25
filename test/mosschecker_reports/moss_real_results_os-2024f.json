@@ -1,0 +1,2002 @@
+[
+    {
+        "student1": "ech00wv",
+        "student2": "KoWalevDV",
+        "match1": "71",
+        "match2": "71",
+        "lines": "445",
+        "lab_id": "2"
+    },
+    {
+        "student1": "student",
+        "student2": "student",
+        "match1": "94",
+        "match2": "94",
+        "lines": "360",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "matanforever",
+        "match1": "99",
+        "match2": "99",
+        "lines": "355",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "nastyakotova",
+        "match1": "92",
+        "match2": "94",
+        "lines": "377",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Doshchechnikov",
+        "student2": "caxap",
+        "match1": "77",
+        "match2": "78",
+        "lines": "327",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "berry",
+        "match1": "73",
+        "match2": "71",
+        "lines": "360",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "Chuzhanova",
+        "match1": "90",
+        "match2": "90",
+        "lines": "681",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "nastyakotova",
+        "match1": "67",
+        "match2": "81",
+        "lines": "290",
+        "lab_id": "2"
+    },
+    {
+        "student1": "darkgreen1112",
+        "student2": "koptev",
+        "match1": "55",
+        "match2": "56",
+        "lines": "369",
+        "lab_id": "2"
+    },
+    {
+        "student1": "wogusfer",
+        "student2": "maximborodai",
+        "match1": "70",
+        "match2": "70",
+        "lines": "443",
+        "lab_id": "2"
+    },
+    {
+        "student1": "romanenko",
+        "student2": "OrlovGUAP",
+        "match1": "77",
+        "match2": "77",
+        "lines": "346",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Anton22122",
+        "student2": "nastyakotova",
+        "match1": "81",
+        "match2": "80",
+        "lines": "277",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Ilusha-iz",
+        "student2": "Kotplankov",
+        "match1": "74",
+        "match2": "74",
+        "lines": "336",
+        "lab_id": "2"
+    },
+    {
+        "student1": "mjolnirswa",
+        "student2": "densergeev2003",
+        "match1": "67",
+        "match2": "67",
+        "lines": "349",
+        "lab_id": "2"
+    },
+    {
+        "student1": "mashka15",
+        "student2": "Al1Bi2",
+        "match1": "81",
+        "match2": "81",
+        "lines": "302",
+        "lab_id": "2"
+    },
+    {
+        "student1": "matveynis",
+        "student2": "Xamrah",
+        "match1": "56",
+        "match2": "57",
+        "lines": "586",
+        "lab_id": "2"
+    },
+    {
+        "student1": "AleksDiaz",
+        "student2": "dianchix",
+        "match1": "61",
+        "match2": "61",
+        "lines": "667",
+        "lab_id": "2"
+    },
+    {
+        "student1": "nidzhat666",
+        "student2": "dianchix",
+        "match1": "61",
+        "match2": "61",
+        "lines": "372",
+        "lab_id": "2"
+    },
+    {
+        "student1": "nidzhat666",
+        "student2": "AleksDiaz",
+        "match1": "61",
+        "match2": "61",
+        "lines": "667",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Foureh",
+        "student2": "dianchix",
+        "match1": "61",
+        "match2": "61",
+        "lines": "407",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Foureh",
+        "student2": "AleksDiaz",
+        "match1": "61",
+        "match2": "61",
+        "lines": "667",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Foureh",
+        "student2": "nidzhat666",
+        "match1": "61",
+        "match2": "61",
+        "lines": "407",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "matanforever",
+        "match1": "64",
+        "match2": "73",
+        "lines": "294",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "SasukeBack",
+        "match1": "73",
+        "match2": "64",
+        "lines": "294",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "Anton22122",
+        "match1": "72",
+        "match2": "79",
+        "lines": "251",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Anton22122",
+        "student2": "matanforever",
+        "match1": "79",
+        "match2": "72",
+        "lines": "251",
+        "lab_id": "2"
+    },
+    {
+        "student1": "darkgreen1112",
+        "student2": "SemenikhinaVasilina",
+        "match1": "52",
+        "match2": "53",
+        "lines": "303",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Emb9r",
+        "student2": "AnastasiyaPospelova",
+        "match1": "60",
+        "match2": "60",
+        "lines": "311",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "SasukeBack",
+        "match1": "75",
+        "match2": "63",
+        "lines": "281",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SemenikhinaVasilina",
+        "student2": "koptev",
+        "match1": "53",
+        "match2": "53",
+        "lines": "341",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ku4er99",
+        "student2": "nastyakotova",
+        "match1": "77",
+        "match2": "76",
+        "lines": "284",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Fedora30697432",
+        "student2": "NLawliet6",
+        "match1": "61",
+        "match2": "76",
+        "lines": "296",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ku4er99",
+        "student2": "matanforever",
+        "match1": "76",
+        "match2": "71",
+        "lines": "263",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "ku4er99",
+        "match1": "71",
+        "match2": "76",
+        "lines": "260",
+        "lab_id": "2"
+    },
+    {
+        "student1": "zaykaa0",
+        "student2": "nikarpoff",
+        "match1": "86",
+        "match2": "76",
+        "lines": "360",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "Anton22122",
+        "match1": "73",
+        "match2": "76",
+        "lines": "302",
+        "lab_id": "2"
+    },
+    {
+        "student1": "kiriksik",
+        "student2": "ITEXNIKJS",
+        "match1": "75",
+        "match2": "75",
+        "lines": "296",
+        "lab_id": "2"
+    },
+    {
+        "student1": "KozyrevBM911",
+        "student2": "TheNitroZyniak",
+        "match1": "62",
+        "match2": "45",
+        "lines": "269",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pokemon3000",
+        "student2": "SasukeBack",
+        "match1": "74",
+        "match2": "60",
+        "lines": "278",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pokemon3000",
+        "student2": "matanforever",
+        "match1": "74",
+        "match2": "68",
+        "lines": "269",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "Pokemon3000",
+        "match1": "68",
+        "match2": "74",
+        "lines": "269",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "ku4er99",
+        "match1": "59",
+        "match2": "73",
+        "lines": "245",
+        "lab_id": "2"
+    },
+    {
+        "student1": "istoki0bespokoystva",
+        "student2": "AlinaYuuu",
+        "match1": "64",
+        "match2": "63",
+        "lines": "334",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Anton22122",
+        "student2": "ku4er99",
+        "match1": "73",
+        "match2": "72",
+        "lines": "272",
+        "lab_id": "2"
+    },
+    {
+        "student1": "danlylacov",
+        "student2": "kiriksik",
+        "match1": "77",
+        "match2": "72",
+        "lines": "288",
+        "lab_id": "2"
+    },
+    {
+        "student1": "danlylacov",
+        "student2": "ITEXNIKJS",
+        "match1": "77",
+        "match2": "72",
+        "lines": "266",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "ku4er99",
+        "match1": "69",
+        "match2": "71",
+        "lines": "245",
+        "lab_id": "2"
+    },
+    {
+        "student1": "nastyakotova",
+        "student2": "matanforever",
+        "match1": "69",
+        "match2": "65",
+        "lines": "228",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pokemon3000",
+        "student2": "Anton22122",
+        "match1": "71",
+        "match2": "71",
+        "lines": "246",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "nastyakotova",
+        "match1": "65",
+        "match2": "69",
+        "lines": "225",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pokemon3000",
+        "student2": "nastyakotova",
+        "match1": "71",
+        "match2": "69",
+        "lines": "254",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pokemon3000",
+        "student2": "iMark0",
+        "match1": "71",
+        "match2": "68",
+        "lines": "255",
+        "lab_id": "2"
+    },
+    {
+        "student1": "bogtogus",
+        "student2": "AshuraSaint",
+        "match1": "63",
+        "match2": "62",
+        "lines": "274",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ku4er99",
+        "student2": "NoTimeToPeace",
+        "match1": "69",
+        "match2": "72",
+        "lines": "269",
+        "lab_id": "2"
+    },
+    {
+        "student1": "TrueGrigo",
+        "student2": "CoderButerbroder",
+        "match1": "81",
+        "match2": "79",
+        "lines": "320",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pokemon3000",
+        "student2": "ku4er99",
+        "match1": "70",
+        "match2": "69",
+        "lines": "242",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "matanforever",
+        "match1": "67",
+        "match2": "64",
+        "lines": "264",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "iMark0",
+        "match1": "64",
+        "match2": "67",
+        "lines": "261",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Vonisak",
+        "student2": "ladadmitr",
+        "match1": "66",
+        "match2": "58",
+        "lines": "275",
+        "lab_id": "2"
+    },
+    {
+        "student1": "DaryaNazarova4236",
+        "student2": "Zefiry",
+        "match1": "97",
+        "match2": "97",
+        "lines": "315",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "Anton22122",
+        "match1": "56",
+        "match2": "69",
+        "lines": "231",
+        "lab_id": "2"
+    },
+    {
+        "student1": "kateutkate23",
+        "student2": "shmkvdmd",
+        "match1": "79",
+        "match2": "80",
+        "lines": "279",
+        "lab_id": "2"
+    },
+    {
+        "student1": "l1eanny",
+        "student2": "Sirius867",
+        "match1": "74",
+        "match2": "74",
+        "lines": "271",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SvyatoslavVS",
+        "student2": "Sirius867",
+        "match1": "74",
+        "match2": "74",
+        "lines": "271",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SvyatoslavVS",
+        "student2": "l1eanny",
+        "match1": "74",
+        "match2": "74",
+        "lines": "241",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pogold",
+        "student2": "WhiteDimka",
+        "match1": "75",
+        "match2": "75",
+        "lines": "307",
+        "lab_id": "2"
+    },
+    {
+        "student1": "akkurshin",
+        "student2": "AlekseiUKR",
+        "match1": "76",
+        "match2": "75",
+        "lines": "292",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ParfenovID",
+        "student2": "CoderButerbroder",
+        "match1": "75",
+        "match2": "77",
+        "lines": "294",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SolikovDA",
+        "student2": "TrueGrigo",
+        "match1": "78",
+        "match2": "80",
+        "lines": "318",
+        "lab_id": "2"
+    },
+    {
+        "student1": "gently-whitesnow",
+        "student2": "rekko907",
+        "match1": "77",
+        "match2": "63",
+        "lines": "257",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Thunder484",
+        "student2": "LazyPlatypua",
+        "match1": "59",
+        "match2": "59",
+        "lines": "270",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "matanforever",
+        "match1": "68",
+        "match2": "62",
+        "lines": "262",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "Lazyrniy",
+        "match1": "68",
+        "match2": "62",
+        "lines": "262",
+        "lab_id": "2"
+    },
+    {
+        "student1": "BogachevED",
+        "student2": "ShadowStraif",
+        "match1": "53",
+        "match2": "63",
+        "lines": "246",
+        "lab_id": "2"
+    },
+    {
+        "student1": "CyberShrex",
+        "student2": "ilkatel",
+        "match1": "82",
+        "match2": "79",
+        "lines": "252",
+        "lab_id": "2"
+    },
+    {
+        "student1": "barashik07",
+        "student2": "Kiryakor",
+        "match1": "56",
+        "match2": "45",
+        "lines": "234",
+        "lab_id": "2"
+    },
+    {
+        "student1": "darkgreen1112",
+        "student2": "LizzieKostr",
+        "match1": "44",
+        "match2": "58",
+        "lines": "273",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ShadowStraif",
+        "student2": "TheGreatestJew",
+        "match1": "62",
+        "match2": "68",
+        "lines": "248",
+        "lab_id": "2"
+    },
+    {
+        "student1": "qveex",
+        "student2": "xincas",
+        "match1": "63",
+        "match2": "78",
+        "lines": "203",
+        "lab_id": "2"
+    },
+    {
+        "student1": "limenitiz",
+        "student2": "IaroslavKurgan",
+        "match1": "72",
+        "match2": "67",
+        "lines": "291",
+        "lab_id": "2"
+    },
+    {
+        "student1": "nastyakotova",
+        "student2": "NoTimeToPeace",
+        "match1": "65",
+        "match2": "68",
+        "lines": "260",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Anton22122",
+        "student2": "NoTimeToPeace",
+        "match1": "66",
+        "match2": "68",
+        "lines": "267",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SemenikhinaVasilina",
+        "student2": "BloodyChain",
+        "match1": "44",
+        "match2": "64",
+        "lines": "272",
+        "lab_id": "2"
+    },
+    {
+        "student1": "TrueGrigo",
+        "student2": "PineappleOne",
+        "match1": "77",
+        "match2": "73",
+        "lines": "330",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "berry",
+        "match1": "66",
+        "match2": "52",
+        "lines": "247",
+        "lab_id": "2"
+    },
+    {
+        "student1": "markpolyak",
+        "student2": "KleinerKaktus455",
+        "match1": "57",
+        "match2": "63",
+        "lines": "368",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "berry",
+        "match1": "63",
+        "match2": "51",
+        "lines": "249",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Anton22122",
+        "student2": "OlegZharenov",
+        "match1": "65",
+        "match2": "51",
+        "lines": "271",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "GachiPriest",
+        "match1": "53",
+        "match2": "48",
+        "lines": "275",
+        "lab_id": "2"
+    },
+    {
+        "student1": "TrueGrigo",
+        "student2": "ParfenovID",
+        "match1": "76",
+        "match2": "72",
+        "lines": "289",
+        "lab_id": "2"
+    },
+    {
+        "student1": "PineappleOne",
+        "student2": "CoderButerbroder",
+        "match1": "72",
+        "match2": "73",
+        "lines": "342",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Blake",
+        "student2": "CornSnak3",
+        "match1": "89",
+        "match2": "92",
+        "lines": "247",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Anton22122",
+        "student2": "Chuzhanova",
+        "match1": "64",
+        "match2": "65",
+        "lines": "445",
+        "lab_id": "2"
+    },
+    {
+        "student1": "GachiPriest",
+        "student2": "bar",
+        "match1": "47",
+        "match2": "48",
+        "lines": "261",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "NoTimeToPeace",
+        "match1": "62",
+        "match2": "66",
+        "lines": "237",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Chuzhanova",
+        "student2": "matanforever",
+        "match1": "65",
+        "match2": "59",
+        "lines": "491",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SolikovDA",
+        "student2": "CoderButerbroder",
+        "match1": "74",
+        "match2": "72",
+        "lines": "313",
+        "lab_id": "2"
+    },
+    {
+        "student1": "matanforever",
+        "student2": "GachiPriest",
+        "match1": "59",
+        "match2": "47",
+        "lines": "280",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "GachiPriest",
+        "match1": "59",
+        "match2": "47",
+        "lines": "280",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ev-osi",
+        "student2": "guap-studentx",
+        "match1": "72",
+        "match2": "80",
+        "lines": "327",
+        "lab_id": "2"
+    },
+    {
+        "student1": "nastyakotova",
+        "student2": "berry",
+        "match1": "62",
+        "match2": "50",
+        "lines": "207",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SolikovDA",
+        "student2": "Shore13",
+        "match1": "73",
+        "match2": "66",
+        "lines": "330",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Chuzhanova",
+        "student2": "berry",
+        "match1": "64",
+        "match2": "50",
+        "lines": "457",
+        "lab_id": "2"
+    },
+    {
+        "student1": "GachiPriest",
+        "student2": "berry",
+        "match1": "46",
+        "match2": "50",
+        "lines": "289",
+        "lab_id": "2"
+    },
+    {
+        "student1": "nastyakotova",
+        "student2": "bar",
+        "match1": "62",
+        "match2": "48",
+        "lines": "266",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Anton22122",
+        "student2": "berry",
+        "match1": "63",
+        "match2": "50",
+        "lines": "223",
+        "lab_id": "2"
+    },
+    {
+        "student1": "DaniilUshakov4231",
+        "student2": "Zein-Berg",
+        "match1": "57",
+        "match2": "43",
+        "lines": "282",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "bar",
+        "match1": "51",
+        "match2": "48",
+        "lines": "270",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Baka9k",
+        "student2": "v3g45",
+        "match1": "46",
+        "match2": "53",
+        "lines": "269",
+        "lab_id": "2"
+    },
+    {
+        "student1": "dno",
+        "student2": "SemenikhinaVasilina",
+        "match1": "57",
+        "match2": "43",
+        "lines": "253",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lizabogdanova",
+        "student2": "fawl7",
+        "match1": "55",
+        "match2": "62",
+        "lines": "231",
+        "lab_id": "2"
+    },
+    {
+        "student1": "matanforever",
+        "student2": "berry",
+        "match1": "58",
+        "match2": "49",
+        "lines": "214",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Shore13",
+        "student2": "PineappleOne",
+        "match1": "65",
+        "match2": "70",
+        "lines": "353",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "berry",
+        "match1": "58",
+        "match2": "49",
+        "lines": "213",
+        "lab_id": "2"
+    },
+    {
+        "student1": "luckyirchucky",
+        "student2": "EvgeniyEkimenko",
+        "match1": "62",
+        "match2": "67",
+        "lines": "287",
+        "lab_id": "2"
+    },
+    {
+        "student1": "belkanel",
+        "student2": "AnatoliyQ",
+        "match1": "90",
+        "match2": "91",
+        "lines": "285",
+        "lab_id": "2"
+    },
+    {
+        "student1": "GachiPriest",
+        "student2": "OlegZharenov",
+        "match1": "46",
+        "match2": "49",
+        "lines": "262",
+        "lab_id": "2"
+    },
+    {
+        "student1": "OlegZharenov",
+        "student2": "bar",
+        "match1": "49",
+        "match2": "47",
+        "lines": "240",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ondavlad",
+        "student2": "StanislavTsyganko",
+        "match1": "56",
+        "match2": "48",
+        "lines": "315",
+        "lab_id": "2"
+    },
+    {
+        "student1": "BogachevED",
+        "student2": "TheGreatestJew",
+        "match1": "49",
+        "match2": "64",
+        "lines": "251",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Krutov777",
+        "student2": "qveex",
+        "match1": "65",
+        "match2": "59",
+        "lines": "187",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Shore13",
+        "student2": "ParfenovID",
+        "match1": "64",
+        "match2": "68",
+        "lines": "301",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SolikovDA",
+        "student2": "froglet",
+        "match1": "71",
+        "match2": "52",
+        "lines": "244",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "Chuzhanova",
+        "match1": "57",
+        "match2": "62",
+        "lines": "469",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "bar",
+        "match1": "59",
+        "match2": "46",
+        "lines": "278",
+        "lab_id": "2"
+    },
+    {
+        "student1": "matanforever",
+        "student2": "OlegZharenov",
+        "match1": "56",
+        "match2": "48",
+        "lines": "243",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "iMark0",
+        "match1": "62",
+        "match2": "59",
+        "lines": "243",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "Chuzhanova",
+        "match1": "59",
+        "match2": "62",
+        "lines": "454",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "OlegZharenov",
+        "match1": "56",
+        "match2": "48",
+        "lines": "243",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Kunerv",
+        "student2": "Kukonen",
+        "match1": "56",
+        "match2": "60",
+        "lines": "243",
+        "lab_id": "2"
+    },
+    {
+        "student1": "alisasob",
+        "student2": "NLawliet6",
+        "match1": "60",
+        "match2": "60",
+        "lines": "261",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Ddkaba",
+        "student2": "ch",
+        "match1": "38",
+        "match2": "44",
+        "lines": "280",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Bolotnik-ss",
+        "student2": "Fedora30697432",
+        "match1": "43",
+        "match2": "48",
+        "lines": "257",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pokemon3000",
+        "student2": "NoTimeToPeace",
+        "match1": "61",
+        "match2": "63",
+        "lines": "226",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Vlad-ftec",
+        "student2": "SkilletCountersAnotherAcc",
+        "match1": "48",
+        "match2": "46",
+        "lines": "223",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "sofyanagovitsyna",
+        "match1": "41",
+        "match2": "45",
+        "lines": "263",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "Baka9k",
+        "match1": "41",
+        "match2": "44",
+        "lines": "254",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Akkey2k",
+        "student2": "Xamrah",
+        "match1": "55",
+        "match2": "43",
+        "lines": "384",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "NoTimeToPeace",
+        "match1": "49",
+        "match2": "62",
+        "lines": "231",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ku4er99",
+        "student2": "berry",
+        "match1": "59",
+        "match2": "47",
+        "lines": "212",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ga11eon",
+        "student2": "StanislavTsyganko",
+        "match1": "55",
+        "match2": "46",
+        "lines": "237",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Likade",
+        "student2": "serjobor",
+        "match1": "59",
+        "match2": "57",
+        "lines": "264",
+        "lab_id": "2"
+    },
+    {
+        "student1": "BarBariska619",
+        "student2": "TheNitroZyniak",
+        "match1": "54",
+        "match2": "37",
+        "lines": "229",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Ddkaba",
+        "student2": "Zein-Berg",
+        "match1": "38",
+        "match2": "41",
+        "lines": "258",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "matveynis",
+        "match1": "41",
+        "match2": "42",
+        "lines": "274",
+        "lab_id": "2"
+    },
+    {
+        "student1": "PrincessKarolyn",
+        "student2": "VanButrij",
+        "match1": "56",
+        "match2": "60",
+        "lines": "249",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "SasukeBack",
+        "match1": "60",
+        "match2": "48",
+        "lines": "215",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SasukeBack",
+        "student2": "Chuzhanova",
+        "match1": "48",
+        "match2": "60",
+        "lines": "426",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ParfenovID",
+        "student2": "PineappleOne",
+        "match1": "66",
+        "match2": "66",
+        "lines": "284",
+        "lab_id": "2"
+    },
+    {
+        "student1": "AlekseiUKR",
+        "student2": "berry",
+        "match1": "65",
+        "match2": "47",
+        "lines": "212",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "StanislavTsyganko",
+        "match1": "41",
+        "match2": "45",
+        "lines": "248",
+        "lab_id": "2"
+    },
+    {
+        "student1": "AlekseiUKR",
+        "student2": "ilkatel",
+        "match1": "65",
+        "match2": "70",
+        "lines": "214",
+        "lab_id": "2"
+    },
+    {
+        "student1": "koptev",
+        "student2": "BloodyChain",
+        "match1": "40",
+        "match2": "58",
+        "lines": "272",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Baka9k",
+        "student2": "KoWalevDV",
+        "match1": "44",
+        "match2": "37",
+        "lines": "287",
+        "lab_id": "2"
+    },
+    {
+        "student1": "khozhbekyanyana",
+        "student2": "scarypuppp",
+        "match1": "51",
+        "match2": "56",
+        "lines": "278",
+        "lab_id": "2"
+    },
+    {
+        "student1": "darkperson8",
+        "student2": "Grig",
+        "match1": "56",
+        "match2": "60",
+        "lines": "218",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SirPersimmon",
+        "student2": "dev007",
+        "match1": "72",
+        "match2": "76",
+        "lines": "341",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SolikovDA",
+        "student2": "PineappleOne",
+        "match1": "68",
+        "match2": "65",
+        "lines": "314",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SemenikhinaVasilina",
+        "student2": "LizzieKostr",
+        "match1": "40",
+        "match2": "52",
+        "lines": "236",
+        "lab_id": "2"
+    },
+    {
+        "student1": "matanforever",
+        "student2": "NoTimeToPeace",
+        "match1": "54",
+        "match2": "61",
+        "lines": "227",
+        "lab_id": "2"
+    },
+    {
+        "student1": "nastyakotova",
+        "student2": "Chuzhanova",
+        "match1": "58",
+        "match2": "60",
+        "lines": "447",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "nastyakotova",
+        "match1": "60",
+        "match2": "58",
+        "lines": "224",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "NoTimeToPeace",
+        "match1": "54",
+        "match2": "61",
+        "lines": "227",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Baka9k",
+        "student2": "ech00wv",
+        "match1": "43",
+        "match2": "37",
+        "lines": "279",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Fedor204",
+        "student2": "ga11eon",
+        "match1": "54",
+        "match2": "54",
+        "lines": "227",
+        "lab_id": "2"
+    },
+    {
+        "student1": "forGUAP",
+        "student2": "PavKaa",
+        "match1": "67",
+        "match2": "64",
+        "lines": "222",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ondavlad",
+        "student2": "nebeyp",
+        "match1": "53",
+        "match2": "52",
+        "lines": "271",
+        "lab_id": "2"
+    },
+    {
+        "student1": "darkgreen1112",
+        "student2": "BloodyChain",
+        "match1": "39",
+        "match2": "57",
+        "lines": "238",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SemenikhinaVasilina",
+        "student2": "1Mercury1",
+        "match1": "40",
+        "match2": "58",
+        "lines": "240",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "Anton22122",
+        "match1": "60",
+        "match2": "59",
+        "lines": "217",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SolikovDA",
+        "student2": "ParfenovID",
+        "match1": "68",
+        "match2": "65",
+        "lines": "287",
+        "lab_id": "2"
+    },
+    {
+        "student1": "darkperson8",
+        "student2": "Kunerv",
+        "match1": "56",
+        "match2": "55",
+        "lines": "194",
+        "lab_id": "2"
+    },
+    {
+        "student1": "OzevaS",
+        "student2": "ga11eon",
+        "match1": "60",
+        "match2": "54",
+        "lines": "238",
+        "lab_id": "2"
+    },
+    {
+        "student1": "grawford2525",
+        "student2": "ilkatel",
+        "match1": "70",
+        "match2": "69",
+        "lines": "235",
+        "lab_id": "2"
+    },
+    {
+        "student1": "anto1e",
+        "student2": "ga11eon",
+        "match1": "53",
+        "match2": "54",
+        "lines": "244",
+        "lab_id": "2"
+    },
+    {
+        "student1": "DevVladikNT",
+        "student2": "Durdma",
+        "match1": "47",
+        "match2": "51",
+        "lines": "290",
+        "lab_id": "2"
+    },
+    {
+        "student1": "koptev",
+        "student2": "LizzieKostr",
+        "match1": "40",
+        "match2": "51",
+        "lines": "274",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Pokemon3000",
+        "student2": "berry",
+        "match1": "59",
+        "match2": "46",
+        "lines": "226",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "ivansoya",
+        "match1": "40",
+        "match2": "37",
+        "lines": "250",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Krutov777",
+        "student2": "xincas",
+        "match1": "61",
+        "match2": "69",
+        "lines": "176",
+        "lab_id": "2"
+    },
+    {
+        "student1": "CyberShrex",
+        "student2": "grawford2525",
+        "match1": "72",
+        "match2": "69",
+        "lines": "223",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Anton22122",
+        "student2": "GachiPriest",
+        "match1": "59",
+        "match2": "43",
+        "lines": "250",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "SemenikhinaVasilina",
+        "match1": "40",
+        "match2": "39",
+        "lines": "258",
+        "lab_id": "2"
+    },
+    {
+        "student1": "tech",
+        "student2": "hyroquin",
+        "match1": "57",
+        "match2": "55",
+        "lines": "222",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Vonisak",
+        "student2": "ga11eon",
+        "match1": "55",
+        "match2": "54",
+        "lines": "233",
+        "lab_id": "2"
+    },
+    {
+        "student1": "darkgreen1112",
+        "student2": "dno",
+        "match1": "39",
+        "match2": "52",
+        "lines": "226",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SemenikhinaVasilina",
+        "student2": "ladadmitr",
+        "match1": "39",
+        "match2": "49",
+        "lines": "246",
+        "lab_id": "2"
+    },
+    {
+        "student1": "argo2707",
+        "student2": "Doshchechnikov",
+        "match1": "45",
+        "match2": "48",
+        "lines": "253",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ninadugina",
+        "student2": "ga11eon",
+        "match1": "48",
+        "match2": "53",
+        "lines": "244",
+        "lab_id": "2"
+    },
+    {
+        "student1": "KazakovaPolya",
+        "student2": "NikitaUlanskiy",
+        "match1": "52",
+        "match2": "52",
+        "lines": "246",
+        "lab_id": "2"
+    },
+    {
+        "student1": "forGUAP",
+        "student2": "ladadmitr",
+        "match1": "66",
+        "match2": "48",
+        "lines": "228",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "LizzieKostr",
+        "match1": "39",
+        "match2": "50",
+        "lines": "251",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "Tirannozavr",
+        "match1": "39",
+        "match2": "46",
+        "lines": "244",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ivansoya",
+        "student2": "StanislavTsyganko",
+        "match1": "37",
+        "match2": "44",
+        "lines": "221",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "darkgreen1112",
+        "match1": "39",
+        "match2": "38",
+        "lines": "250",
+        "lab_id": "2"
+    },
+    {
+        "student1": "SemenikhinaVasilina",
+        "student2": "Vonisak",
+        "match1": "39",
+        "match2": "54",
+        "lines": "232",
+        "lab_id": "2"
+    },
+    {
+        "student1": "matveynis",
+        "student2": "ga11eon",
+        "match1": "40",
+        "match2": "53",
+        "lines": "238",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "EldarGuseinov",
+        "match1": "53",
+        "match2": "82",
+        "lines": "201",
+        "lab_id": "2"
+    },
+    {
+        "student1": "EldarGuseinov",
+        "student2": "matanforever",
+        "match1": "82",
+        "match2": "53",
+        "lines": "201",
+        "lab_id": "2"
+    },
+    {
+        "student1": "AndyTune",
+        "student2": "StanislavTsyganko",
+        "match1": "56",
+        "match2": "43",
+        "lines": "229",
+        "lab_id": "2"
+    },
+    {
+        "student1": "lexybelial",
+        "student2": "AlekseiUKR",
+        "match1": "58",
+        "match2": "62",
+        "lines": "210",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Tit0v",
+        "student2": "v3g45",
+        "match1": "53",
+        "match2": "48",
+        "lines": "235",
+        "lab_id": "2"
+    },
+    {
+        "student1": "AlekseiUKR",
+        "student2": "Chuzhanova",
+        "match1": "62",
+        "match2": "58",
+        "lines": "407",
+        "lab_id": "2"
+    },
+    {
+        "student1": "bogtogus",
+        "student2": "lizabogdanova",
+        "match1": "51",
+        "match2": "49",
+        "lines": "201",
+        "lab_id": "2"
+    },
+    {
+        "student1": "matveynis",
+        "student2": "nebeyp",
+        "match1": "40",
+        "match2": "50",
+        "lines": "249",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ondavlad",
+        "student2": "Thunder484",
+        "match1": "51",
+        "match2": "49",
+        "lines": "233",
+        "lab_id": "2"
+    },
+    {
+        "student1": "matanforever",
+        "student2": "bar",
+        "match1": "52",
+        "match2": "43",
+        "lines": "244",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Shore13",
+        "student2": "TrueGrigo",
+        "match1": "59",
+        "match2": "67",
+        "lines": "265",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Lazyrniy",
+        "student2": "bar",
+        "match1": "52",
+        "match2": "43",
+        "lines": "244",
+        "lab_id": "2"
+    },
+    {
+        "student1": "KateGorbacheva",
+        "student2": "liquidmann",
+        "match1": "52",
+        "match2": "45",
+        "lines": "286",
+        "lab_id": "2"
+    },
+    {
+        "student1": "A1phar1us",
+        "student2": "densergeev2003",
+        "match1": "42",
+        "match2": "47",
+        "lines": "219",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Shore13",
+        "student2": "CoderButerbroder",
+        "match1": "59",
+        "match2": "64",
+        "lines": "294",
+        "lab_id": "2"
+    },
+    {
+        "student1": "BloodyChain",
+        "student2": "LizzieKostr",
+        "match1": "55",
+        "match2": "50",
+        "lines": "234",
+        "lab_id": "2"
+    },
+    {
+        "student1": "forGUAP",
+        "student2": "axelBaher",
+        "match1": "65",
+        "match2": "66",
+        "lines": "212",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Tirannozavr",
+        "student2": "bogtogus",
+        "match1": "46",
+        "match2": "51",
+        "lines": "229",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Tirannozavr",
+        "student2": "E",
+        "match1": "46",
+        "match2": "49",
+        "lines": "213",
+        "lab_id": "2"
+    },
+    {
+        "student1": "berry",
+        "student2": "bar",
+        "match1": "44",
+        "match2": "43",
+        "lines": "251",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Xamrah",
+        "student2": "mistake",
+        "match1": "40",
+        "match2": "53",
+        "lines": "406",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ivansoya",
+        "student2": "BatMaxim",
+        "match1": "36",
+        "match2": "53",
+        "lines": "206",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Ddkaba",
+        "student2": "SemenikhinaVasilina",
+        "match1": "36",
+        "match2": "38",
+        "lines": "238",
+        "lab_id": "2"
+    },
+    {
+        "student1": "DaniilUshakov4231",
+        "student2": "khozhbekyanyana",
+        "match1": "51",
+        "match2": "48",
+        "lines": "251",
+        "lab_id": "2"
+    },
+    {
+        "student1": "argo2707",
+        "student2": "caxap",
+        "match1": "44",
+        "match2": "48",
+        "lines": "245",
+        "lab_id": "2"
+    },
+    {
+        "student1": "AlekseiUKR",
+        "student2": "iMark0",
+        "match1": "62",
+        "match2": "54",
+        "lines": "226",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Ddkaba",
+        "student2": "Doshchechnikov",
+        "match1": "35",
+        "match2": "47",
+        "lines": "236",
+        "lab_id": "2"
+    },
+    {
+        "student1": "gwenbleyd",
+        "student2": "OzoneTaTaY",
+        "match1": "52",
+        "match2": "56",
+        "lines": "211",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Baka9k",
+        "student2": "StanislavTsyganko",
+        "match1": "41",
+        "match2": "43",
+        "lines": "214",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "ekaterina",
+        "match1": "38",
+        "match2": "47",
+        "lines": "258",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "ilya",
+        "match1": "38",
+        "match2": "50",
+        "lines": "299",
+        "lab_id": "2"
+    },
+    {
+        "student1": "A1phar1us",
+        "student2": "Doshchechnikov",
+        "match1": "41",
+        "match2": "47",
+        "lines": "223",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ekaterina",
+        "student2": "kiriksik",
+        "match1": "47",
+        "match2": "56",
+        "lines": "241",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ekaterina",
+        "student2": "ITEXNIKJS",
+        "match1": "47",
+        "match2": "56",
+        "lines": "241",
+        "lab_id": "2"
+    },
+    {
+        "student1": "zhukalin",
+        "student2": "darkgreen1112",
+        "match1": "52",
+        "match2": "38",
+        "lines": "242",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ondavlad",
+        "student2": "Tirannozavr",
+        "match1": "50",
+        "match2": "45",
+        "lines": "295",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "argo2707",
+        "match1": "38",
+        "match2": "44",
+        "lines": "253",
+        "lab_id": "2"
+    },
+    {
+        "student1": "VdovVal",
+        "student2": "v3g45",
+        "match1": "54",
+        "match2": "47",
+        "lines": "260",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Zein-Berg",
+        "student2": "fawl7",
+        "match1": "38",
+        "match2": "55",
+        "lines": "237",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Vindemitor",
+        "student2": "Zein-Berg",
+        "match1": "43",
+        "match2": "38",
+        "lines": "257",
+        "lab_id": "2"
+    },
+    {
+        "student1": "Ddkaba",
+        "student2": "argo2707",
+        "match1": "35",
+        "match2": "44",
+        "lines": "245",
+        "lab_id": "2"
+    },
+    {
+        "student1": "wolk2608",
+        "student2": "Krutov777",
+        "match1": "53",
+        "match2": "59",
+        "lines": "173",
+        "lab_id": "2"
+    },
+    {
+        "student1": "AndyTune",
+        "student2": "Tirannozavr",
+        "match1": "55",
+        "match2": "45",
+        "lines": "243",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ms1a",
+        "student2": "ku4er99",
+        "match1": "79",
+        "match2": "55",
+        "lines": "189",
+        "lab_id": "2"
+    },
+    {
+        "student1": "wolk2608",
+        "student2": "xincas",
+        "match1": "53",
+        "match2": "66",
+        "lines": "168",
+        "lab_id": "2"
+    },
+    {
+        "student1": "ladadmitr",
+        "student2": "ga11eon",
+        "match1": "47",
+        "match2": "52",
+        "lines": "232",
+        "lab_id": "2"
+    },
+    {
+        "student1": "daryaaleshina",
+        "student2": "ladadmitr",
+        "match1": "51",
+        "match2": "47",
+        "lines": "260",
+        "lab_id": "2"
+    },
+    {
+        "student1": "iMark0",
+        "student2": "GachiPriest",
+        "match1": "54",
+        "match2": "41",
+        "lines": "269",
+        "lab_id": "2"
+    },
+    {
+        "student1": "EldarGuseinov",
+        "student2": "chempion",
+        "match1": "80",
+        "match2": "74",
+        "lines": "204",
+        "lab_id": "2"
+    },
+    {
+        "student1": "chekkip",
+        "student2": "jirafa27",
+        "match1": "55",
+        "match2": "49",
+        "lines": "266",
+        "lab_id": "2"
+    },
+    {
+        "student1": "zhukalin",
+        "student2": "LizzieKostr",
+        "match1": "52",
+        "match2": "49",
+        "lines": "244",
+        "lab_id": "2"
+    },
+    {
+        "student1": "wogusfer",
+        "student2": "matveynis",
+        "match1": "47",
+        "match2": "39",
+        "lines": "275",
+        "lab_id": "2"
+    },
+    {
+        "student1": "maximborodai",
+        "student2": "matveynis",
+        "match1": "47",
+        "match2": "39",
+        "lines": "314",
+        "lab_id": "2"
+    }
+]

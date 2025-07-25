@@ -1,9 +1,12 @@
-fastapi
+fastapi~=0.115.8
 uvicorn
 gspread
 oauth2client
-pyyaml
-requests
+pyyaml~=6.0.1
+requests~=2.31.0
 python-multipart
 python-dotenv
 itsdangerous
+typing~=3.7.4.3
+pydantic~=2.10.6
+mosspy~=1.0.9
