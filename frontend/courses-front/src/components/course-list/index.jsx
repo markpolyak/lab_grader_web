@@ -189,7 +189,45 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
     }
   };
 
+const handleRunPlagiarismCheck = async (courseId) => {
+  try {
+    // 1. Run plagiarism check
+    const runResponse = await fetch(`http://127.0.0.1:8000/api/plagiarism/run/${courseId}`, {
+      method: 'POST',
+      headers: { 
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${localStorage.getItem('token')}`
+      }
+    });
+    
+    const { status, checked_labs, course_name } = await runResponse.json();
+    showSnackbar(status || "Plagiarism check completed", "success");
 
+    // 2. Use first enabled lab
+    const activeLabId = checked_labs?.[0];
+    if (!activeLabId) {
+      showSnackbar("No labs with plagiarism checking enabled", "warning");
+      return;
+    }
+
+    // 3. Construct URL (no encoding needed for simple paths)
+    const reportUrl = `http://127.0.0.1:8000/reports/comparisons/${course_name}/${activeLabId}/index.html`;
+    
+    // 4. Directly open in new tab with forced load
+    const newWindow = window.open(reportUrl, '_blank', 'noopener,noreferrer');
+    
+    // Fallback if blocked by popup blocker
+    if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+      showSnackbar("Please allow popups for this site", "warning");
+      // Alternative: redirect current tab
+      window.location.href = reportUrl;
+    }
+    
+  } catch (error) {
+    showSnackbar("Failed to generate plagiarism report", "error");
+    console.error("Plagiarism check error:", error);
+  }
+};
   const languages = [
     { code: "ru", label: "Русский" },
     { code: "en", label: "English" },
@@ -341,6 +379,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                 >
                   {t("save")}
                 </Button>
+                
 
                 <Button
                   onClick={() => setIsFullscreen((prev) => !prev)}
@@ -394,6 +433,12 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                     style={{ backgroundColor: colors.error, color: "#fff" }}
                   >
                     {t("delete")}
+                  </Button>
+                  <Button
+                    onClick={() => handleRunPlagiarismCheck(course.config_id)}
+                    style={{ backgroundColor: '#8e44ad', color: '#fff' }}  
+                  >
+                    {t("Plagiarism")}
                   </Button>
                 </>
               )}

@@ -1,5 +1,6 @@
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException # type: ignore
 import os
+from fastapi.staticfiles import StaticFiles
 import yaml
 import gspread
 import requests
@@ -7,10 +8,19 @@ from oauth2client.service_account import ServiceAccountCredentials
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi import UploadFile, File
+from fastapi import UploadFile, File, Depends
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
+
+#my edition
+from services.plagiarism import (
+    ComparisonConfig,
+    GitHubFileDownloader,
+    PlagiarismChecker
+)
+from pathlib import Path
+from typing import List
 
 load_dotenv()
 app = FastAPI()
@@ -27,6 +37,8 @@ app.add_middleware(
     allow_methods=["*"],  # Разрешить все HTTP-методы
     allow_headers=["*"],  # Разрешить все заголовки
 )
+REPORTS_DIR = Path("/mnt/e/summer practicals/lab_grader_web/reports").resolve()
+app.mount("/reports", StaticFiles(directory=REPORTS_DIR), name="reports")
 signer = TimestampSigner(SECRET_KEY)
 
 class AuthRequest(BaseModel):
@@ -106,6 +118,7 @@ def get_courses():
                     "semester": course_info.get("semester", "Unknown"),
                     "logo": course_info.get("logo", "/assets/default.png"),
                     "email": course_info.get("email", ""),
+                    "config_id": os.path.splitext(filename)[0],   # <-- ✅ Added this line
                 })
     return courses
 
@@ -488,3 +501,55 @@ async def upload_course(file: UploadFile = File(...)):
         f.write(content)
 
     return {"detail": "Курс успешно загружен"}
+
+def find_course_config(course_id: str) -> Path:
+    for ext in [".yaml", ".yml"]:
+        path = Path(f"courses/{course_id}{ext}")
+        if path.exists():
+            return path
+    raise HTTPException(status_code=404, detail=f"Course configuration '{course_id}.yaml/.yml' not found")
+
+@app.post("/api/plagiarism/run/{course_id}")
+async def run_plagiarism_check(course_id: str, request: Request):
+    # ... existing authentication code ...
+    
+    config_path = find_course_config(course_id)
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    
+    # Find labs with plagiarism enabled
+    enabled_labs = []
+    for lab_id, lab_config in config["course"]["labs"].items():
+        if lab_config.get("plagiarism", {}).get("enabled", False):
+            enabled_labs.append(lab_id)
+    
+    if not enabled_labs:
+        return {"status": "no labs with plagiarism checking enabled"}
+    
+    # Run plagiarism check for each enabled lab
+    checker = PlagiarismChecker()
+    for lab_id in enabled_labs:
+        checker.run_pipeline(config["course"], lab_id)
+    
+    return {
+        "status": "completed", 
+        "checked_labs": enabled_labs,
+        "course_name": config["course"]["name"]  # Add this line
+    }
+
+@app.get("/api/plagiarism/report-url/{course_name}/{lab_id}")
+async def get_plagiarism_report_url(course_name: str, lab_id: str):
+    """Returns the full URL to access the plagiarism report"""
+    report_path = Path(f"reports/comparisons/{course_name}/{lab_id}/index.html")
+    
+    if not report_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Report not found at {report_path}"
+        )
+    
+    # Construct full URL (adjust for your deployment)
+    base_url = "http://127.0.0.1:8000"
+    return {
+        "url": f"{base_url}/reports/comparisons/{course_name}/{lab_id}/index.html"
+    }

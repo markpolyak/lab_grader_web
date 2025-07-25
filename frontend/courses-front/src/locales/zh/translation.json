@@ -1,5 +1,4 @@
 {
-  "loadCourse": "加载课程",
   "courseUploaded": "课程上传成功",
   "select": "选择",
   "edit": "编辑",
@@ -24,5 +23,6 @@
   "confirmDelete": "确认删除",
   "confirmDeleteMessage": "您确定要删除此课程吗？",
   "expand": "展开",
-  "loadCourse": "加载课程"
+  "loadCourse": "加载课程",
+  "Plagiarism": "运行抄袭检查"
 }
