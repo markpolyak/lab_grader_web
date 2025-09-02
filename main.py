@@ -11,6 +11,7 @@ from fastapi import UploadFile, File
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
+import grading
 
 load_dotenv()
 app = FastAPI()
@@ -430,8 +431,30 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         summary.append(f"{emoji} {name} — {html_url}")
 
     total_checks = len(check_runs)
-    result_string = f"{passed_count}/{total_checks} тестов пройдено"
 
+    if lab_config.get('validation'):
+        valComm=lab_config['validation'].get('commits') # geting validation rules for commits
+        if valComm is not None:
+            total_checks += len(valComm)
+            for chk in valComm: # checking every rule from the list
+                match chk.get('filter'):
+                    case 'message': # substring check
+                        if grading.commits_substring_count(commits_resp.json(), chk['contains']) >= chk['min-count']:
+                            passed_count += 1
+                    case 'console': # local commits check
+                        if grading.commits_local_count(commits_resp.json()) >= chk['min-count']:
+                            passed_count += 1
+
+        valIssu=lab_config['validation'].get('issues') # geting validation rules for issues
+        if valIssu is not None:
+            total_checks += len(valIssu)
+            issues_resp = requests.get(f"https://api.github.com/repos/{org}/{repo_name}/issues")
+            if issues_resp.json(): # issues are present
+                for chk in valIssu: # checking every rule from the list
+                    if grading.issues_substring_count(issues_resp.json(), chk['contains']) >= chk['min-count']: # substring check
+                        passed_count += 1
+
+    result_string = f"{passed_count}/{total_checks} тестов пройдено"
     final_result = "✓" if passed_count == total_checks else "✗"
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
