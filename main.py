@@ -432,7 +432,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
 
     total_checks = len(check_runs)
 
-    if lab_config['validation']:
+    if lab_config.get('validation'):
         valComm=lab_config['validation'].get('commits') # geting validation rules for commits
         if valComm is not None:
             total_checks += len(valComm)
