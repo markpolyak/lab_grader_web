@@ -1,0 +1,43 @@
+on:
+  workflow_dispatch:
+
+env:
+  DOCKER_REGISTRY: ghcr.io
+  API_BASE_URL: https://labgrader.markpolyak.ru/api/v1
+
+jobs:
+  build:
+    name: Build frontend and backend images
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [frontend, backend]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Login to ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Define metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ${{ env.DOCKER_REGISTRY }}/markpolyak/lab_grader_${{ matrix.service }}
+          # INFO: using latest tag only
+          # tags: |
+          #   type=semver,pattern={{version}}
+          #   type=semver,pattern={{major}}.{{minor}}
+      - name: Build docker image
+        uses: docker/build-push-action@v6
+        id: build
+        with:
+          context: .
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          file: ${{ matrix.service }}.Dockerfile
+          push: true
+          build-args: |
+            API_BASE_URL=${{ env.API_BASE_URL }}
