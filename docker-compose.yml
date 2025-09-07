@@ -4,12 +4,7 @@ services:
       context: .
       dockerfile: frontend.Dockerfile
     ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend/courses-front:/app
-      - /app/node_modules
-    environment:
-      - NODE_ENV=development
+      - "8080:80"
 
   backend:
     build:
