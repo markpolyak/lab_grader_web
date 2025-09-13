@@ -11,6 +11,7 @@ from fastapi import UploadFile, File
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
+from grading import check_pdf_content
 
 load_dotenv()
 app = FastAPI()
@@ -431,9 +432,9 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
 
     total_checks = len(check_runs)
     result_string = f"{passed_count}/{total_checks} тестов пройдено"
-
-    final_result = "✓" if passed_count == total_checks else "✗"
-
+    # изменено
+    ci_result = "✓" if passed_count == total_checks else "✗"
+    
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
     client = gspread.authorize(creds)
@@ -456,18 +457,61 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     lab_number = parse_lab_id(lab_id)
     row_idx = github_values.index(username) + 3
     lab_col = student_col + lab_number + lab_offset
+    
+    pdf_results = {}
+    if lab_config.get("report"):
+        report_file = "report.pdf"
+        report_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/{report_file}"
+        report_resp = requests.get(report_url, headers=headers)
+
+        if report_resp.status_code == 200:
+            try:
+                # Получаем ФИО студента из таблицы
+                student_name = sheet.cell(row_idx, student_col).value
+                
+                pdf_results = check_pdf_content(
+                    name_file=report_file,
+                    name_repository=f"{org}/{repo_name}",
+                    name_item=course_info.get("name", ""),
+                    name_lab=lab_config.get("short-name", ""),
+                    num_group=group_id,
+                    name_student=student_name,
+                    main_sections=lab_config.get("report", []),
+                    name_branch="main",
+                    sha_commit=latest_sha,
+                    token=GITHUB_TOKEN
+                )
+
+                # Проверяем результаты
+                title_valid = pdf_results["first_page"]
+                sections_valid = not pdf_results["missing_sections"]
+
+                if not title_valid or not sections_valid:
+                    final_result = "✗"
+                    summary.append("❌ Отчет не соответствует требованиям")
+                else:
+                    summary.append("✅ Отчет соответствует требованиям")
+                    
+            except Exception as e:
+                final_result = "✗"
+                summary.append(f"❌ Ошибка при проверке PDF: {str(e)}")
+        else:
+            final_result = "✗"
+            summary.append(f"❌ Файл {report_file} не найден в репозитории")
+    else:
+        final_result = ci_result
+
+    # Обновление Google Таблицы
     sheet.update_cell(row_idx, lab_col, final_result)
 
     return {
         "status": "updated",
         "result": final_result,
-        "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
+        "message": f"Результат: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
         "passed": result_string,
-        "checks": summary
+        "checks": summary,
+        "pdf_results": pdf_results if pdf_results else {}
     }
-
-
-
 
 @app.post("/courses/upload")
 async def upload_course(file: UploadFile = File(...)):
