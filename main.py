@@ -20,6 +20,19 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
+
+# Проверка обязательных переменных окружения
+if not ADMIN_LOGIN or not ADMIN_PASSWORD:
+    raise RuntimeError(
+        "ADMIN_LOGIN и ADMIN_PASSWORD должны быть установлены в переменных окружения. "
+        "Приложение не может быть запущено без корректной конфигурации безопасности."
+    )
+
+if not GITHUB_TOKEN:
+    raise RuntimeError(
+        "GITHUB_TOKEN должен быть установлен в переменных окружения. "
+        "Приложение требует доступ к GitHub API."
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Разрешить запросы с любых источников
