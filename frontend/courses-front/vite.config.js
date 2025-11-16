@@ -11,7 +11,7 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         rewrite: (path) => {
-          if (path.startsWith('/api/admin')) {
+          if (path.startsWith('/api/v1/admin')) {
             return path;
           }
           if (

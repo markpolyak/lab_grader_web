@@ -5,7 +5,7 @@ export const ProtectedRoute = ({ children }) => {
   const [isAuth, setIsAuth] = useState(null);
 
   useEffect(() => {
-    fetch("/api/admin/check-auth", {
+    fetch("/api/v1/admin/check-auth", {
       credentials: "include",
     })
       .then((res) => {
