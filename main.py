@@ -15,7 +15,7 @@ import re
 load_dotenv()
 app = FastAPI()
 COURSES_DIR = "courses"
-CREDENTIALS_FILE = "credentials.json"  # Файл с учетными данными Google API
+CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
