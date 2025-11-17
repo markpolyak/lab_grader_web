@@ -71,8 +71,9 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
   const handleConfirmDelete = async () => {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/courses/${selectedCourseId}`, {
+      const response = await fetch(`/api/v1/courses/${selectedCourseId}`, {
         method: "DELETE",
+        credentials: "include",
       });
 
       if (response.ok) {
@@ -116,7 +117,9 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
   const handleEdit = async (courseId) => {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/courses/${courseId}/edit`);
+      const response = await fetch(`/api/v1/courses/${courseId}/edit`, {
+        credentials: "include",
+      });
       if (!response.ok) {
         throw new Error(t("errorLoadingCourseForEdit"));
       }
@@ -132,9 +135,10 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
   const handleSave = async () => {
     try {
-      const response = await fetch(`http://127.0.0.1:8000/courses/${editingCourseId}/edit`, {
+      const response = await fetch(`/api/v1/courses/${editingCourseId}/edit`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({ content: editContent }),
       });
 
@@ -171,8 +175,9 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/courses/upload", {
+      const response = await fetch("/api/v1/courses/upload", {
         method: "POST",
+        credentials: "include",
         body: formData,
       });
 

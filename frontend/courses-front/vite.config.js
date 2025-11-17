@@ -11,11 +11,11 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
         rewrite: (path) => {
-          // Убираем /api/v1 для admin маршрутов (как делает Caddy в production)
-          if (path.startsWith('/api/v1/admin')) {
+          // Убираем /api/v1 для admin и courses управления (как делает Caddy в production)
+          if (path.startsWith('/api/v1/admin') || path.startsWith('/api/v1/courses')) {
             return path.replace(/^\/api\/v1/, '');
           }
-          // Убираем /api для остальных маршрутов
+          // Убираем /api для публичных маршрутов
           if (
             path.startsWith('/api/courses') ||
             path.startsWith('/api/groups') ||
