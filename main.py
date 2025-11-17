@@ -316,7 +316,7 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
     student_list = sheet.col_values(student_col)[2:]
 
     if full_name not in student_list:
-        raise HTTPException(status_code=404, detail={"message": "Студент не найден"})
+        raise HTTPException(status_code=404, detail="Студент не найден")
 
     row_idx = student_list.index(full_name) + 3
 
@@ -331,7 +331,7 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
     try:
         github_response = requests.get(f"https://api.github.com/users/{student.github}")
         if github_response.status_code != 200:
-            raise HTTPException(status_code=404, detail={"message": "Пользователь GitHub не найден"})
+            raise HTTPException(status_code=404, detail="Пользователь GitHub не найден")
     except Exception:
         raise HTTPException(status_code=500, detail="Ошибка проверки GitHub пользователя")
 
@@ -347,10 +347,12 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
             "message": "Этот аккаунт GitHub уже был указан ранее для этого же студента"
         }
 
-    raise HTTPException(status_code=409, detail={
-        "status": "conflict",
-        "message": "Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"
-    })
+    # Возвращаем 409 Conflict для конфликта
+    return Response(
+        status_code=409,
+        content='{"status": "conflict", "message": "Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"}',
+        media_type="application/json"
+    )
 
 
 def normalize_lab_id(lab_id: str) -> str:

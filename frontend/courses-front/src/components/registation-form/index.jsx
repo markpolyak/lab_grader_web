@@ -53,7 +53,8 @@ const handleSubmit = async () => {
     showSnackbar("Неизвестный ответ от сервера", "warning");
   } catch (error) {
     console.error("Ошибка:", error);
-    showSnackbar("Произошла ошибка, попробуйте снова.", "error");
+    // Показываем сообщение об ошибке от сервера или стандартное сообщение
+    showSnackbar(error.message || "Произошла ошибка, попробуйте снова.", "error");
   }
 };
 
@@ -104,7 +105,7 @@ const handleSubmit = async () => {
         <Input
           type="text"
           name="github"
-          placeholder="GitHub никнейм"
+          placeholder="GitHub-аккаунт (имя пользователя)"
           value={formState.github}
           onChange={handleChange}
         />
