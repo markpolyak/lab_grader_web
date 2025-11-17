@@ -1,23 +1,30 @@
+---
+# Configuration file for lab-grader
+
 course:
-    name: ld
-    logo: "/assets/machine-learning.png"
-    alt-names:
+    name: Machine Learning
+    alt-names: 
         - ML
-        - МД
-        - Мо
+        - Машинное обучение
+        - МО
+        - Machine learning basics
+        - MLB
+        - Основы машинного обучения
+        - ОМО
     semester: Spring 2025
     email: k43guap@ya.ru
     timezone: UTC+3
+    logo: image.png
     github:
-        organization: suai-diplom-2025
+        organization: suai-mlb-2025
         teachers:
             - "Mark Polyak"
             - markpolyak
     google:
-        spreadsheet: 10iVAKvJVUyrjf7kEqm1TGOYk0lufyDJDbBItI5tnqAc
+        spreadsheet: 1fbHhzzZUxAxdc9cqMnaTa-MIYcMcjZ5MRnsM3CGqocY
         info-sheet: График
         task-id-column: 0
-        student-name-column: 2
+        student-name-column: 1
         lab-column-offset: 1
     staff:
         - name: Поляк Марк Дмитриевич
@@ -28,27 +35,30 @@ course:
           status: лабораторные работы
     labs:
         "1":
-            github-prefix: ml-task1
+            github-prefix: mlb-task1
             short-name: ЛР1
-            taskid-max: 25
-            penalty-max: 6
+            taskid-max: 40
+            penalty-max: 7
+#            ignore-task-id: True
             ci:
-                - workflows
+                workflows:
+                    - run-autograding-tests
+                    - Test python scripts
             files:
-                - lab1.sh
+                - jupyter_assignment.ipynb
+                - matplotlib_assignment.ipynb
+                - pandas_assignment.ipynb
             moss:
-                language: c
+                language: python
                 max-matches: 1000
                 local-path: lab1
                 additional:
-                  - suai-os-2020
-                  - suai-os-2021
-                  - suai-os-2022
-                  - suai-os-2023
-                basefiles:
-                    -
-                        repo: k43guap/os-course-task1
-                        filename: lab1.sh
+                  - hse-mlwp-2022
+                  - suai-mlb-2024
+#                basefiles:
+#                    - 
+#                        repo: k43guap/os-course-task1
+#                        filename: lab1.sh
             report:
                 - Цель работы
                 - Индивидуальное задание
@@ -57,68 +67,49 @@ course:
                 - Исходный код программы с комментариями
                 - Выводы
         "2":
-            github-prefix: ml-task2
+            github-prefix: mlb-task2
             short-name: ЛР2
             taskid-max: 20
-            taskid-shift: 4
             penalty-max: 9
+            ignore-task-id: True
             ci:
                 - workflows
             files:
-                - lab2.cpp
+                - regression_assignment.ipynb
             moss:
-                language: cc
+                language: python
                 max-matches: 1000
                 local-path: lab2
                 additional:
-                  - suai-os-2020
-                  - suai-os-2021
-                  - suai-os-2022
-                  - suai-os-2023
-                basefiles:
-                    -
-                        repo: k43guap/os-course-task2
-                        filename: lab2.cpp
-                    -
-                        repo: k43guap/os-course-task2
-                        filename: examples/ex3.cpp
+                  - hse-mlwp-2022
+                  - suai-mlb-2024
             report:
                 - Цель работы
                 - Задание на лабораторную работу
-                - Граф запуска потоков
                 - Результат выполнения работы
-                - Исходный код программы с комментариями
                 - Выводы
         "3":
-            github-prefix: ml-task3
+            github-prefix: mlb-task3
             short-name: ЛР3
             taskid-max: 20
             penalty-max: 7
+            ignore-task-id: True
             ci:
                 - workflows
             files:
-                - lab3.cpp
+                - classification_assignment.ipynb
             moss:
-                language: cc
+                language: python
                 max-matches: 1000
                 local-path: lab3
                 additional:
-                  - suai-os-2020
-                  - suai-os-2021
-                  - suai-os-2022
-                  - suai-os-2023
-                basefiles:
-                    -
-                        repo: k43guap/os-course-task3
-                        filename: lab3.cpp
+                  - suai-mlb-2024
             report:
                 - Цель работы
                 - Задание на лабораторную работу
-                - Граф запуска потоков
                 - Результат выполнения работы
-                - Исходный код программы с комментариями
                 - Выводы
 misc:
     requests-timeout: 5
-
-
+    
+    
