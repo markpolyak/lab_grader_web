@@ -347,11 +347,11 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
             "message": "Этот аккаунт GitHub уже был указан ранее для этого же студента"
         }
 
-    # Возвращаем conflict статус (200 OK с информацией о конфликте)
-    return {
-        "status": "conflict",
-        "message": "Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"
-    }
+    # Конфликт: студент пытается указать другой аккаунт
+    raise HTTPException(
+        status_code=409,
+        detail="Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"
+    )
 
 
 def normalize_lab_id(lab_id: str) -> str:

@@ -36,6 +36,11 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
 
   const data = await response.json();
 
+  // Обрабатываем 409 Conflict как специальный случай
+  if (response.status === 409) {
+    return { status: "conflict", message: data.detail };
+  }
+
   // Если ответ не успешный, выбрасываем ошибку с сообщением от сервера
   if (!response.ok) {
     throw new Error(data.detail || "Ошибка при регистрации");
