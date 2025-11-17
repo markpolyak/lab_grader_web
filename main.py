@@ -85,7 +85,13 @@ def logout(response: Response):
 @app.get("/courses")
 def get_courses():
     courses = []
-    for index, filename in enumerate(sorted(os.listdir(COURSES_DIR)), start=1):
+    # FIX: фильтрация только .yaml-файлов
+    yaml_files = [
+        f for f in os.listdir(COURSES_DIR)
+        if f.endswith(".yaml") and os.path.isfile(os.path.join(COURSES_DIR, f))
+    ]
+    yaml_files.sort()
+    for index, filename in enumerate(yaml_files, start=1):
         file_path = os.path.join(COURSES_DIR, filename)
         if filename.endswith(".yaml") and os.path.isfile(file_path):
             with open(file_path, "r", encoding="utf-8") as file:
