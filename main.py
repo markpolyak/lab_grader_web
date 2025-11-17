@@ -58,7 +58,7 @@ class StudentRegistration(BaseModel):
 async def read_index():
     return FileResponse("dist/index.html")
 
-@app.post("/api/v1/admin/login")
+@app.post("/admin/login")
 def admin_login(data: AuthRequest, response: Response):
     if data.login == ADMIN_LOGIN and data.password == ADMIN_PASSWORD:
         token = signer.sign(data.login.encode()).decode()
@@ -73,7 +73,7 @@ def admin_login(data: AuthRequest, response: Response):
         return {"authenticated": True}
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-@app.get("/api/v1/admin/check-auth")
+@app.get("/admin/check-auth")
 def check_auth(request: Request):
     cookie = request.cookies.get("admin_session")
     if not cookie:
@@ -89,7 +89,7 @@ def check_auth(request: Request):
 
     return {"authenticated": True}
 
-@app.post("/api/v1/admin/logout")
+@app.post("/admin/logout")
 def logout(response: Response):
     response.delete_cookie("admin_session", path="/")
     return {"message": "Logged out"}
