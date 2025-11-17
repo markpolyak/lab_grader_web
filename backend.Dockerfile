@@ -26,12 +26,6 @@ COPY main.py .
 COPY requirements.txt .
 COPY courses/ courses/
 
-# Create directory for google credentials with proper permissions
-# This directory will be used for volume mount
-RUN mkdir -p /app/google-credentials && \
-    chown -R appuser:appuser /app/google-credentials && \
-    chmod 755 /app/google-credentials
-
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
 
