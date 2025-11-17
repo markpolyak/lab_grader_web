@@ -1,0 +1,27 @@
+---
+# Course index file for lab-grader
+# This file manages course visibility, ordering, and archival status
+#
+# Fields:
+#   id: Unique stable identifier for the course (format: {course-code}-{year}-{season})
+#   file: YAML filename in courses/ directory
+#   status: Course visibility status
+#     - active: Displayed in main course list
+#     - archived: Available for students with academic debt, shown in archive section
+#     - hidden: Completely hidden from UI but kept in repository
+#   priority: Display order (higher = shown first)
+#   featured: If true, shown at the top of the list (optional)
+
+version: "1.0"
+
+courses:
+  - id: "os-2025-spring"
+    file: "operating-systems-2025.yaml"
+    status: "active"
+    priority: 100
+    featured: true
+
+  - id: "ml-2025-spring"
+    file: "machine-learning-basics-2025.yaml"
+    status: "active"
+    priority: 90
