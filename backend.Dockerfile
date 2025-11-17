@@ -11,8 +11,9 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Production stage
 FROM python:3.12-slim AS final
 
-# Create non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
+# Create non-root user with fixed UID/GID for consistent file permissions
+# UID 1000 is commonly used and matches most host users
+RUN groupadd -r appuser -g 1000 && useradd -r -u 1000 -g appuser appuser
 
 WORKDIR /app
 
@@ -24,6 +25,12 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY main.py .
 COPY requirements.txt .
 COPY courses/ courses/
+
+# Create directory for google credentials with proper permissions
+# This directory will be used for volume mount
+RUN mkdir -p /app/google-credentials && \
+    chown -R appuser:appuser /app/google-credentials && \
+    chmod 755 /app/google-credentials
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
