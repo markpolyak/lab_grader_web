@@ -29,6 +29,7 @@ app.add_middleware(
 )
 signer = TimestampSigner(SECRET_KEY)
 
+
 class AuthRequest(BaseModel):
     login: str
     password: str
@@ -45,6 +46,7 @@ class StudentRegistration(BaseModel):
 async def read_index():
     return FileResponse("dist/index.html")
 
+
 @app.post("/api/admin/login")
 def admin_login(data: AuthRequest, response: Response):
     if data.login == ADMIN_LOGIN and data.password == ADMIN_PASSWORD:
@@ -59,6 +61,7 @@ def admin_login(data: AuthRequest, response: Response):
         )
         return {"authenticated": True}
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
+
 
 @app.get("/api/admin/check-auth")
 def check_auth(request: Request):
@@ -75,6 +78,7 @@ def check_auth(request: Request):
         raise HTTPException(status_code=401, detail="Невалидная сессия")
 
     return {"authenticated": True}
+
 
 @app.post("/api/admin/logout")
 def logout(response: Response):
@@ -116,6 +120,7 @@ def parse_lab_id(lab_id: str) -> int:
         raise HTTPException(status_code=400, detail="Некорректный lab_id")
     return int(match.group(0))
 
+
 @app.get("/courses/{course_id}")
 def get_course(course_id: str):
     files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
@@ -137,6 +142,7 @@ def get_course(course_id: str):
             "github-organization": course_info.get("github", {}).get("organization", "Unknown"),
             "google-spreadsheet": course_info.get("google", {}).get("spreadsheet", "Unknown"),
         }
+
 
 @app.delete("/courses/{course_id}")
 def delete_course(course_id: str):
@@ -188,7 +194,6 @@ def edit_course_put(course_id: str, data: EditCourseRequest):
 
     file_path = os.path.join(COURSES_DIR, filename)
 
-
     try:
         yaml.safe_load(data.content)
     except yaml.YAMLError as e:
@@ -205,6 +210,7 @@ def get_course_groups(course_id: str):
     files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
     try:
         filename = files[int(course_id) - 1]
+        print(filename)
     except (IndexError, ValueError):
         raise HTTPException(status_code=404, detail="Course not found")
 
@@ -217,7 +223,6 @@ def get_course_groups(course_id: str):
 
     if not spreadsheet_id:
         raise HTTPException(status_code=400, detail="Spreadsheet ID not found in course config")
-
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
@@ -250,7 +255,6 @@ def get_course_labs(course_id: str, group_id: str):
     if not spreadsheet_id or not labs:
         raise HTTPException(status_code=400, detail="Missing spreadsheet ID or labs in config")
 
-
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
     client = gspread.authorize(creds)
@@ -258,7 +262,6 @@ def get_course_labs(course_id: str, group_id: str):
     try:
         spreadsheet = client.open_by_key(spreadsheet_id)
         sheet = spreadsheet.worksheet(group_id)
-
 
         headers = sheet.row_values(2)[2:]
     except Exception as e:
@@ -286,7 +289,6 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
     if not spreadsheet_id:
         raise HTTPException(status_code=400, detail="Spreadsheet ID not found in course config")
 
-
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
     client = gspread.authorize(creds)
@@ -299,14 +301,12 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
 
     full_name = f"{student.surname} {student.name} {student.patronymic}".strip()
 
-
     student_list = sheet.col_values(student_col)[2:]
 
     if full_name not in student_list:
-        raise HTTPException(status_code=404, detail={"message": "Студент не найден"})
+        raise HTTPException(status_code=404, detail="Студент не найден")
 
     row_idx = student_list.index(full_name) + 3
-
 
     header_row = sheet.row_values(1)
     try:
@@ -314,11 +314,10 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
     except ValueError:
         raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден в таблице")
 
-
     try:
         github_response = requests.get(f"https://api.github.com/users/{student.github}")
         if github_response.status_code != 200:
-            raise HTTPException(status_code=404, detail={"message": "Пользователь GitHub не найден"})
+            raise HTTPException(status_code=404, detail="Пользователь GitHub не найден")
     except Exception:
         raise HTTPException(status_code=500, detail="Ошибка проверки GitHub пользователя")
 
@@ -334,10 +333,8 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
             "message": "Этот аккаунт GitHub уже был указан ранее для этого же студента"
         }
 
-    raise HTTPException(status_code=409, detail={
-        "status": "conflict",
-        "message": "Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"
-    })
+    raise HTTPException(status_code=409,
+                        detail="Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю")
 
 
 def normalize_lab_id(lab_id: str) -> str:
@@ -349,8 +346,10 @@ def normalize_lab_id(lab_id: str) -> str:
 class GradeRequest(BaseModel):
     github: str = Field(..., min_length=1)
 
+
 @app.post("/courses/{course_id}/groups/{group_id}/labs/{lab_id}/grade")
 def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest):
+    # Загрузка конфигурации курса
     files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
     try:
         filename = files[int(course_id) - 1]
@@ -367,9 +366,11 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
 
     labs = course_info.get("labs", {})
-    normalized_lab_id = normalize_lab_id(lab_id)
+    normalized_lab_id = lab_id
     lab_config = labs.get(normalized_lab_id, {})
     repo_prefix = lab_config.get("github-prefix")
+    required_files = lab_config.get("files", [])
+    test_files = lab_config.get("tests", [])
 
     if not all([org, spreadsheet_id, repo_prefix]):
         raise HTTPException(status_code=400, detail="Missing course configuration")
@@ -381,28 +382,71 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         "Accept": "application/vnd.github+json"
     }
 
-    test_file_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/test_main.py"
-    if requests.get(test_file_url, headers=headers).status_code != 200:
-        raise HTTPException(status_code=400, detail="⚠️ test_main.py не найден в репозитории")
+    # 1. Проверка наличия обязательных файлов
+    missing_files = []
+    for file in required_files:
+        file_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/{file}"
+        if requests.get(file_url, headers=headers).status_code != 200:
+            missing_files.append(file)
 
+    if missing_files:
+        raise HTTPException(
+            status_code=400,
+            detail=f"⚠️ Отсутствуют обязательные файлы: {', '.join(missing_files)}"
+        )
+
+    # 2. Проверка тестовых файлов (если указаны)
+    if test_files:
+        missing_tests = []
+        for test in test_files:
+            test_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/{test}"
+            if requests.get(test_url, headers=headers).status_code != 200:
+                missing_tests.append(test)
+
+        if missing_tests:
+            raise HTTPException(
+                status_code=400,
+                detail=f"⚠️ Отсутствуют тестовые файлы: {', '.join(missing_tests)}"
+            )
+
+    # 3. Проверка CI workflows
     workflows_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/.github/workflows"
     if requests.get(workflows_url, headers=headers).status_code != 200:
         raise HTTPException(status_code=400, detail="⚠️ Папка .github/workflows не найдена. CI не настроен")
 
+    # 4. Проверка коммитов и изменений файлов
     commits_url = f"https://api.github.com/repos/{org}/{repo_name}/commits"
     commits_resp = requests.get(commits_url, headers=headers)
     if commits_resp.status_code != 200 or not commits_resp.json():
         raise HTTPException(status_code=404, detail="Нет коммитов в репозитории")
 
-    latest_sha = commits_resp.json()[0]["sha"]
-
+    # Получаем информацию о последнем коммите
+    latest_commit = commits_resp.json()[0]
+    latest_sha = latest_commit["sha"]
     commit_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}"
-    commit_files = requests.get(commit_url, headers=headers).json().get("files", [])
-    for f in commit_files:
-        if f["filename"] == "test_main.py" and f["status"] in ("removed", "modified"):
-            raise HTTPException(status_code=403, detail="🚨 Нельзя изменять test_main.py")
-        if f["filename"].startswith("tests/") and f["status"] in ("removed", "modified"):
-            raise HTTPException(status_code=403, detail="🚨 Нельзя изменять папку tests/")
+    commit_data = requests.get(commit_url, headers=headers).json()
+    commit_files = commit_data.get("files", [])
+    commit_author = latest_commit.get("author", {}).get("login")
+
+    if commit_author and commit_author.lower() == username.lower():
+        for f in commit_files:
+            # Запрет изменения тестовых файлов
+            if test_files:
+                # Проверка отдельных тестовых файлов
+                if any(f["filename"] == test_file for test_file in test_files if not test_file.endswith('/')) and f[
+                    "status"] in ("removed", "modified"):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"🚨 Запрещено изменять тестовый файл: {f['filename']}"
+                    )
+
+                # Проверка файлов в тестовых директориях
+                if any(f["filename"].startswith(test_file.rstrip('/') + '/') for test_file in test_files if
+                       test_file.endswith('/')) and f["status"] in ("removed", "modified"):
+                    raise HTTPException(
+                        status_code=403,
+                        detail=f"🚨 Запрещено изменять файлы в тестовой директории: {f['filename']}"
+                    )
 
     check_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}/check-runs"
     check_resp = requests.get(check_url, headers=headers)
@@ -431,7 +475,6 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
 
     total_checks = len(check_runs)
     result_string = f"{passed_count}/{total_checks} тестов пройдено"
-
     final_result = "✓" if passed_count == total_checks else "✗"
 
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -456,17 +499,23 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     lab_number = parse_lab_id(lab_id)
     row_idx = github_values.index(username) + 3
     lab_col = student_col + lab_number + lab_offset
-    sheet.update_cell(row_idx, lab_col, final_result)
+
+    current_value = sheet.cell(row_idx, lab_col).value
+
+    if not current_value or str(current_value).strip() == "":
+        sheet.update_cell(row_idx, lab_col, final_result)
 
     return {
         "status": "updated",
         "result": final_result,
         "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
         "passed": result_string,
-        "checks": summary
+        "checks": summary,
+        "files_checked": {
+            "required": required_files,
+            "tests": test_files
+        }
     }
-
-
 
 
 @app.post("/courses/upload")
