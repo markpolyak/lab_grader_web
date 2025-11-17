@@ -15,11 +15,24 @@ import re
 load_dotenv()
 app = FastAPI()
 COURSES_DIR = "courses"
-CREDENTIALS_FILE = "credentials.json"  # Файл с учетными данными Google API
+CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
+
+# Проверка обязательных переменных окружения
+if not ADMIN_LOGIN or not ADMIN_PASSWORD:
+    raise RuntimeError(
+        "ADMIN_LOGIN и ADMIN_PASSWORD должны быть установлены в переменных окружения. "
+        "Приложение не может быть запущено без корректной конфигурации безопасности."
+    )
+
+if not GITHUB_TOKEN:
+    raise RuntimeError(
+        "GITHUB_TOKEN должен быть установлен в переменных окружения. "
+        "Приложение требует доступ к GitHub API."
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Разрешить запросы с любых источников
@@ -45,7 +58,7 @@ class StudentRegistration(BaseModel):
 async def read_index():
     return FileResponse("dist/index.html")
 
-@app.post("/api/admin/login")
+@app.post("/admin/login")
 def admin_login(data: AuthRequest, response: Response):
     if data.login == ADMIN_LOGIN and data.password == ADMIN_PASSWORD:
         token = signer.sign(data.login.encode()).decode()
@@ -60,7 +73,7 @@ def admin_login(data: AuthRequest, response: Response):
         return {"authenticated": True}
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-@app.get("/api/admin/check-auth")
+@app.get("/admin/check-auth")
 def check_auth(request: Request):
     cookie = request.cookies.get("admin_session")
     if not cookie:
@@ -76,7 +89,7 @@ def check_auth(request: Request):
 
     return {"authenticated": True}
 
-@app.post("/api/admin/logout")
+@app.post("/admin/logout")
 def logout(response: Response):
     response.delete_cookie("admin_session", path="/")
     return {"message": "Logged out"}
@@ -303,7 +316,7 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
     student_list = sheet.col_values(student_col)[2:]
 
     if full_name not in student_list:
-        raise HTTPException(status_code=404, detail={"message": "Студент не найден"})
+        raise HTTPException(status_code=404, detail="Студент не найден")
 
     row_idx = student_list.index(full_name) + 3
 
@@ -318,7 +331,7 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
     try:
         github_response = requests.get(f"https://api.github.com/users/{student.github}")
         if github_response.status_code != 200:
-            raise HTTPException(status_code=404, detail={"message": "Пользователь GitHub не найден"})
+            raise HTTPException(status_code=404, detail="Пользователь GitHub не найден")
     except Exception:
         raise HTTPException(status_code=500, detail="Ошибка проверки GitHub пользователя")
 
@@ -334,10 +347,11 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
             "message": "Этот аккаунт GitHub уже был указан ранее для этого же студента"
         }
 
-    raise HTTPException(status_code=409, detail={
-        "status": "conflict",
-        "message": "Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"
-    })
+    # Конфликт: студент пытается указать другой аккаунт
+    raise HTTPException(
+        status_code=409,
+        detail="Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"
+    )
 
 
 def normalize_lab_id(lab_id: str) -> str:

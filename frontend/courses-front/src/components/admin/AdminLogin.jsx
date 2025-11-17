@@ -14,7 +14,7 @@ export const AdminLogin = () => {
     e.preventDefault();
 
     try {
-        const response = await fetch("/api/admin/login", {
+        const response = await fetch("/api/v1/admin/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
