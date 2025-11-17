@@ -11,9 +11,8 @@ RUN pip install --no-cache-dir --upgrade pip \
 # Production stage
 FROM python:3.12-slim AS final
 
-# Create non-root user with fixed UID/GID for consistent file permissions
-# UID 1000 is commonly used and matches most host users
-RUN groupadd -r appuser -g 1000 && useradd -r -u 1000 -g appuser appuser
+# Create non-root user
+RUN groupadd -r appuser && useradd -r -g appuser appuser
 
 WORKDIR /app
 
