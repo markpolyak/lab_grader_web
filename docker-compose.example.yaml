@@ -1,0 +1,59 @@
+# Example docker-compose.yaml for production deployment
+#
+# This file is NOT used in development. It's a template for server deployment.
+# Copy this to your server at /opt/labgrader/docker-compose.yaml
+#
+# IMPORTANT: Do NOT commit your actual docker-compose.yaml to git!
+#            It contains secrets and should only exist on the server.
+
+services:
+  frontend:
+    image: ghcr.io/markpolyak/lab_grader_frontend:main
+    restart: unless-stopped
+    networks:
+      - caddy-proxy
+    labels:
+      caddy: labgrader.markpolyak.ru
+      caddy.reverse_proxy: "{{upstreams 8080}}"
+      # Watchtower labels (optional)
+      com.centurylinklabs.watchtower.enable: "true"
+
+  backend:
+    image: ghcr.io/markpolyak/lab_grader_backend:main
+    restart: unless-stopped
+    volumes:
+      - ./google-credentials:/app/google-credentials/
+      - ./courses:/app/courses  # Mount courses directory for easy editing
+    environment:
+      # Credentials and secrets
+      CREDENTIALS_FILE: /app/google-credentials/credentials.json
+      GITHUB_TOKEN: ${GITHUB_TOKEN}
+      ADMIN_LOGIN: ${ADMIN_LOGIN}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SECRET_KEY: ${SECRET_KEY}
+    labels:
+      caddy: labgrader.markpolyak.ru
+      caddy.handle_path: /api/v1*
+      caddy.handle_path.0_reverse_proxy: "{{upstreams 8000}}"
+      # Watchtower labels (optional)
+      com.centurylinklabs.watchtower.enable: "true"
+    networks:
+      - caddy-proxy
+
+networks:
+  caddy-proxy:
+    external: true
+
+# Alternative configuration using environment variable for branch:
+#
+# services:
+#   frontend:
+#     image: ghcr.io/markpolyak/lab_grader_frontend:${BRANCH:-main}
+#   backend:
+#     image: ghcr.io/markpolyak/lab_grader_backend:${BRANCH:-main}
+#
+# Then you can switch branches with:
+#   BRANCH=feature-xyz docker compose up -d --pull=always --force-recreate
+#
+# Or create a .env file with:
+#   BRANCH=feature-xyz
