@@ -586,13 +586,19 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
             "Accept": "application/vnd.github+json"
         }
 
-        # Check for test_main.py
-        test_file_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/test_main.py"
-        test_resp = requests.get(test_file_url, headers=headers)
-        if test_resp.status_code != 200:
-            logger.warning(f"test_main.py not found in {org}/{repo_name} (status: {test_resp.status_code})")
-            raise HTTPException(status_code=400, detail="⚠️ test_main.py не найден в репозитории")
-        logger.info(f"test_main.py found in repository")
+        # Check for required files from lab config (optional)
+        required_files = lab_config.get("files", [])
+        if required_files:
+            logger.info(f"Checking for required files: {required_files}")
+            for required_file in required_files:
+                file_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/{required_file}"
+                file_resp = requests.get(file_url, headers=headers)
+                if file_resp.status_code != 200:
+                    logger.warning(f"Required file '{required_file}' not found in {org}/{repo_name} (status: {file_resp.status_code})")
+                    raise HTTPException(status_code=400, detail=f"⚠️ Файл {required_file} не найден в репозитории")
+                logger.info(f"Required file '{required_file}' found")
+        else:
+            logger.info(f"No required files specified in lab config")
 
         # Check for workflows
         workflows_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/.github/workflows"
@@ -617,20 +623,25 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         latest_sha = commits_data[0]["sha"]
         logger.info(f"Latest commit: {latest_sha}")
 
-        # Check for forbidden file modifications
+        # Check for forbidden file modifications (if configured)
         commit_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}"
         commit_resp = requests.get(commit_url, headers=headers)
         commit_files = commit_resp.json().get("files", [])
         logger.info(f"Checking {len(commit_files)} modified files in latest commit")
 
-        for f in commit_files:
-            if f["filename"] == "test_main.py" and f["status"] in ("removed", "modified"):
-                logger.warning(f"Forbidden modification detected: test_main.py was {f['status']}")
-                raise HTTPException(status_code=403, detail="🚨 Нельзя изменять test_main.py")
-            if f["filename"].startswith("tests/") and f["status"] in ("removed", "modified"):
-                logger.warning(f"Forbidden modification detected: {f['filename']} was {f['status']}")
-                raise HTTPException(status_code=403, detail="🚨 Нельзя изменять папку tests/")
-        logger.info(f"No forbidden file modifications detected")
+        # Check if test files were modified (only for labs with test_main.py)
+        forbidden_files = lab_config.get("forbidden-modifications", [])
+        if "test_main.py" in required_files or "test_main.py" in forbidden_files:
+            for f in commit_files:
+                if f["filename"] == "test_main.py" and f["status"] in ("removed", "modified"):
+                    logger.warning(f"Forbidden modification detected: test_main.py was {f['status']}")
+                    raise HTTPException(status_code=403, detail="🚨 Нельзя изменять test_main.py")
+                if f["filename"].startswith("tests/") and f["status"] in ("removed", "modified"):
+                    logger.warning(f"Forbidden modification detected: {f['filename']} was {f['status']}")
+                    raise HTTPException(status_code=403, detail="🚨 Нельзя изменять папку tests/")
+            logger.info(f"No forbidden file modifications detected")
+        else:
+            logger.info(f"No forbidden file checks configured for this lab")
 
         # Fetch CI check runs
         check_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}/check-runs"
