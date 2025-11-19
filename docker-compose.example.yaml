@@ -24,6 +24,7 @@ services:
     volumes:
       - ./google-credentials:/app/google-credentials/
       - ./courses:/app/courses  # Mount courses directory for easy editing
+      - ./logs:/app/logs  # Persistent logs (survive container restarts)
     environment:
       # Credentials and secrets
       CREDENTIALS_FILE: /app/google-credentials/credentials.json
@@ -31,6 +32,7 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
+      LOG_DIR: /app/logs  # Directory for persistent log files
     labels:
       caddy: labgrader.markpolyak.ru
       # API endpoints

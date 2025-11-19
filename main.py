@@ -15,13 +15,33 @@ import re
 import logging
 from datetime import datetime
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+# Configure logging to both file and console
+LOG_DIR = os.getenv("LOG_DIR", "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+
+# Create formatters
+log_formatter = logging.Formatter(
+    '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
+
+# Root logger configuration
+root_logger = logging.getLogger()
+root_logger.setLevel(logging.INFO)
+
+# Console handler (for docker logs)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+root_logger.addHandler(console_handler)
+
+# File handler (persistent logs)
+log_file = os.path.join(LOG_DIR, "labgrader.log")
+file_handler = logging.FileHandler(log_file, encoding='utf-8')
+file_handler.setFormatter(log_formatter)
+root_logger.addHandler(file_handler)
+
 logger = logging.getLogger(__name__)
+logger.info(f"Logging initialized. Log file: {log_file}")
 
 load_dotenv()
 app = FastAPI()
