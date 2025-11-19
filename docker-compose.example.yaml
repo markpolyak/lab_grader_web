@@ -32,7 +32,9 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
+      # Logging configuration
       LOG_DIR: /app/logs  # Directory for persistent log files
+      LOG_LEVEL: INFO  # Options: DEBUG, INFO, WARNING, ERROR (use DEBUG for detailed troubleshooting)
     labels:
       caddy: labgrader.markpolyak.ru
       # API endpoints

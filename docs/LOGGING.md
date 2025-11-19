@@ -19,14 +19,64 @@ Logs are written to **two destinations simultaneously**:
 
 Format: `%(asctime)s - %(name)s - %(levelname)s - %(message)s`
 
+**Note:** All logs now include timestamps, including uvicorn access logs (HTTP requests).
+
+## Log Levels
+
+The logging level can be controlled via the `LOG_LEVEL` environment variable:
+
+- **INFO** (default): Normal operation, important events
+- **DEBUG**: Detailed diagnostic information for troubleshooting
+- **WARNING**: Warning messages only
+- **ERROR**: Error messages only
+
+### Enabling DEBUG Mode
+
+For detailed troubleshooting (e.g., finding why a student is not found), enable DEBUG mode:
+
+**In docker-compose.yaml:**
+```yaml
+backend:
+  environment:
+    LOG_LEVEL: DEBUG
+```
+
+**DEBUG mode adds:**
+- Input field values (surname, name, patronymic)
+- Student list from spreadsheet (first 5 entries)
+- String length and representation for comparison
+- Similar names when exact match fails
+
+**Example DEBUG output:**
+```
+2025-11-19 12:34:56 - __main__ - INFO - Registration attempt - Course: os-2025, Group: 4332, Full name: 'Тестовый Тест Тестович', GitHub: markpolyak
+2025-11-19 12:34:56 - __main__ - DEBUG - Input data - Surname: 'Тестовый', Name: 'Тест', Patronymic: 'Тестович'
+2025-11-19 12:34:56 - __main__ - INFO - Searching for student 'Тестовый Тест Тестович' in column 2
+2025-11-19 12:34:56 - __main__ - INFO - Found 15 students in spreadsheet
+2025-11-19 12:34:56 - __main__ - DEBUG - Student list: ['Иванов Иван Иванович', 'Петров Петр', ...]
+2025-11-19 12:34:56 - __main__ - WARNING - Student 'Тестовый Тест Тестович' not found in group 4332
+2025-11-19 12:34:56 - __main__ - INFO - Found 1 students with matching surname: ['Тестовый Тест']
+2025-11-19 12:34:56 - __main__ - DEBUG - Search string length: 23, repr: 'Тестовый Тест Тестович'
+2025-11-19 12:34:56 - __main__ - DEBUG - First student in list - length: 21, repr: 'Иванов Иван Иванович'
+```
+
+This helps identify:
+- Missing patronymic in spreadsheet
+- Extra spaces
+- Different encoding issues
+
 ## What Gets Logged
 
 ### Registration Endpoint (`/register`)
-- Student registration attempts (name, GitHub username)
-- Course and spreadsheet lookups
-- GitHub account validation
-- Row updates in Google Sheets
-- Errors with detailed context
+- **INFO**: Registration attempts with full name (consistent format)
+- **INFO**: Number of students found in spreadsheet
+- **INFO**: Students with matching surname (when not found)
+- **INFO**: Successful registration or GitHub update
+- **DEBUG**: Individual field values (surname, name, patronymic)
+- **DEBUG**: Student list from spreadsheet
+- **DEBUG**: String comparison details (length, repr)
+- **WARNING**: Student not found, GitHub user not found
+- **ERROR**: Missing configuration, spreadsheet errors
 
 ### Grading Endpoint (`/grade`)
 - Grading requests (course, group, lab, GitHub username)

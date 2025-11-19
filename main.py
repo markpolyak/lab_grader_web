@@ -19,6 +19,10 @@ from datetime import datetime
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
+# Set log level from environment (default: INFO)
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+log_level = getattr(logging, LOG_LEVEL, logging.INFO)
+
 # Create formatters
 log_formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -27,7 +31,7 @@ log_formatter = logging.Formatter(
 
 # Root logger configuration
 root_logger = logging.getLogger()
-root_logger.setLevel(logging.INFO)
+root_logger.setLevel(log_level)
 
 # Console handler (for docker logs)
 console_handler = logging.StreamHandler()
@@ -39,6 +43,16 @@ log_file = os.path.join(LOG_DIR, "labgrader.log")
 file_handler = logging.FileHandler(log_file, encoding='utf-8')
 file_handler.setFormatter(log_formatter)
 root_logger.addHandler(file_handler)
+
+# Configure uvicorn loggers to use the same format
+uvicorn_access = logging.getLogger("uvicorn.access")
+uvicorn_access.handlers = [console_handler, file_handler]
+
+uvicorn_error = logging.getLogger("uvicorn.error")
+uvicorn_error.handlers = [console_handler, file_handler]
+
+uvicorn_main = logging.getLogger("uvicorn")
+uvicorn_main.handlers = [console_handler, file_handler]
 
 logger = logging.getLogger(__name__)
 logger.info(f"Logging initialized. Log file: {log_file}")
@@ -433,7 +447,11 @@ def get_course_labs(course_id: str, group_id: str):
 
 @app.post("/courses/{course_id}/groups/{group_id}/register")
 def register_student(course_id: str, group_id: str, student: StudentRegistration):
-    logger.info(f"Registration attempt - Course: {course_id}, Group: {group_id}, Student: {student.surname} {student.name}, GitHub: {student.github}")
+    # Build full name first for consistent logging
+    full_name = f"{student.surname} {student.name} {student.patronymic}".strip()
+
+    logger.info(f"Registration attempt - Course: {course_id}, Group: {group_id}, Full name: '{full_name}', GitHub: {student.github}")
+    logger.debug(f"Input data - Surname: '{student.surname}', Name: '{student.name}', Patronymic: '{student.patronymic}'")
 
     try:
         course_info = get_course_by_id(course_id)
@@ -455,13 +473,22 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
             logger.error(f"Group '{group_id}' not found in spreadsheet for course {course_id}: {str(e)}")
             raise HTTPException(status_code=404, detail="Group not found in spreadsheet")
 
-        full_name = f"{student.surname} {student.name} {student.patronymic}".strip()
-        logger.info(f"Looking for student: {full_name}")
+        logger.info(f"Searching for student '{full_name}' in column {student_col}")
 
         student_list = sheet.col_values(student_col)[2:]
+        logger.info(f"Found {len(student_list)} students in spreadsheet")
+        logger.debug(f"Student list: {student_list[:5]}..." if len(student_list) > 5 else f"Student list: {student_list}")
 
+        # Check for exact match
         if full_name not in student_list:
             logger.warning(f"Student '{full_name}' not found in group {group_id}")
+            # Log similarity for debugging
+            similar = [s for s in student_list if student.surname in s]
+            if similar:
+                logger.info(f"Found {len(similar)} students with matching surname: {similar}")
+            logger.debug(f"Search string length: {len(full_name)}, repr: {repr(full_name)}")
+            if student_list:
+                logger.debug(f"First student in list - length: {len(student_list[0])}, repr: {repr(student_list[0])}")
             raise HTTPException(status_code=404, detail="Студент не найден")
 
         row_idx = student_list.index(full_name) + 3
