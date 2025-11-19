@@ -74,7 +74,8 @@ export const ImageBlock = styled.div`
   width: ${sizes.cardWidth};
   height: ${sizes.cardHeight};
   background-image: ${(props) => `url(${props.$logo})`};
-  background-size: cover;
+  background-size: contain;
+  background-repeat: no-repeat;
   background-position: center;
 
   @media (max-width: ${breakpoints.tablet}) {
