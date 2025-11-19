@@ -93,6 +93,53 @@ volumes:
   - ./courses:/app/courses
 ```
 
+### Reverse Proxy Configuration
+
+**IMPORTANT**: When using a reverse proxy (Nginx, Caddy, etc.), you must proxy `/courses/logos/*` requests to the backend!
+
+#### Caddy Docker Proxy Example
+
+```yaml
+backend:
+  labels:
+    caddy: labgrader.markpolyak.ru
+    # API endpoints
+    caddy.handle_path: /api/v1*
+    caddy.handle_path.0_reverse_proxy: "{{upstreams 8000}}"
+    # Course logos (REQUIRED!)
+    caddy.handle_path_1: /courses/logos*
+    caddy.handle_path_1.0_reverse_proxy: "{{upstreams 8000}}"
+```
+
+#### Nginx Example
+
+```nginx
+location /api/v1/ {
+    proxy_pass http://backend:8000;
+}
+
+# REQUIRED: Proxy logos to backend
+location /courses/logos/ {
+    proxy_pass http://backend:8000;
+}
+
+location / {
+    proxy_pass http://frontend:8080;
+}
+```
+
+#### Common Issue: Logos Not Loading
+
+**Symptoms:**
+- `/courses/logos/file.png` returns HTML page or 404
+- Browser shows broken image icons
+
+**Cause:**
+Reverse proxy not configured to route `/courses/logos/*` to backend.
+
+**Fix:**
+Add proxy rule for `/courses/logos/*` → backend (see examples above).
+
 ### File Permissions
 
 Ensure the backend process can read the logos directory:

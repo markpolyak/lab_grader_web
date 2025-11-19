@@ -33,8 +33,12 @@ services:
       SECRET_KEY: ${SECRET_KEY}
     labels:
       caddy: labgrader.markpolyak.ru
+      # API endpoints
       caddy.handle_path: /api/v1*
       caddy.handle_path.0_reverse_proxy: "{{upstreams 8000}}"
+      # Course logos (served by backend)
+      caddy.handle_path_1: /courses/logos*
+      caddy.handle_path_1.0_reverse_proxy: "{{upstreams 8000}}"
       # Watchtower labels (optional)
       com.centurylinklabs.watchtower.enable: "true"
     networks:
