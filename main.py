@@ -12,6 +12,16 @@ from fastapi import UploadFile, File
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
+import logging
+from datetime import datetime
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 load_dotenv()
 app = FastAPI()
@@ -403,66 +413,83 @@ def get_course_labs(course_id: str, group_id: str):
 
 @app.post("/courses/{course_id}/groups/{group_id}/register")
 def register_student(course_id: str, group_id: str, student: StudentRegistration):
-    course_info = get_course_by_id(course_id)
-    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-    student_col = course_info.get("google", {}).get("student-name-column", 2)
-
-    if not spreadsheet_id:
-        raise HTTPException(status_code=400, detail="Spreadsheet ID not found in course config")
-
-
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
+    logger.info(f"Registration attempt - Course: {course_id}, Group: {group_id}, Student: {student.surname} {student.name}, GitHub: {student.github}")
 
     try:
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        sheet = spreadsheet.worksheet(group_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Group not found in spreadsheet")
+        course_info = get_course_by_id(course_id)
+        spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+        student_col = course_info.get("google", {}).get("student-name-column", 2)
 
-    full_name = f"{student.surname} {student.name} {student.patronymic}".strip()
+        if not spreadsheet_id:
+            logger.error(f"Spreadsheet ID not found for course {course_id}")
+            raise HTTPException(status_code=400, detail="Spreadsheet ID not found in course config")
 
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        client = gspread.authorize(creds)
 
-    student_list = sheet.col_values(student_col)[2:]
+        try:
+            spreadsheet = client.open_by_key(spreadsheet_id)
+            sheet = spreadsheet.worksheet(group_id)
+        except Exception as e:
+            logger.error(f"Group '{group_id}' not found in spreadsheet for course {course_id}: {str(e)}")
+            raise HTTPException(status_code=404, detail="Group not found in spreadsheet")
 
-    if full_name not in student_list:
-        raise HTTPException(status_code=404, detail="Студент не найден")
+        full_name = f"{student.surname} {student.name} {student.patronymic}".strip()
+        logger.info(f"Looking for student: {full_name}")
 
-    row_idx = student_list.index(full_name) + 3
+        student_list = sheet.col_values(student_col)[2:]
 
+        if full_name not in student_list:
+            logger.warning(f"Student '{full_name}' not found in group {group_id}")
+            raise HTTPException(status_code=404, detail="Студент не найден")
 
-    header_row = sheet.row_values(1)
-    try:
-        github_col_idx = header_row.index("GitHub") + 1
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден в таблице")
+        row_idx = student_list.index(full_name) + 3
+        logger.info(f"Student found at row {row_idx}")
 
+        header_row = sheet.row_values(1)
+        try:
+            github_col_idx = header_row.index("GitHub") + 1
+        except ValueError:
+            logger.error(f"'GitHub' column not found in spreadsheet headers")
+            raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден в таблице")
 
-    try:
-        github_response = requests.get(f"https://api.github.com/users/{student.github}")
-        if github_response.status_code != 200:
-            raise HTTPException(status_code=404, detail="Пользователь GitHub не найден")
-    except Exception:
-        raise HTTPException(status_code=500, detail="Ошибка проверки GitHub пользователя")
+        try:
+            github_response = requests.get(f"https://api.github.com/users/{student.github}")
+            if github_response.status_code != 200:
+                logger.warning(f"GitHub user '{student.github}' not found (status: {github_response.status_code})")
+                raise HTTPException(status_code=404, detail="Пользователь GitHub не найден")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Error checking GitHub user '{student.github}': {str(e)}")
+            raise HTTPException(status_code=500, detail="Ошибка проверки GitHub пользователя")
 
-    existing_github = sheet.cell(row_idx, github_col_idx).value
+        existing_github = sheet.cell(row_idx, github_col_idx).value
 
-    if not existing_github:
-        sheet.update_cell(row_idx, github_col_idx, student.github)
-        return {"status": "registered", "message": "Аккаунт GitHub успешно задан"}
+        if not existing_github:
+            sheet.update_cell(row_idx, github_col_idx, student.github)
+            logger.info(f"Successfully registered GitHub '{student.github}' for student '{full_name}'")
+            return {"status": "registered", "message": "Аккаунт GitHub успешно задан"}
 
-    if existing_github == student.github:
-        return {
-            "status": "already_registered",
-            "message": "Этот аккаунт GitHub уже был указан ранее для этого же студента"
-        }
+        if existing_github == student.github:
+            logger.info(f"Student '{full_name}' already registered with GitHub '{student.github}'")
+            return {
+                "status": "already_registered",
+                "message": "Этот аккаунт GitHub уже был указан ранее для этого же студента"
+            }
 
-    # Конфликт: студент пытается указать другой аккаунт
-    raise HTTPException(
-        status_code=409,
-        detail="Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"
-    )
+        # Конфликт: студент пытается указать другой аккаунт
+        logger.warning(f"GitHub conflict for '{full_name}': existing='{existing_github}', attempted='{student.github}'")
+        raise HTTPException(
+            status_code=409,
+            detail="Аккаунт GitHub уже был указан ранее. Для изменения аккаунта обратитесь к преподавателю"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Unexpected error during registration: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 
 def normalize_lab_id(lab_id: str) -> str:
@@ -476,111 +503,159 @@ class GradeRequest(BaseModel):
 
 @app.post("/courses/{course_id}/groups/{group_id}/labs/{lab_id}/grade")
 def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest):
-    course_info = get_course_by_id(course_id)
-    org = course_info.get("github", {}).get("organization")
-    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-    student_col = course_info.get("google", {}).get("student-name-column", 2)
-    lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
-
-    labs = course_info.get("labs", {})
-    normalized_lab_id = normalize_lab_id(lab_id)
-    lab_config = labs.get(normalized_lab_id, {})
-    repo_prefix = lab_config.get("github-prefix")
-
-    if not all([org, spreadsheet_id, repo_prefix]):
-        raise HTTPException(status_code=400, detail="Missing course configuration")
-
-    username = request.github
-    repo_name = f"{repo_prefix}-{username}"
-    headers = {
-        "Authorization": f"Bearer {GITHUB_TOKEN}",
-        "Accept": "application/vnd.github+json"
-    }
-
-    test_file_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/test_main.py"
-    if requests.get(test_file_url, headers=headers).status_code != 200:
-        raise HTTPException(status_code=400, detail="⚠️ test_main.py не найден в репозитории")
-
-    workflows_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/.github/workflows"
-    if requests.get(workflows_url, headers=headers).status_code != 200:
-        raise HTTPException(status_code=400, detail="⚠️ Папка .github/workflows не найдена. CI не настроен")
-
-    commits_url = f"https://api.github.com/repos/{org}/{repo_name}/commits"
-    commits_resp = requests.get(commits_url, headers=headers)
-    if commits_resp.status_code != 200 or not commits_resp.json():
-        raise HTTPException(status_code=404, detail="Нет коммитов в репозитории")
-
-    latest_sha = commits_resp.json()[0]["sha"]
-
-    commit_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}"
-    commit_files = requests.get(commit_url, headers=headers).json().get("files", [])
-    for f in commit_files:
-        if f["filename"] == "test_main.py" and f["status"] in ("removed", "modified"):
-            raise HTTPException(status_code=403, detail="🚨 Нельзя изменять test_main.py")
-        if f["filename"].startswith("tests/") and f["status"] in ("removed", "modified"):
-            raise HTTPException(status_code=403, detail="🚨 Нельзя изменять папку tests/")
-
-    check_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}/check-runs"
-    check_resp = requests.get(check_url, headers=headers)
-    if check_resp.status_code != 200:
-        raise HTTPException(status_code=404, detail="Проверки CI не найдены")
-
-    check_runs = check_resp.json().get("check_runs", [])
-    if not check_runs:
-        return {"status": "pending", "message": "Нет активных CI-проверок ⏳"}
-
-    summary = []
-    passed_count = 0
-
-    for check in check_runs:
-        name = check.get("name", "Unnamed check")
-        conclusion = check.get("conclusion")
-        html_url = check.get("html_url")
-        if conclusion == "success":
-            emoji = "✅"
-            passed_count += 1
-        elif conclusion == "failure":
-            emoji = "❌"
-        else:
-            emoji = "⏳"
-        summary.append(f"{emoji} {name} — {html_url}")
-
-    total_checks = len(check_runs)
-    result_string = f"{passed_count}/{total_checks} тестов пройдено"
-
-    final_result = "✓" if passed_count == total_checks else "✗"
-
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
+    logger.info(f"Grading attempt - Course: {course_id}, Group: {group_id}, Lab: {lab_id}, GitHub: {request.github}")
 
     try:
-        sheet = client.open_by_key(spreadsheet_id).worksheet(group_id)
-    except Exception:
-        raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
+        course_info = get_course_by_id(course_id)
+        org = course_info.get("github", {}).get("organization")
+        spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+        student_col = course_info.get("google", {}).get("student-name-column", 2)
+        lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
 
-    header_row = sheet.row_values(1)
-    try:
-        github_col_idx = header_row.index("GitHub") + 1
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден")
+        labs = course_info.get("labs", {})
+        normalized_lab_id = normalize_lab_id(lab_id)
+        lab_config = labs.get(normalized_lab_id, {})
+        repo_prefix = lab_config.get("github-prefix")
 
-    github_values = sheet.col_values(github_col_idx)[2:]
-    if username not in github_values:
-        raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
+        if not all([org, spreadsheet_id, repo_prefix]):
+            logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}")
+            raise HTTPException(status_code=400, detail="Missing course configuration")
 
-    lab_number = parse_lab_id(lab_id)
-    row_idx = github_values.index(username) + 3
-    lab_col = student_col + lab_number + lab_offset
-    sheet.update_cell(row_idx, lab_col, final_result)
+        username = request.github
+        repo_name = f"{repo_prefix}-{username}"
+        logger.info(f"Checking repository: {org}/{repo_name}")
 
-    return {
-        "status": "updated",
-        "result": final_result,
-        "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
-        "passed": result_string,
-        "checks": summary
-    }
+        headers = {
+            "Authorization": f"Bearer {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github+json"
+        }
+
+        # Check for test_main.py
+        test_file_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/test_main.py"
+        test_resp = requests.get(test_file_url, headers=headers)
+        if test_resp.status_code != 200:
+            logger.warning(f"test_main.py not found in {org}/{repo_name} (status: {test_resp.status_code})")
+            raise HTTPException(status_code=400, detail="⚠️ test_main.py не найден в репозитории")
+        logger.info(f"test_main.py found in repository")
+
+        # Check for workflows
+        workflows_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/.github/workflows"
+        workflows_resp = requests.get(workflows_url, headers=headers)
+        if workflows_resp.status_code != 200:
+            logger.warning(f"Workflows directory not found in {org}/{repo_name} (status: {workflows_resp.status_code})")
+            raise HTTPException(status_code=400, detail="⚠️ Папка .github/workflows не найдена. CI не настроен")
+        logger.info(f"Workflows directory found")
+
+        # Check for commits
+        commits_url = f"https://api.github.com/repos/{org}/{repo_name}/commits"
+        commits_resp = requests.get(commits_url, headers=headers)
+        if commits_resp.status_code != 200:
+            logger.error(f"Failed to fetch commits from {org}/{repo_name} (status: {commits_resp.status_code})")
+            raise HTTPException(status_code=404, detail="Нет коммитов в репозитории")
+
+        commits_data = commits_resp.json()
+        if not commits_data:
+            logger.warning(f"No commits found in {org}/{repo_name}")
+            raise HTTPException(status_code=404, detail="Нет коммитов в репозитории")
+
+        latest_sha = commits_data[0]["sha"]
+        logger.info(f"Latest commit: {latest_sha}")
+
+        # Check for forbidden file modifications
+        commit_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}"
+        commit_resp = requests.get(commit_url, headers=headers)
+        commit_files = commit_resp.json().get("files", [])
+        logger.info(f"Checking {len(commit_files)} modified files in latest commit")
+
+        for f in commit_files:
+            if f["filename"] == "test_main.py" and f["status"] in ("removed", "modified"):
+                logger.warning(f"Forbidden modification detected: test_main.py was {f['status']}")
+                raise HTTPException(status_code=403, detail="🚨 Нельзя изменять test_main.py")
+            if f["filename"].startswith("tests/") and f["status"] in ("removed", "modified"):
+                logger.warning(f"Forbidden modification detected: {f['filename']} was {f['status']}")
+                raise HTTPException(status_code=403, detail="🚨 Нельзя изменять папку tests/")
+        logger.info(f"No forbidden file modifications detected")
+
+        # Fetch CI check runs
+        check_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}/check-runs"
+        check_resp = requests.get(check_url, headers=headers)
+        if check_resp.status_code != 200:
+            logger.error(f"Failed to fetch CI checks for {latest_sha} (status: {check_resp.status_code})")
+            raise HTTPException(status_code=404, detail="Проверки CI не найдены")
+
+        check_runs = check_resp.json().get("check_runs", [])
+        if not check_runs:
+            logger.info(f"No active CI checks found for {latest_sha}")
+            return {"status": "pending", "message": "Нет активных CI-проверок ⏳"}
+
+        logger.info(f"Processing {len(check_runs)} CI check runs")
+        summary = []
+        passed_count = 0
+
+        for check in check_runs:
+            name = check.get("name", "Unnamed check")
+            conclusion = check.get("conclusion")
+            html_url = check.get("html_url")
+            if conclusion == "success":
+                emoji = "✅"
+                passed_count += 1
+            elif conclusion == "failure":
+                emoji = "❌"
+            else:
+                emoji = "⏳"
+            summary.append(f"{emoji} {name} — {html_url}")
+            logger.info(f"CI check '{name}': {conclusion}")
+
+        total_checks = len(check_runs)
+        result_string = f"{passed_count}/{total_checks} тестов пройдено"
+        final_result = "✓" if passed_count == total_checks else "✗"
+        logger.info(f"CI check results: {result_string}, final result: {final_result}")
+
+        # Update Google Sheets
+        logger.info(f"Updating Google Sheets for group {group_id}")
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+        client = gspread.authorize(creds)
+
+        try:
+            sheet = client.open_by_key(spreadsheet_id).worksheet(group_id)
+            logger.info(f"Successfully opened worksheet '{group_id}'")
+        except Exception as e:
+            logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
+            raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
+
+        header_row = sheet.row_values(1)
+        try:
+            github_col_idx = header_row.index("GitHub") + 1
+        except ValueError:
+            logger.error(f"'GitHub' column not found in spreadsheet headers")
+            raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден")
+
+        github_values = sheet.col_values(github_col_idx)[2:]
+        if username not in github_values:
+            logger.warning(f"GitHub username '{username}' not found in spreadsheet for group {group_id}")
+            raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
+
+        lab_number = parse_lab_id(lab_id)
+        row_idx = github_values.index(username) + 3
+        lab_col = student_col + lab_number + lab_offset
+
+        logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{final_result}'")
+        sheet.update_cell(row_idx, lab_col, final_result)
+        logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
+
+        return {
+            "status": "updated",
+            "result": final_result,
+            "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
+            "passed": result_string,
+            "checks": summary
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Unexpected error during grading: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 
 

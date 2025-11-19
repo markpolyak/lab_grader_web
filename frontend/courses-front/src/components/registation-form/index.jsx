@@ -5,6 +5,7 @@ import { Input, InputContainer, RegistrationButton } from "./styled";
 import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import { ButtonBack } from "../course-list/styled";
+import { Breadcrumb } from "../breadcrumb";
 
 export const RegistrationForm = ({ courseId, groupId, labId, onBack }) => {
   const [formState, setFormState] = useState({
@@ -79,6 +80,7 @@ const handleSubmit = async () => {
   return (
     <MainContainer>
       <ButtonBack onClick={onBack}>← Назад</ButtonBack>
+      <Breadcrumb courseId={courseId} groupId={groupId} labId={labId} />
       <CardTitle>Запуск проверки</CardTitle>
       <InputContainer>
         <Input
