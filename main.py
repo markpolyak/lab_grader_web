@@ -294,6 +294,7 @@ def get_courses(status: str = "active"):
         courses.append({
             "id": entry["id"],
             "name": course_info.get("name", "Unknown"),
+            "university": course_info.get("university", ""),
             "semester": course_info.get("semester", "Unknown"),
             "logo": entry.get("logo", "/assets/default.png"),  # Logo from index, not course file
             "email": course_info.get("email", ""),
@@ -322,6 +323,7 @@ def get_course(course_id: str):
         "id": course_id,
         "config": course_info["_meta"]["filename"],
         "name": course_info.get("name", "Unknown"),
+        "university": course_info.get("university", ""),
         "semester": course_info.get("semester", "Unknown"),
         "email": course_info.get("email", "Unknown"),
         "github-organization": course_info.get("github", {}).get("organization", "Unknown"),
