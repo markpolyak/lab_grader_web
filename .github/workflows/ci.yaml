@@ -1,4 +1,8 @@
 on:
+  push:
+    branches:
+      - main
+      - 'claude/**'  # Auto-build for all Claude branches
   workflow_dispatch:
 
 env:
