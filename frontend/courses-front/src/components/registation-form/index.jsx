@@ -117,7 +117,7 @@ const handleSubmit = async () => {
       </RegistrationButton>
       <Snackbar
         open={snackbar.open}
-        autoHideDuration={4000}
+        autoHideDuration={snackbar.severity === "error" ? 8000 : 4000}
         onClose={handleCloseSnackbar}
         anchorOrigin={{ vertical: "top", horizontal: "center" }}
       >

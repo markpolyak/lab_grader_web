@@ -54,7 +54,7 @@ export async function gradeLab(courseId, groupId, labId, github) {
   const encodedLabId = encodeURIComponent(labId);
 
   const response = await fetch(
-    `/api/courses/${courseId}/groups/${groupId}/labs/${encodedLabId}/grade`,
+    `${API_BASE_URL}/courses/${courseId}/groups/${groupId}/labs/${encodedLabId}/grade`,
     {
       method: "POST",
       headers: {
