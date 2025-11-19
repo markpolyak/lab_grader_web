@@ -11,10 +11,11 @@
 #     - hidden: Completely hidden from UI but kept in repository
 #   priority: Display order (higher = shown first)
 #   featured: If true, shown at the top of the list (optional)
-#   logo: Path to course logo image (optional, relative to project root)
-#     - Example: "courses/logos/os-2025-spring.png"
+#   logo: HTTP path to course logo image (optional, served by backend)
+#     - Example: "/courses/logos/os-2025-spring.png"
 #     - If not specified, defaults to "/assets/default.png"
 #     - Supported formats: PNG, SVG, JPG, WebP
+#     - Files stored in: courses/logos/ directory
 
 version: "1.0"
 
@@ -24,10 +25,10 @@ courses:
     status: "active"
     priority: 100
     featured: true
-    logo: "courses/logos/os-2025_logo.png"  # Optional: uncomment when logo is added
+    logo: "/courses/logos/os-2025_logo.png"
 
   - id: "ml-2025-spring"
     file: "machine-learning-basics-2025.yaml"
     status: "active"
     priority: 90
-    logo: "courses/logos/mlb-2025_logo.png"  # Optional: uncomment when logo is added
+    logo: "/courses/logos/mlb-2025_logo.png"

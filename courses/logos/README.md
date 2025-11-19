@@ -35,12 +35,15 @@ Logo paths are configured in `courses/index.yaml`:
 courses:
   - id: "os-2025-spring"
     file: "operating-systems-2025.yaml"
-    logo: "courses/logos/os-2025-spring.png"  # Path from project root
+    logo: "/courses/logos/os-2025-spring.png"  # HTTP path served by backend
     status: "active"
     priority: 100
 ```
 
-If no logo is specified, a default placeholder will be used.
+**Important:**
+- Use HTTP paths starting with `/courses/logos/` (not filesystem paths)
+- Backend serves these files via FastAPI StaticFiles
+- If no logo is specified, a default placeholder will be used (`/assets/default.png`)
 
 ## Adding a New Logo
 
@@ -53,7 +56,7 @@ If no logo is specified, a default placeholder will be used.
    ```yaml
    - id: "os-2025-spring"
      file: "operating-systems-2025.yaml"
-     logo: "courses/logos/os-2025-spring.png"
+     logo: "/courses/logos/os-2025-spring.png"  # HTTP path
    ```
 
 3. **Commit to git**:

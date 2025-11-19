@@ -341,7 +341,7 @@ cp my-logo.png courses/logos/new-course-2025.png
 courses:
   - id: "new-course-2025-spring"
     file: "new-course-2025.yaml"
-    logo: "courses/logos/new-course-2025.png"  # Optional
+    logo: "/courses/logos/new-course-2025.png"  # Optional, HTTP path
     status: "active"
     priority: 80
 ```
@@ -389,7 +389,7 @@ git push
 ```yaml
 # Edit courses/index.yaml
 - id: "os-2025-spring"
-  logo: "courses/logos/new-os-logo.png"  # New path
+  logo: "/courses/logos/new-os-logo.png"  # New HTTP path
 ```
 
 **Option 3: Remove logo (use default)**

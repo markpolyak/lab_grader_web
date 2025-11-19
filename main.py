@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.staticfiles import StaticFiles
 import os
 import yaml
 import gspread
@@ -148,6 +149,14 @@ def get_course_by_id(course_id: str):
 print("Validating course index...")
 if not validate_course_index():
     raise RuntimeError("Course index validation failed. Please fix index.yaml before starting.")
+
+# Mount static files for course logos
+LOGOS_DIR = os.path.join(COURSES_DIR, "logos")
+if os.path.exists(LOGOS_DIR):
+    app.mount("/courses/logos", StaticFiles(directory=LOGOS_DIR), name="course_logos")
+    print(f"✅ Course logos available at /courses/logos")
+else:
+    print(f"⚠️  Warning: Logos directory not found at {LOGOS_DIR}")
 
 class AuthRequest(BaseModel):
     login: str

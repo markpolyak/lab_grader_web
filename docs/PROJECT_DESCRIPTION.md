@@ -190,7 +190,7 @@ courses:
     status: "active"      # active | archived | hidden
     priority: 100         # Higher = shown first
     featured: true        # Show at top
-    logo: "courses/logos/os-2025-spring.png"  # Optional
+    logo: "/courses/logos/os-2025-spring.png"  # Optional, HTTP path
 ```
 
 ### Файл описания курса
