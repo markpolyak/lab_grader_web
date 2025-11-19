@@ -566,12 +566,15 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
 
         labs = course_info.get("labs", {})
-        normalized_lab_id = normalize_lab_id(lab_id)
-        lab_config = labs.get(normalized_lab_id, {})
+        # Extract lab number for config lookup (config uses "2", not "ЛР2")
+        lab_number = parse_lab_id(lab_id)
+        lab_config = labs.get(str(lab_number), {})
         repo_prefix = lab_config.get("github-prefix")
 
+        logger.debug(f"Looking for lab config with key '{lab_number}', found: {lab_config is not None}")
+
         if not all([org, spreadsheet_id, repo_prefix]):
-            logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}")
+            logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}, lab_number={lab_number}")
             raise HTTPException(status_code=400, detail="Missing course configuration")
 
         username = request.github
