@@ -456,7 +456,11 @@ def register_student(course_id: str, group_id: str, student: StudentRegistration
     try:
         course_info = get_course_by_id(course_id)
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-        student_col = course_info.get("google", {}).get("student-name-column", 2)
+        # Get column index (0-based in config, convert to 1-based for gspread)
+        student_col_config = course_info.get("google", {}).get("student-name-column", 1)
+        student_col = student_col_config + 1  # gspread uses 1-based indexing
+
+        logger.debug(f"student-name-column from config: {student_col_config} (0-based) -> gspread column: {student_col} (1-based)")
 
         if not spreadsheet_id:
             logger.error(f"Spreadsheet ID not found for course {course_id}")
@@ -556,7 +560,9 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         course_info = get_course_by_id(course_id)
         org = course_info.get("github", {}).get("organization")
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-        student_col = course_info.get("google", {}).get("student-name-column", 2)
+        # Get column index (0-based in config, convert to 1-based for gspread)
+        student_col_config = course_info.get("google", {}).get("student-name-column", 1)
+        student_col = student_col_config + 1  # gspread uses 1-based indexing
         lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
 
         labs = course_info.get("labs", {})
