@@ -26,10 +26,10 @@ jobs:
         with:
           images: |
             ${{ env.DOCKER_REGISTRY }}/markpolyak/lab_grader_${{ matrix.service }}
-          # INFO: using latest tag only
-          # tags: |
-          #   type=semver,pattern={{version}}
-          #   type=semver,pattern={{major}}.{{minor}}
+          tags: |
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix={{branch}}-
       - name: Build docker image
         uses: docker/build-push-action@v6
         id: build

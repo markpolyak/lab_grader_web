@@ -42,6 +42,113 @@ app.add_middleware(
 )
 signer = TimestampSigner(SECRET_KEY)
 
+# Course index management
+INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
+
+def load_course_index():
+    """Load and validate course index file"""
+    if not os.path.exists(INDEX_FILE):
+        raise RuntimeError(f"Course index file not found: {INDEX_FILE}")
+
+    with open(INDEX_FILE, "r", encoding="utf-8") as f:
+        index_data = yaml.safe_load(f)
+
+    if not isinstance(index_data, dict) or "courses" not in index_data:
+        raise RuntimeError("Invalid index.yaml structure: missing 'courses' key")
+
+    return index_data
+
+def validate_course_index():
+    """Validate that index.yaml is synchronized with course files"""
+    try:
+        index_data = load_course_index()
+    except Exception as e:
+        print(f"❌ Failed to load course index: {e}")
+        return False
+
+    courses = index_data.get("courses", [])
+
+    # Collect indexed files
+    indexed_files = {entry["file"] for entry in courses if "file" in entry}
+
+    # Collect actual files
+    actual_files = {
+        f for f in os.listdir(COURSES_DIR)
+        if f.endswith(".yaml") and f != "index.yaml" and os.path.isfile(os.path.join(COURSES_DIR, f))
+    }
+
+    # Check for missing files
+    missing_files = indexed_files - actual_files
+    if missing_files:
+        print(f"❌ ERROR: Files referenced in index but not found: {missing_files}")
+        return False
+
+    # Check for orphaned files
+    orphaned_files = actual_files - indexed_files
+    if orphaned_files:
+        print(f"⚠️  WARNING: Course files not in index (will be ignored): {orphaned_files}")
+
+    # Check for duplicate IDs
+    ids = [entry.get("id") for entry in courses if "id" in entry]
+    if len(ids) != len(set(ids)):
+        duplicates = {x for x in ids if ids.count(x) > 1}
+        print(f"❌ ERROR: Duplicate course IDs in index: {duplicates}")
+        return False
+
+    # Validate each indexed file can be loaded
+    for entry in courses:
+        file_path = os.path.join(COURSES_DIR, entry["file"])
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+                if not isinstance(data, dict) or "course" not in data:
+                    print(f"❌ ERROR: Invalid course structure in {entry['file']}")
+                    return False
+        except Exception as e:
+            print(f"❌ ERROR: Failed to load {entry['file']}: {e}")
+            return False
+
+    print(f"✅ Course index validated successfully ({len(courses)} courses)")
+    return True
+
+def get_course_by_id(course_id: str):
+    """Get course configuration by ID from index"""
+    index_data = load_course_index()
+
+    # Find course entry in index
+    course_entry = None
+    for entry in index_data.get("courses", []):
+        if entry.get("id") == course_id:
+            course_entry = entry
+            break
+
+    if not course_entry:
+        raise HTTPException(status_code=404, detail="Course not found")
+
+    # Load course file
+    file_path = os.path.join(COURSES_DIR, course_entry["file"])
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Course file not found")
+
+    with open(file_path, "r", encoding="utf-8") as f:
+        course_data = yaml.safe_load(f)
+
+    # Merge index metadata with course data
+    course_info = course_data.get("course", {})
+    course_info["_meta"] = {
+        "status": course_entry.get("status", "active"),
+        "priority": course_entry.get("priority", 0),
+        "featured": course_entry.get("featured", False),
+        "filename": course_entry["file"]
+    }
+
+    return course_info
+
+# Validate index on startup
+print("Validating course index...")
+if not validate_course_index():
+    raise RuntimeError("Course index validation failed. Please fix index.yaml before starting.")
+
 class AuthRequest(BaseModel):
     login: str
     password: str
@@ -96,30 +203,55 @@ def logout(response: Response):
 
 
 @app.get("/courses")
-def get_courses():
+def get_courses(status: str = "active"):
+    """
+    Get courses filtered by status
+
+    Args:
+        status: Filter by status (active, archived, all). Default: active
+    """
+    index_data = load_course_index()
     courses = []
-    for index, filename in enumerate(sorted(os.listdir(COURSES_DIR)), start=1):
-        file_path = os.path.join(COURSES_DIR, filename)
-        if filename.endswith(".yaml") and os.path.isfile(file_path):
-            with open(file_path, "r", encoding="utf-8") as file:
-                try:
-                    data = yaml.safe_load(file)
-                except yaml.YAMLError as e:
-                    print(f"Ошибка при разборе YAML в {filename}: {e}")
-                    continue
 
-                if not isinstance(data, dict) or "course" not in data:
-                    print(f"Пропускаем файл {filename}: неверная структура")
-                    continue
+    for entry in index_data.get("courses", []):
+        course_status = entry.get("status", "active")
 
-                course_info = data["course"]
-                courses.append({
-                    "id": str(index),
-                    "name": course_info.get("name", "Unknown"),
-                    "semester": course_info.get("semester", "Unknown"),
-                    "logo": course_info.get("logo", "/assets/default.png"),
-                    "email": course_info.get("email", ""),
-                })
+        # Filter by status
+        if status != "all" and course_status != status:
+            continue
+
+        # Load course file
+        file_path = os.path.join(COURSES_DIR, entry["file"])
+        if not os.path.exists(file_path):
+            print(f"Warning: Course file {entry['file']} not found, skipping")
+            continue
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f)
+        except yaml.YAMLError as e:
+            print(f"Error parsing YAML in {entry['file']}: {e}")
+            continue
+
+        if not isinstance(data, dict) or "course" not in data:
+            print(f"Skipping file {entry['file']}: invalid structure")
+            continue
+
+        course_info = data["course"]
+        courses.append({
+            "id": entry["id"],
+            "name": course_info.get("name", "Unknown"),
+            "semester": course_info.get("semester", "Unknown"),
+            "logo": course_info.get("logo", "/assets/default.png"),
+            "email": course_info.get("email", ""),
+            "status": course_status,
+            "priority": entry.get("priority", 0),
+            "featured": entry.get("featured", False),
+        })
+
+    # Sort by priority (descending), then by name
+    courses.sort(key=lambda x: (-x["priority"], x["name"]))
+
     return courses
 
 
@@ -131,40 +263,44 @@ def parse_lab_id(lab_id: str) -> int:
 
 @app.get("/courses/{course_id}")
 def get_course(course_id: str):
-    files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
-    try:
-        filename = files[int(course_id) - 1]
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=404, detail="Course not found")
+    course_info = get_course_by_id(course_id)
 
-    file_path = os.path.join(COURSES_DIR, filename)
-    with open(file_path, "r", encoding="utf-8") as file:
-        data = yaml.safe_load(file)
-        course_info = data.get("course", {})
-        return {
-            "id": course_id,
-            "config": filename,
-            "name": course_info.get("name", "Unknown"),
-            "semester": course_info.get("semester", "Unknown"),
-            "email": course_info.get("email", "Unknown"),
-            "github-organization": course_info.get("github", {}).get("organization", "Unknown"),
-            "google-spreadsheet": course_info.get("google", {}).get("spreadsheet", "Unknown"),
-        }
+    return {
+        "id": course_id,
+        "config": course_info["_meta"]["filename"],
+        "name": course_info.get("name", "Unknown"),
+        "semester": course_info.get("semester", "Unknown"),
+        "email": course_info.get("email", "Unknown"),
+        "github-organization": course_info.get("github", {}).get("organization", "Unknown"),
+        "google-spreadsheet": course_info.get("google", {}).get("spreadsheet", "Unknown"),
+        "status": course_info["_meta"]["status"],
+        "priority": course_info["_meta"]["priority"],
+    }
 
 @app.delete("/courses/{course_id}")
 def delete_course(course_id: str):
-    files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
-    try:
-        filename = files[int(course_id) - 1]
-    except (IndexError, ValueError):
+    """
+    Mark course as hidden in index (soft delete)
+    The course file is preserved in repository
+    """
+    index_data = load_course_index()
+
+    # Find course in index
+    course_found = False
+    for entry in index_data.get("courses", []):
+        if entry.get("id") == course_id:
+            entry["status"] = "hidden"
+            course_found = True
+            break
+
+    if not course_found:
         raise HTTPException(status_code=404, detail="Курс не найден")
 
-    file_path = os.path.join(COURSES_DIR, filename)
-    if os.path.exists(file_path):
-        os.remove(file_path)
-        return {"message": "Курс успешно удален"}
-    else:
-        raise HTTPException(status_code=404, detail="Файл курса не найден")
+    # Save updated index
+    with open(INDEX_FILE, "w", encoding="utf-8") as f:
+        yaml.dump(index_data, f, allow_unicode=True, sort_keys=False)
+
+    return {"message": "Курс успешно скрыт (файл сохранен в репозитории)"}
 
 
 class EditCourseRequest(BaseModel):
@@ -174,11 +310,8 @@ class EditCourseRequest(BaseModel):
 @app.get("/courses/{course_id}/edit")
 def edit_course_get(course_id: str):
     """Получить YAML содержимое курса для редактирования"""
-    files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
-    try:
-        filename = files[int(course_id) - 1]
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=404, detail="Курс не найден")
+    course_info = get_course_by_id(course_id)
+    filename = course_info["_meta"]["filename"]
 
     file_path = os.path.join(COURSES_DIR, filename)
     if not os.path.exists(file_path):
@@ -193,14 +326,10 @@ def edit_course_get(course_id: str):
 @app.put("/courses/{course_id}/edit")
 def edit_course_put(course_id: str, data: EditCourseRequest):
     """Сохранить изменения в YAML файле курса"""
-    files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
-    try:
-        filename = files[int(course_id) - 1]
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=404, detail="Курс не найден")
+    course_info = get_course_by_id(course_id)
+    filename = course_info["_meta"]["filename"]
 
     file_path = os.path.join(COURSES_DIR, filename)
-
 
     try:
         yaml.safe_load(data.content)
@@ -215,18 +344,9 @@ def edit_course_put(course_id: str, data: EditCourseRequest):
 
 @app.get("/courses/{course_id}/groups")
 def get_course_groups(course_id: str):
-    files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
-    try:
-        filename = files[int(course_id) - 1]
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    file_path = os.path.join(COURSES_DIR, filename)
-    with open(file_path, "r", encoding="utf-8") as file:
-        data = yaml.safe_load(file)
-        course_info = data.get("course", {})
-        spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-        info_sheet = course_info.get("google", {}).get("info-sheet")
+    course_info = get_course_by_id(course_id)
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+    info_sheet = course_info.get("google", {}).get("info-sheet")
 
     if not spreadsheet_id:
         raise HTTPException(status_code=400, detail="Spreadsheet ID not found in course config")
@@ -247,18 +367,9 @@ def get_course_groups(course_id: str):
 
 @app.get("/courses/{course_id}/groups/{group_id}/labs")
 def get_course_labs(course_id: str, group_id: str):
-    files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
-    try:
-        filename = files[int(course_id) - 1]
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    file_path = os.path.join(COURSES_DIR, filename)
-    with open(file_path, "r", encoding="utf-8") as file:
-        data = yaml.safe_load(file)
-        course_info = data.get("course", {})
-        spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-        labs = [lab["short-name"] for lab in course_info.get("labs", {}).values() if "short-name" in lab]
+    course_info = get_course_by_id(course_id)
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+    labs = [lab["short-name"] for lab in course_info.get("labs", {}).values() if "short-name" in lab]
 
     if not spreadsheet_id or not labs:
         raise HTTPException(status_code=400, detail="Missing spreadsheet ID or labs in config")
@@ -283,18 +394,9 @@ def get_course_labs(course_id: str, group_id: str):
 
 @app.post("/courses/{course_id}/groups/{group_id}/register")
 def register_student(course_id: str, group_id: str, student: StudentRegistration):
-    files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
-    try:
-        filename = files[int(course_id) - 1]
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    file_path = os.path.join(COURSES_DIR, filename)
-    with open(file_path, "r", encoding="utf-8") as file:
-        data = yaml.safe_load(file)
-        course_info = data.get("course", {})
-        spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-        student_col = course_info.get("google", {}).get("student-name-column", 2)
+    course_info = get_course_by_id(course_id)
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+    student_col = course_info.get("google", {}).get("student-name-column", 2)
 
     if not spreadsheet_id:
         raise HTTPException(status_code=400, detail="Spreadsheet ID not found in course config")
@@ -365,20 +467,11 @@ class GradeRequest(BaseModel):
 
 @app.post("/courses/{course_id}/groups/{group_id}/labs/{lab_id}/grade")
 def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest):
-    files = sorted([f for f in os.listdir(COURSES_DIR) if f.endswith(".yaml")])
-    try:
-        filename = files[int(course_id) - 1]
-    except (IndexError, ValueError):
-        raise HTTPException(status_code=404, detail="Course not found")
-
-    file_path = os.path.join(COURSES_DIR, filename)
-    with open(file_path, "r", encoding="utf-8") as file:
-        data = yaml.safe_load(file)
-        course_info = data.get("course", {})
-        org = course_info.get("github", {}).get("organization")
-        spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-        student_col = course_info.get("google", {}).get("student-name-column", 2)
-        lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
+    course_info = get_course_by_id(course_id)
+    org = course_info.get("github", {}).get("organization")
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+    student_col = course_info.get("google", {}).get("student-name-column", 2)
+    lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
 
     labs = course_info.get("labs", {})
     normalized_lab_id = normalize_lab_id(lab_id)
@@ -485,8 +578,15 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
 
 @app.post("/courses/upload")
 async def upload_course(file: UploadFile = File(...)):
+    """
+    Upload a new course file and add it to index
+
+    The course will be added with status='active', priority=0 by default
+    The ID will be generated from filename (e.g., 'os-2025.yaml' -> 'os-2025')
+    """
     if not file.filename.endswith(".yaml") and not file.filename.endswith(".yml"):
         raise HTTPException(status_code=400, detail="Только YAML файлы разрешены")
+
     file_location = os.path.join(COURSES_DIR, file.filename)
 
     if os.path.exists(file_location):
@@ -494,11 +594,48 @@ async def upload_course(file: UploadFile = File(...)):
 
     content = await file.read()
     try:
-        yaml.safe_load(content)
+        course_data = yaml.safe_load(content)
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail="Некорректный YAML файл")
 
+    # Validate course structure
+    if not isinstance(course_data, dict) or "course" not in course_data:
+        raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
+
+    # Save course file
     with open(file_location, "wb") as f:
         f.write(content)
 
-    return {"detail": "Курс успешно загружен"}
+    # Generate course ID from filename (e.g., 'operating-systems-2025.yaml' -> 'operating-systems-2025')
+    course_id = file.filename.replace(".yaml", "").replace(".yml", "")
+
+    # Update index
+    index_data = load_course_index()
+
+    # Check if ID already exists
+    existing_ids = {entry.get("id") for entry in index_data.get("courses", [])}
+    if course_id in existing_ids:
+        # If ID exists, try appending a number
+        counter = 2
+        while f"{course_id}-{counter}" in existing_ids:
+            counter += 1
+        course_id = f"{course_id}-{counter}"
+
+    # Add new course to index
+    new_entry = {
+        "id": course_id,
+        "file": file.filename,
+        "status": "active",
+        "priority": 0
+    }
+    index_data["courses"].append(new_entry)
+
+    # Save updated index
+    with open(INDEX_FILE, "w", encoding="utf-8") as f:
+        yaml.dump(index_data, f, allow_unicode=True, sort_keys=False)
+
+    return {
+        "detail": "Курс успешно загружен и добавлен в индекс",
+        "course_id": course_id,
+        "filename": file.filename
+    }
