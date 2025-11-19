@@ -677,7 +677,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
 
         total_checks = len(check_runs)
         result_string = f"{passed_count}/{total_checks} тестов пройдено"
-        final_result = "✓" if passed_count == total_checks else "✗"
+        final_result = "v" if passed_count == total_checks else "x"
         logger.info(f"CI check results: {result_string}, final result: {final_result}")
 
         # Update Google Sheets
@@ -709,6 +709,24 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         row_idx = github_values.index(username) + 3
         lab_col = student_col + lab_number + lab_offset
 
+        # Check current cell value before updating
+        current_value = sheet.cell(row_idx, lab_col).value or ""
+        logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
+
+        # Allow update only if cell contains "x" or starts with "?"
+        can_update = current_value == "x" or current_value.startswith("?") or current_value == ""
+
+        if not can_update:
+            logger.warning(f"Update rejected: cell already contains '{current_value}' (not 'x' or '?...')")
+            return {
+                "status": "rejected",
+                "result": current_value,
+                "message": "⚠️ Работа уже была проверена ранее. Обратитесь к преподавателю для пересдачи.",
+                "passed": result_string,
+                "checks": summary,
+                "current_grade": current_value
+            }
+
         logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{final_result}'")
         sheet.update_cell(row_idx, lab_col, final_result)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
@@ -716,7 +734,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         return {
             "status": "updated",
             "result": final_result,
-            "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == '✓' else '❌ Обнаружены ошибки'}",
+            "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == 'v' else '❌ Обнаружены ошибки'}",
             "passed": result_string,
             "checks": summary
         }
