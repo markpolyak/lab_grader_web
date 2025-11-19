@@ -109,16 +109,24 @@
 
 ```
 lab_grader_web/
-├── main.py                      # Основной backend сервер (490 строк)
+├── main.py                      # Основной backend сервер
 ├── requirements.txt             # Python зависимости
 ├── backend.Dockerfile           # Backend контейнер
 ├── frontend.Dockerfile          # Frontend контейнер (multi-stage)
-├── docker-compose.yml           # Оркестрация сервисов
 ├── nginx.conf                   # Конфигурация Nginx
-├── courses/                     # Конфигурации курсов (YAML)
-│   ├── os-2023.yaml
-│   ├── ml-2024.yaml
-│   └── os-2028.yaml
+├── courses/                     # Конфигурации курсов
+│   ├── index.yaml               # Индекс курсов (управление отображением)
+│   ├── operating-systems-2025.yaml
+│   ├── machine-learning-basics-2025.yaml
+│   └── logos/                   # Логотипы курсов
+│       ├── os-2025-spring.png
+│       └── ml-2025-spring.png
+├── scripts/                     # Deployment и утилиты
+│   ├── switch-branch.sh         # Переключение веток на сервере
+│   └── README.md
+├── docs/                        # Документация
+│   ├── PROJECT_DESCRIPTION.md
+│   └── DEPLOYMENT.md
 ├── frontend/courses-front/      # React приложение
 │   ├── src/
 │   │   ├── components/          # React компоненты
@@ -169,13 +177,30 @@ lab_grader_web/
 
 ## Конфигурация курса
 
-Каждый курс описывается в YAML файле со следующей структурой:
+### Индексный файл курсов (`courses/index.yaml`)
+
+Централизованное управление отображением и метаданными курсов:
+
+```yaml
+version: "1.0"
+
+courses:
+  - id: "os-2025-spring"
+    file: "operating-systems-2025.yaml"
+    status: "active"      # active | archived | hidden
+    priority: 100         # Higher = shown first
+    featured: true        # Show at top
+    logo: "courses/logos/os-2025-spring.png"  # Optional
+```
+
+### Файл описания курса
+
+Каждый курс описывается в отдельном YAML файле со следующей структурой:
 
 ```yaml
 course:
   name: "Операционные системы"
   semester: "Весна 2025"
-  logo: "/assets/os-logo.png"
   email: "instructor@example.com"
 
   github:
@@ -203,6 +228,8 @@ course:
         - "Ход выполнения"
         - "Результаты"
 ```
+
+**Примечание:** Метаданные отображения (статус, приоритет, логотип) хранятся в `courses/index.yaml`, а не в файлах курсов.
 
 ## Интеграции
 

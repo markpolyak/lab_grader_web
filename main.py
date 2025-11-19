@@ -242,7 +242,7 @@ def get_courses(status: str = "active"):
             "id": entry["id"],
             "name": course_info.get("name", "Unknown"),
             "semester": course_info.get("semester", "Unknown"),
-            "logo": course_info.get("logo", "/assets/default.png"),
+            "logo": entry.get("logo", "/assets/default.png"),  # Logo from index, not course file
             "email": course_info.get("email", ""),
             "status": course_status,
             "priority": entry.get("priority", 0),
