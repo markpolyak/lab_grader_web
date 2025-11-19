@@ -427,4 +427,4 @@ courses:
 - **File size**: Keep under 200KB
 - **Default**: If no logo specified, `/assets/default.png` is used
 
-See `courses/logos/README.md` for detailed logo guidelines.
+See [docs/COURSE_LOGOS.md](COURSE_LOGOS.md) for detailed logo guidelines.
