@@ -43,7 +43,19 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
 
   // Если ответ не успешный, выбрасываем ошибку с сообщением от сервера
   if (!response.ok) {
-    throw new Error(data.detail || "Ошибка при регистрации");
+    // Обработка ошибок валидации FastAPI (422) - detail может быть массивом объектов
+    let errorMessage = "Ошибка при регистрации";
+    if (data.detail) {
+      if (typeof data.detail === "string") {
+        errorMessage = data.detail;
+      } else if (Array.isArray(data.detail)) {
+        // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
+        errorMessage = data.detail
+          .map((err) => err.msg || err.message || JSON.stringify(err))
+          .join("; ");
+      }
+    }
+    throw new Error(errorMessage);
   }
 
   return data;
@@ -68,7 +80,19 @@ export async function gradeLab(courseId, groupId, labId, github) {
 
   // Если ответ не успешный, выбрасываем ошибку с сообщением от сервера
   if (!response.ok) {
-    throw new Error(data.detail || "Ошибка при проверке");
+    // Обработка ошибок валидации FastAPI (422) - detail может быть массивом объектов
+    let errorMessage = "Ошибка при проверке";
+    if (data.detail) {
+      if (typeof data.detail === "string") {
+        errorMessage = data.detail;
+      } else if (Array.isArray(data.detail)) {
+        // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
+        errorMessage = data.detail
+          .map((err) => err.msg || err.message || JSON.stringify(err))
+          .join("; ");
+      }
+    }
+    throw new Error(errorMessage);
   }
 
   return data;

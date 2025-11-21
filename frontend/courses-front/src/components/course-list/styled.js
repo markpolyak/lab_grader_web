@@ -240,3 +240,19 @@ export const FixedAdminButton = styled.button`
   }
 `;
 
+export const PageTitle = styled.h1`
+  ${textStyles}
+  color: ${colors.textPrimary};
+  font-size: 28px;
+  font-weight: 600;
+  text-align: center;
+  width: 100%;
+  margin: 24px 0;
+  padding: 0 16px;
+
+  @media (max-width: ${breakpoints.tablet}) {
+    font-size: 22px;
+    margin: 16px 0;
+  }
+`;
+
