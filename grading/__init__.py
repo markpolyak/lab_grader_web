@@ -1,10 +1,12 @@
 """
 Grading module for lab submissions.
 
-This module contains pure functions for various aspects of lab grading:
+This module contains functions for various aspects of lab grading:
 - penalty: Calculate penalty points for late submissions
 - taskid: Extract and validate task IDs from logs
 - ci_checker: Evaluate CI check results
+- github_client: GitHub API client
+- sheets_client: Google Sheets helpers
 """
 
 from .penalty import (
@@ -31,6 +33,24 @@ from .ci_checker import (
     DEFAULT_JOB_NAMES,
 )
 
+from .github_client import (
+    GitHubClient,
+    CommitInfo,
+    check_forbidden_modifications,
+    get_default_forbidden_patterns,
+)
+
+from .sheets_client import (
+    find_student_row,
+    find_lab_column_by_name,
+    calculate_lab_column,
+    can_overwrite_cell,
+    prepare_grade_update,
+    StudentLocation,
+    LabColumn,
+    GradeUpdate,
+)
+
 __all__ = [
     # penalty
     "calculate_penalty",
@@ -50,4 +70,18 @@ __all__ = [
     "get_ci_config_jobs",
     "format_ci_result_string",
     "DEFAULT_JOB_NAMES",
+    # github_client
+    "GitHubClient",
+    "CommitInfo",
+    "check_forbidden_modifications",
+    "get_default_forbidden_patterns",
+    # sheets_client
+    "find_student_row",
+    "find_lab_column_by_name",
+    "calculate_lab_column",
+    "can_overwrite_cell",
+    "prepare_grade_update",
+    "StudentLocation",
+    "LabColumn",
+    "GradeUpdate",
 ]
