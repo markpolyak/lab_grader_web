@@ -5,7 +5,7 @@ import { ProtectedRoute } from "./components/admin/ProtectedRoute";
 import { CourseListWrapper } from "./components/course-list/courseListWrapper";
 import { GroupListWrapper } from "./components/group-list/groupListWrapper";
 import { LabListWrapper } from "./components/lab-list/labListWrapper";
-import { RegistrationFormWrapper } from "./components/registation-form/registrationFormWrapper";
+import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
 
 function App() {
   return (
