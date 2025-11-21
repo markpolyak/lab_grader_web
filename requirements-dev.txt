@@ -1,0 +1,19 @@
+# Development and testing dependencies
+-r requirements.txt
+
+# Testing
+pytest>=7.0
+pytest-cov
+pytest-mock
+
+# HTTP mocking
+responses>=0.23.0
+
+# Time mocking (for deadline tests)
+freezegun>=1.2.0
+
+# FastAPI testing
+httpx>=0.24.0
+
+# Type hints
+pydantic>=2.0
