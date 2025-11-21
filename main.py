@@ -562,10 +562,6 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         course_info = get_course_by_id(course_id)
         org = course_info.get("github", {}).get("organization")
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-        # Get column index (0-based in config, convert to 1-based for gspread)
-        student_col_config = course_info.get("google", {}).get("student-name-column", 1)
-        student_col = student_col_config + 1  # gspread uses 1-based indexing
-        lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
 
         labs = course_info.get("labs", {})
         # Extract lab number for config lookup (config uses "2", not "ЛР2")
@@ -705,9 +701,27 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
             logger.warning(f"GitHub username '{username}' not found in spreadsheet for group {group_id}")
             raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
 
-        lab_number = parse_lab_id(lab_id)
         row_idx = github_values.index(username) + 3
-        lab_col = student_col + lab_number + lab_offset
+
+        # Find lab column: prefer short-name lookup, fallback to offset calculation
+        lab_short_name = lab_config.get("short-name")
+        lab_number = parse_lab_id(lab_id)
+
+        if lab_short_name:
+            # Search for lab column by short-name anywhere in the sheet
+            cell = sheet.find(lab_short_name)
+            if cell:
+                lab_col = cell.col  # gspread find() returns 1-based indices
+                logger.info(f"Found lab column '{lab_short_name}' at row {cell.row}, column {lab_col}")
+            else:
+                logger.error(f"Lab column '{lab_short_name}' not found anywhere in spreadsheet")
+                raise HTTPException(status_code=400, detail=f"Столбец '{lab_short_name}' не найден в таблице")
+        else:
+            # Fallback: calculate column using offset + lab number
+            logger.warning(f"Lab config for '{lab_id}' is missing 'short-name', using offset calculation")
+            lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
+            lab_col = lab_offset + lab_number
+            logger.info(f"Calculated lab column using offset: {lab_offset} + {lab_number} = {lab_col}")
 
         # Check current cell value before updating
         current_value = sheet.cell(row_idx, lab_col).value or ""
