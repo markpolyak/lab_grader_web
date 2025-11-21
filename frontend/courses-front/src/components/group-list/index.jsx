@@ -4,6 +4,7 @@ import { Spin } from "antd";
 import { CardContainer, DescriptionContainer, Number, Title } from "./styled";
 import { CardTitle, MainContainer } from "../../../theme";
 import { ButtonBack } from "../course-list/styled";
+import { Breadcrumb } from "../breadcrumb";
 
 export const GroupList = ({ courseId, onSelectGroup, onBack }) => {
   const [groups, setGroups] = useState([]);
@@ -22,6 +23,7 @@ export const GroupList = ({ courseId, onSelectGroup, onBack }) => {
   return (
     <MainContainer>
       <ButtonBack onClick={onBack}>← Назад</ButtonBack>
+      <Breadcrumb courseId={courseId} />
       <CardTitle>Выберите группу</CardTitle>
       {loading ? (
         <Spin size="default" />

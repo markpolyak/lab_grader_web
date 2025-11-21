@@ -5,6 +5,7 @@ import { Input, InputContainer, RegistrationButton } from "./styled";
 import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import { ButtonBack } from "../course-list/styled";
+import { Breadcrumb } from "../breadcrumb";
 
 export const RegistrationForm = ({ courseId, groupId, labId, onBack }) => {
   const [formState, setFormState] = useState({
@@ -14,22 +15,26 @@ export const RegistrationForm = ({ courseId, groupId, labId, onBack }) => {
     github: "",
   });
 
-  const [snackbar, setSnackbar] = useState({
-    open: false,
-    message: "",
-    severity: "success",
-  });
+  const [checkResult, setCheckResult] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleChange = (e) => {
     setFormState({ ...formState, [e.target.name]: e.target.value });
   };
 
 const handleSubmit = async () => {
+  setIsLoading(true);
+  setCheckResult(null);
+
   try {
     const registerResponse = await registerAndCheck(courseId, groupId, formState);
 
     if (registerResponse.status === "conflict") {
-      showSnackbar(registerResponse.message, "error");
+      setCheckResult({
+        type: "error",
+        message: registerResponse.message,
+      });
+      setIsLoading(false);
       return;
     }
 
@@ -37,48 +42,60 @@ const handleSubmit = async () => {
       registerResponse.status === "registered" ||
       registerResponse.status === "already_registered"
     ) {
-      showSnackbar(registerResponse.message, "success");
-
+      // Registration successful, now grade the lab
       const gradeResponse = await gradeLab(courseId, groupId, labId, formState.github);
 
       if (gradeResponse.status === "updated") {
-        showSnackbar(gradeResponse.message, "success");
+        setCheckResult({
+          type: "success",
+          message: gradeResponse.message,
+          result: gradeResponse.result,
+          passed: gradeResponse.passed,
+          checks: gradeResponse.checks,
+        });
+      } else if (gradeResponse.status === "rejected") {
+        setCheckResult({
+          type: "warning",
+          message: gradeResponse.message,
+          currentGrade: gradeResponse.current_grade,
+          passed: gradeResponse.passed,
+          checks: gradeResponse.checks,
+        });
+      } else if (gradeResponse.status === "pending") {
+        setCheckResult({
+          type: "info",
+          message: gradeResponse.message,
+        });
       } else {
-        showSnackbar(gradeResponse.message || "Проверка завершена", "info");
+        setCheckResult({
+          type: "info",
+          message: gradeResponse.message || "Проверка завершена",
+        });
       }
 
+      setIsLoading(false);
       return;
     }
 
-    showSnackbar("Неизвестный ответ от сервера", "warning");
+    setCheckResult({
+      type: "warning",
+      message: "Неизвестный ответ от сервера",
+    });
+    setIsLoading(false);
   } catch (error) {
     console.error("Ошибка:", error);
-    // Показываем сообщение об ошибке от сервера или стандартное сообщение
-    showSnackbar(error.message || "Произошла ошибка, попробуйте снова.", "error");
+    setCheckResult({
+      type: "error",
+      message: error.message || "Произошла ошибка, попробуйте снова.",
+    });
+    setIsLoading(false);
   }
 };
-
-
-  const showSnackbar = (message, severity) => {
-    setSnackbar({
-      open: true,
-      message,
-      severity,
-    });
-  };
-
-  const handleCloseSnackbar = (_, reason) => {
-    if (reason === "clickaway") return;
-    setSnackbar((prev) => ({ ...prev, open: false }));
-  };
-
-  console.log("courseId :>> ", typeof courseId);
-  console.log("groupId :>> ", typeof groupId);
-  console.log("onBack :>> ", typeof onBack);
 
   return (
     <MainContainer>
       <ButtonBack onClick={onBack}>← Назад</ButtonBack>
+      <Breadcrumb courseId={courseId} groupId={groupId} labId={labId} />
       <CardTitle>Запуск проверки</CardTitle>
       <InputContainer>
         <Input
@@ -110,31 +127,89 @@ const handleSubmit = async () => {
           onChange={handleChange}
         />
       </InputContainer>
-      <RegistrationButton onClick={handleSubmit}>
-        Зарегистрироваться и запустить проверку
+      <RegistrationButton onClick={handleSubmit} disabled={isLoading}>
+        {isLoading ? "Проверка..." : "Зарегистрироваться и запустить проверку"}
       </RegistrationButton>
-      <Snackbar
-        open={snackbar.open}
-        autoHideDuration={4000}
-        onClose={handleCloseSnackbar}
-        anchorOrigin={{ vertical: "top", horizontal: "center" }}
-      >
-        <Alert
-          onClose={handleCloseSnackbar}
-          severity={snackbar.severity}
-          variant="filled"
-          sx={{
-            bgcolor:
-              snackbar.severity === "success"
-                ? colors.save
-                : snackbar.severity === "error"
-                ? colors.error
-                : colors.cancel,
-          }}
-        >
-          {snackbar.message}
-        </Alert>
-      </Snackbar>
+
+      {checkResult && (
+        <div style={{
+          marginTop: "20px",
+          padding: "16px",
+          borderRadius: "8px",
+          backgroundColor:
+            checkResult.type === "success" ? "#e8f5e9" :
+            checkResult.type === "error" ? "#ffebee" :
+            checkResult.type === "warning" ? "#fff3e0" : "#e3f2fd",
+          border: `1px solid ${
+            checkResult.type === "success" ? colors.save :
+            checkResult.type === "error" ? colors.error :
+            checkResult.type === "warning" ? colors.edit : colors.cancel
+          }`,
+        }}>
+          <div style={{
+            fontSize: "16px",
+            fontWeight: "500",
+            marginBottom: "12px",
+            color: colors.textPrimary,
+            whiteSpace: "pre-line",
+          }}>
+            {checkResult.message}
+          </div>
+
+          {checkResult.passed && (
+            <div style={{
+              fontSize: "14px",
+              marginBottom: "8px",
+              color: colors.textSecondary,
+            }}>
+              {checkResult.passed}
+            </div>
+          )}
+
+          {checkResult.result && (
+            <div style={{
+              fontSize: "14px",
+              marginBottom: "8px",
+              color: colors.textSecondary,
+            }}>
+              Результат: <strong>{checkResult.result}</strong>
+            </div>
+          )}
+
+          {checkResult.currentGrade && (
+            <div style={{
+              fontSize: "14px",
+              marginBottom: "8px",
+              color: colors.textSecondary,
+            }}>
+              Текущая оценка: <strong>{checkResult.currentGrade}</strong>
+            </div>
+          )}
+
+          {checkResult.checks && checkResult.checks.length > 0 && (
+            <div style={{ marginTop: "12px" }}>
+              <div style={{
+                fontSize: "14px",
+                fontWeight: "500",
+                marginBottom: "8px",
+                color: colors.textPrimary,
+              }}>
+                Детали проверок:
+              </div>
+              {checkResult.checks.map((check, index) => (
+                <div key={index} style={{
+                  fontSize: "13px",
+                  marginBottom: "4px",
+                  color: colors.textSecondary,
+                  fontFamily: "monospace",
+                }}>
+                  {check}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </MainContainer>
   );
 };

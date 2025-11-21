@@ -2,12 +2,13 @@
 # Configuration file for lab-grader
 
 course:
-    name: Operating systems
+    name: Операционные системы
     alt-names: 
         - OS
-        - Операционные системы
+        - Operating systems
         - ОС
-    semester: Spring 2025
+    semester: Весна 2025, Осень 2025
+    university: ГУАП
     email: k43guap@ya.ru
     timezone: UTC+3
     github:

@@ -1,5 +1,30 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
+// Маппинг полей на русские названия для сообщений об ошибках
+const fieldLabels = {
+  name: "Имя",
+  surname: "Фамилия",
+  patronymic: "Отчество",
+  github: "GitHub аккаунт",
+};
+
+// Функция для форматирования ошибок валидации
+function formatValidationError(err) {
+  // Получаем имя поля из loc (обычно последний элемент)
+  const fieldName = err.loc && err.loc.length > 0 ? err.loc[err.loc.length - 1] : null;
+  const fieldLabel = fieldLabels[fieldName] || fieldName;
+
+  // Переводим типичные сообщения Pydantic
+  if (err.type === "string_too_short" || err.msg?.includes("at least 1 character")) {
+    return `${fieldLabel}: поле обязательно для заполнения`;
+  }
+  if (err.type === "missing") {
+    return `${fieldLabel}: поле обязательно`;
+  }
+
+  return fieldLabel ? `${fieldLabel}: ${err.msg}` : err.msg;
+}
+
 export const fetchCourses = async () => {
   const response = await fetch(`${API_BASE_URL}/courses`);
   return response.json();
@@ -43,7 +68,17 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
 
   // Если ответ не успешный, выбрасываем ошибку с сообщением от сервера
   if (!response.ok) {
-    throw new Error(data.detail || "Ошибка при регистрации");
+    // Обработка ошибок валидации FastAPI (422) - detail может быть массивом объектов
+    let errorMessage = "Ошибка при регистрации";
+    if (data.detail) {
+      if (typeof data.detail === "string") {
+        errorMessage = data.detail;
+      } else if (Array.isArray(data.detail)) {
+        // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
+        errorMessage = data.detail.map(formatValidationError).join("\n");
+      }
+    }
+    throw new Error(errorMessage);
   }
 
   return data;
@@ -54,7 +89,7 @@ export async function gradeLab(courseId, groupId, labId, github) {
   const encodedLabId = encodeURIComponent(labId);
 
   const response = await fetch(
-    `/api/courses/${courseId}/groups/${groupId}/labs/${encodedLabId}/grade`,
+    `${API_BASE_URL}/courses/${courseId}/groups/${groupId}/labs/${encodedLabId}/grade`,
     {
       method: "POST",
       headers: {
@@ -68,7 +103,17 @@ export async function gradeLab(courseId, groupId, labId, github) {
 
   // Если ответ не успешный, выбрасываем ошибку с сообщением от сервера
   if (!response.ok) {
-    throw new Error(data.detail || "Ошибка при проверке");
+    // Обработка ошибок валидации FastAPI (422) - detail может быть массивом объектов
+    let errorMessage = "Ошибка при проверке";
+    if (data.detail) {
+      if (typeof data.detail === "string") {
+        errorMessage = data.detail;
+      } else if (Array.isArray(data.detail)) {
+        // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
+        errorMessage = data.detail.map(formatValidationError).join("\n");
+      }
+    }
+    throw new Error(errorMessage);
   }
 
   return data;
