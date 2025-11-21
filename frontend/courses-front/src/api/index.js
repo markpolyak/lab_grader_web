@@ -1,5 +1,30 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 
+// Маппинг полей на русские названия для сообщений об ошибках
+const fieldLabels = {
+  name: "Имя",
+  surname: "Фамилия",
+  patronymic: "Отчество",
+  github: "GitHub аккаунт",
+};
+
+// Функция для форматирования ошибок валидации
+function formatValidationError(err) {
+  // Получаем имя поля из loc (обычно последний элемент)
+  const fieldName = err.loc && err.loc.length > 0 ? err.loc[err.loc.length - 1] : null;
+  const fieldLabel = fieldLabels[fieldName] || fieldName;
+
+  // Переводим типичные сообщения Pydantic
+  if (err.type === "string_too_short" || err.msg?.includes("at least 1 character")) {
+    return `${fieldLabel}: поле обязательно для заполнения`;
+  }
+  if (err.type === "missing") {
+    return `${fieldLabel}: поле обязательно`;
+  }
+
+  return fieldLabel ? `${fieldLabel}: ${err.msg}` : err.msg;
+}
+
 export const fetchCourses = async () => {
   const response = await fetch(`${API_BASE_URL}/courses`);
   return response.json();
@@ -50,9 +75,7 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
         errorMessage = data.detail;
       } else if (Array.isArray(data.detail)) {
         // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
-        errorMessage = data.detail
-          .map((err) => err.msg || err.message || JSON.stringify(err))
-          .join("; ");
+        errorMessage = data.detail.map(formatValidationError).join("; ");
       }
     }
     throw new Error(errorMessage);
@@ -87,9 +110,7 @@ export async function gradeLab(courseId, groupId, labId, github) {
         errorMessage = data.detail;
       } else if (Array.isArray(data.detail)) {
         // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
-        errorMessage = data.detail
-          .map((err) => err.msg || err.message || JSON.stringify(err))
-          .join("; ");
+        errorMessage = data.detail.map(formatValidationError).join("; ");
       }
     }
     throw new Error(errorMessage);
