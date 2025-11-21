@@ -36,16 +36,18 @@ def sample_course_config():
             "lab-column-offset": 1,
         },
         "labs": {
-            "ЛР1": {
+            "1": {
                 "github-prefix": "test-task1",
                 "short-name": "ЛР1",
+                "files": ["test_main.py"],  # Required files that also trigger forbidden modification checks
             },
-            "ЛР2": {
+            "2": {
                 "github-prefix": "test-task2",
                 "short-name": "ЛР2",
                 "taskid-max": 20,
                 "taskid-shift": 4,
                 "penalty-max": 9,
+                "files": ["test_main.py"],
             },
         },
         "_meta": {

@@ -89,7 +89,7 @@ class TestGradeLabCharacterization:
         result = grade_lab("test-course", "group1", "ЛР1", request)
 
         assert result["status"] == "updated"
-        assert result["result"] == "✓"
+        assert result["result"] == "v"
         assert "1/1" in result["passed"]
         mock_gspread['worksheet'].update_cell.assert_called_once()
 
@@ -150,7 +150,7 @@ class TestGradeLabCharacterization:
         result = grade_lab("test-course", "group1", "ЛР1", request)
 
         assert result["status"] == "updated"
-        assert result["result"] == "✗"
+        assert result["result"] == "x"
         assert "1/2" in result["passed"]
 
     @responses.activate
