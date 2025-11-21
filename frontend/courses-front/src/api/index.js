@@ -75,7 +75,7 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
         errorMessage = data.detail;
       } else if (Array.isArray(data.detail)) {
         // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
-        errorMessage = data.detail.map(formatValidationError).join("; ");
+        errorMessage = data.detail.map(formatValidationError).join("\n");
       }
     }
     throw new Error(errorMessage);
@@ -110,7 +110,7 @@ export async function gradeLab(courseId, groupId, labId, github) {
         errorMessage = data.detail;
       } else if (Array.isArray(data.detail)) {
         // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
-        errorMessage = data.detail.map(formatValidationError).join("; ");
+        errorMessage = data.detail.map(formatValidationError).join("\n");
       }
     }
     throw new Error(errorMessage);

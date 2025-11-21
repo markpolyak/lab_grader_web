@@ -96,14 +96,18 @@
 2. Backend проверяет:
    - Наличие студента в Google Sheets (по ФИО)
    - Существование GitHub аккаунта
-   - Наличие репозитория `{org}/{github-prefix}-{taskid}-{username}`
+   - Наличие репозитория `{org}/{github-prefix}-{username}`
    - Наличие `.github/workflows/` (настроен CI)
-   - Наличие файла `test_main.py`
+   - Наличие обязательных файлов (настраивается в конфиге lab: `files: [...]`)
    - Получает последний коммит
-   - Валидирует, что студент не модифицировал файл с тестами
+   - Валидирует, что студент не модифицировал файл с тестами (`test_main.py`, `tests/`)
    - Получает статусы всех CI проверок (workflows)
-3. Результат (✓ или ✗) записывается в Google Sheets
-4. Frontend отображает результат проверки
+3. **Защита от перезаписи**: Результат записывается только если текущее значение ячейки:
+   - Пустое
+   - Содержит "x" (предыдущая неудачная проверка)
+   - Начинается с "?" (пометка преподавателя)
+4. Результат (`v` = успех, `x` = ошибка) записывается в Google Sheets
+5. Frontend отображает детальный результат проверки (персистентно, не всплывающее окно)
 
 ## Структура проекта
 
@@ -124,9 +128,12 @@ lab_grader_web/
 ├── scripts/                     # Deployment и утилиты
 │   ├── switch-branch.sh         # Переключение веток на сервере
 │   └── README.md
+├── tests/                       # Модульные тесты
+│   └── test_lab_column_lookup.py
 ├── docs/                        # Документация
 │   ├── PROJECT_DESCRIPTION.md
-│   └── DEPLOYMENT.md
+│   ├── DEPLOYMENT.md
+│   └── LOGGING.md
 ├── frontend/courses-front/      # React приложение
 │   ├── src/
 │   │   ├── components/          # React компоненты
@@ -145,7 +152,8 @@ lab_grader_web/
 │   ├── vite.config.js
 │   └── theme.js                 # Система дизайна
 └── .github/workflows/
-    └── ci.yaml                  # CI/CD pipeline
+    ├── ci.yaml                  # CI/CD pipeline (сборка Docker образов)
+    └── tests.yml                # Запуск тестов (pytest)
 
 ```
 
@@ -305,6 +313,32 @@ SECRET_KEY=random_secret_key_for_signing_cookies
 - **.dockerignore / .gitignore** — исключение чувствительных данных из репозитория
 - **Валидация входных данных** — проверка всех пользовательских вводов
 - **Защита от модификации тестов** — проверка целостности файла test_main.py
+
+## Тестирование
+
+### Unit-тесты
+
+Проект использует pytest для модульного тестирования:
+
+```bash
+# Запуск тестов
+pytest tests/ -v
+
+# Запуск с покрытием
+pytest tests/ --cov=. --cov-report=term-missing
+```
+
+### Покрытие тестами
+
+- `test_lab_column_lookup.py` — тесты поиска колонки лабораторной работы:
+  - Поиск по short-name через `sheet.find()`
+  - Fallback на расчет по offset
+  - Парсинг lab_id (ЛР1, ЛР0.1, и т.д.)
+  - Edge cases и специальные символы
+
+### CI/CD
+
+Тесты автоматически запускаются через GitHub Actions при каждом push и pull request.
 
 ## Интернационализация
 

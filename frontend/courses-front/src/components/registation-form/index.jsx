@@ -151,6 +151,7 @@ const handleSubmit = async () => {
             fontWeight: "500",
             marginBottom: "12px",
             color: colors.textPrimary,
+            whiteSpace: "pre-line",
           }}>
             {checkResult.message}
           </div>
