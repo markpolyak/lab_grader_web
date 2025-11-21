@@ -315,3 +315,116 @@ docker compose up -d
 # Check status
 docker compose ps
 ```
+
+## Course Management
+
+### Adding a New Course
+
+1. **Create course YAML file:**
+
+```bash
+# Create new course configuration
+nano courses/new-course-2025.yaml
+```
+
+2. **Add course logo (optional):**
+
+```bash
+# Add logo image to logos directory
+cp my-logo.png courses/logos/new-course-2025.png
+```
+
+3. **Update course index:**
+
+```yaml
+# Edit courses/index.yaml
+courses:
+  - id: "new-course-2025-spring"
+    file: "new-course-2025.yaml"
+    logo: "/courses/logos/new-course-2025.png"  # Optional, HTTP path
+    status: "active"
+    priority: 80
+```
+
+4. **Commit changes:**
+
+```bash
+git add courses/
+git commit -m "Add new course: New Course 2025"
+git push
+```
+
+### Managing Course Status
+
+Edit `courses/index.yaml` to change course visibility:
+
+```yaml
+# Active course (visible in main list)
+- id: "os-2025-spring"
+  status: "active"
+
+# Archived course (for students with academic debt)
+- id: "os-2024-fall"
+  status: "archived"
+
+# Hidden course (completely invisible but preserved in git)
+- id: "os-2023-spring"
+  status: "hidden"
+```
+
+### Updating Course Logos
+
+**Option 1: Update existing logo**
+
+```bash
+# Replace logo file
+cp new-logo.png courses/logos/os-2025-spring.png
+git add courses/logos/os-2025-spring.png
+git commit -m "Update OS course logo"
+git push
+```
+
+**Option 2: Change logo path**
+
+```yaml
+# Edit courses/index.yaml
+- id: "os-2025-spring"
+  logo: "/courses/logos/new-os-logo.png"  # New HTTP path
+```
+
+**Option 3: Remove logo (use default)**
+
+```yaml
+# Edit courses/index.yaml - remove logo field entirely
+- id: "os-2025-spring"
+  file: "operating-systems-2025.yaml"
+  status: "active"
+  # logo field removed - will use default
+```
+
+### Course Priority and Ordering
+
+Courses are sorted by priority (higher = shown first):
+
+```yaml
+courses:
+  - id: "os-2025-spring"
+    priority: 100  # Shown first
+
+  - id: "ml-2025-spring"
+    priority: 90   # Shown second
+
+  - id: "old-course"
+    priority: 10   # Shown last
+```
+
+### Logo Guidelines
+
+- **Location**: `courses/logos/`
+- **Naming**: Match course ID (e.g., `os-2025-spring.png`)
+- **Formats**: PNG, SVG, JPG, WebP
+- **Size**: 200x200 to 1000x1000 pixels
+- **File size**: Keep under 200KB
+- **Default**: If no logo specified, `/assets/default.png` is used
+
+See [docs/COURSE_LOGOS.md](COURSE_LOGOS.md) for detailed logo guidelines.

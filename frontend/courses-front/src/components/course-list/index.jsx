@@ -252,6 +252,11 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         <CourseCardContainer key={course.id}>
           <HeaderCard>
             <CourseTitle>{course.name}</CourseTitle>
+            {course.university && (
+              <SemesterTitle style={{ marginBottom: "4px" }}>
+                {course.university}
+              </SemesterTitle>
+            )}
             <SemesterTitle>
               {t("semester")}: {course.semester}
             </SemesterTitle>
@@ -285,7 +290,8 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                 </Description>
               </Details>
 
-              <Details>
+              {/* Google Spreadsheet link hidden per user request */}
+              {/* <Details>
                 <Title>{t("googleSpreadsheet")}:</Title>
                 <Description>
                   {course.details["google-spreadsheet"] ? (
@@ -301,7 +307,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                     "—"
                   )}
                 </Description>
-              </Details>
+              </Details> */}
             </DetailsContainer>
           )}
 

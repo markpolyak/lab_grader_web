@@ -2,19 +2,18 @@
 # Configuration file for lab-grader
 
 course:
-    name: Machine Learning
+    name: Основы машинного обучения
     alt-names: 
-        - ML
-        - Машинное обучение
-        - МО
-        - Machine learning basics
-        - MLB
         - Основы машинного обучения
         - ОМО
-    semester: Spring 2025
+        - Machine learning basics
+        - MLB
+        - Machine Learning
+        - ML
+    semester: Весна 2025
+    university: ГУАП
     email: k43guap@ya.ru
     timezone: UTC+3
-    logo: image.png
     github:
         organization: suai-mlb-2025
         teachers:

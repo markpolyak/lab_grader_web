@@ -96,29 +96,44 @@
 2. Backend проверяет:
    - Наличие студента в Google Sheets (по ФИО)
    - Существование GitHub аккаунта
-   - Наличие репозитория `{org}/{github-prefix}-{taskid}-{username}`
+   - Наличие репозитория `{org}/{github-prefix}-{username}`
    - Наличие `.github/workflows/` (настроен CI)
-   - Наличие файла `test_main.py`
+   - Наличие обязательных файлов (настраивается в конфиге lab: `files: [...]`)
    - Получает последний коммит
-   - Валидирует, что студент не модифицировал файл с тестами
+   - Валидирует, что студент не модифицировал файл с тестами (`test_main.py`, `tests/`)
    - Получает статусы всех CI проверок (workflows)
-3. Результат (✓ или ✗) записывается в Google Sheets
-4. Frontend отображает результат проверки
+3. **Защита от перезаписи**: Результат записывается только если текущее значение ячейки:
+   - Пустое
+   - Содержит "x" (предыдущая неудачная проверка)
+   - Начинается с "?" (пометка преподавателя)
+4. Результат (`v` = успех, `x` = ошибка) записывается в Google Sheets
+5. Frontend отображает детальный результат проверки (персистентно, не всплывающее окно)
 
 ## Структура проекта
 
 ```
 lab_grader_web/
-├── main.py                      # Основной backend сервер (490 строк)
+├── main.py                      # Основной backend сервер
 ├── requirements.txt             # Python зависимости
 ├── backend.Dockerfile           # Backend контейнер
 ├── frontend.Dockerfile          # Frontend контейнер (multi-stage)
-├── docker-compose.yml           # Оркестрация сервисов
 ├── nginx.conf                   # Конфигурация Nginx
-├── courses/                     # Конфигурации курсов (YAML)
-│   ├── os-2023.yaml
-│   ├── ml-2024.yaml
-│   └── os-2028.yaml
+├── courses/                     # Конфигурации курсов
+│   ├── index.yaml               # Индекс курсов (управление отображением)
+│   ├── operating-systems-2025.yaml
+│   ├── machine-learning-basics-2025.yaml
+│   └── logos/                   # Логотипы курсов
+│       ├── os-2025-spring.png
+│       └── ml-2025-spring.png
+├── scripts/                     # Deployment и утилиты
+│   ├── switch-branch.sh         # Переключение веток на сервере
+│   └── README.md
+├── tests/                       # Модульные тесты
+│   └── test_lab_column_lookup.py
+├── docs/                        # Документация
+│   ├── PROJECT_DESCRIPTION.md
+│   ├── DEPLOYMENT.md
+│   └── LOGGING.md
 ├── frontend/courses-front/      # React приложение
 │   ├── src/
 │   │   ├── components/          # React компоненты
@@ -137,7 +152,8 @@ lab_grader_web/
 │   ├── vite.config.js
 │   └── theme.js                 # Система дизайна
 └── .github/workflows/
-    └── ci.yaml                  # CI/CD pipeline
+    ├── ci.yaml                  # CI/CD pipeline (сборка Docker образов)
+    └── tests.yml                # Запуск тестов (pytest)
 
 ```
 
@@ -169,13 +185,30 @@ lab_grader_web/
 
 ## Конфигурация курса
 
-Каждый курс описывается в YAML файле со следующей структурой:
+### Индексный файл курсов (`courses/index.yaml`)
+
+Централизованное управление отображением и метаданными курсов:
+
+```yaml
+version: "1.0"
+
+courses:
+  - id: "os-2025-spring"
+    file: "operating-systems-2025.yaml"
+    status: "active"      # active | archived | hidden
+    priority: 100         # Higher = shown first
+    featured: true        # Show at top
+    logo: "/courses/logos/os-2025-spring.png"  # Optional, HTTP path
+```
+
+### Файл описания курса
+
+Каждый курс описывается в отдельном YAML файле со следующей структурой:
 
 ```yaml
 course:
   name: "Операционные системы"
   semester: "Весна 2025"
-  logo: "/assets/os-logo.png"
   email: "instructor@example.com"
 
   github:
@@ -183,10 +216,10 @@ course:
     teachers: ["teacher1", "teacher2"]
 
   google:
-    spreadsheet: "1ABC...XYZ"
-    info-sheet: "График"
-    student-name-column: 2
-    lab-column-offset: 1
+    spreadsheet: "1ABC...XYZ"     # ID Google Sheets документа
+    info-sheet: "График"           # Имя листа с расписанием (игнорируется)
+    student-name-column: 1         # Столбец с ФИО студентов (0=A, 1=B, 2=C)
+    lab-column-offset: 1           # Смещение столбцов лабораторных работ
 
   labs:
     "ЛР1":
@@ -204,6 +237,8 @@ course:
         - "Результаты"
 ```
 
+**Примечание:** Метаданные отображения (статус, приоритет, логотип) хранятся в `courses/index.yaml`, а не в файлах курсов.
+
 ## Интеграции
 
 ### GitHub API
@@ -218,6 +253,11 @@ course:
 - Чтение GitHub никнеймов
 - Запись результатов проверок
 - Обновление данных о регистрации
+
+**Конфигурация столбцов:**
+- `student-name-column`: Номер столбца с ФИО студентов (0-based индексация: 0=A, 1=B, 2=C)
+- `lab-column-offset`: Смещение между столбцом студента и первой лабораторной работой
+- Примечание: В коде автоматически добавляется +1 для совместимости с gspread (1-based индексация)
 
 ### MOSS (Антиплагиат)
 - Конфигурация языка программирования
@@ -273,6 +313,32 @@ SECRET_KEY=random_secret_key_for_signing_cookies
 - **.dockerignore / .gitignore** — исключение чувствительных данных из репозитория
 - **Валидация входных данных** — проверка всех пользовательских вводов
 - **Защита от модификации тестов** — проверка целостности файла test_main.py
+
+## Тестирование
+
+### Unit-тесты
+
+Проект использует pytest для модульного тестирования:
+
+```bash
+# Запуск тестов
+pytest tests/ -v
+
+# Запуск с покрытием
+pytest tests/ --cov=. --cov-report=term-missing
+```
+
+### Покрытие тестами
+
+- `test_lab_column_lookup.py` — тесты поиска колонки лабораторной работы:
+  - Поиск по short-name через `sheet.find()`
+  - Fallback на расчет по offset
+  - Парсинг lab_id (ЛР1, ЛР0.1, и т.д.)
+  - Edge cases и специальные символы
+
+### CI/CD
+
+Тесты автоматически запускаются через GitHub Actions при каждом push и pull request.
 
 ## Интернационализация
 

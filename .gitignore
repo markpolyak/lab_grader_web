@@ -189,4 +189,4 @@ yarn-error.log*
 pnpm-debug.log*
 .vite/
 dist/
-.cache/
+.cache/logs/

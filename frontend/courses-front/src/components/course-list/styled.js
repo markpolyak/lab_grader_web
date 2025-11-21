@@ -74,7 +74,8 @@ export const ImageBlock = styled.div`
   width: ${sizes.cardWidth};
   height: ${sizes.cardHeight};
   background-image: ${(props) => `url(${props.$logo})`};
-  background-size: cover;
+  background-size: contain;
+  background-repeat: no-repeat;
   background-position: center;
 
   @media (max-width: ${breakpoints.tablet}) {
@@ -236,6 +237,22 @@ export const FixedAdminButton = styled.button`
     font-size: ${sizes.fontSizeSmall};
     top: 50px;  /* для мобильных чуть повыше */
     right: 12px;
+  }
+`;
+
+export const PageTitle = styled.h1`
+  ${textStyles}
+  color: ${colors.textPrimary};
+  font-size: 28px;
+  font-weight: 600;
+  text-align: center;
+  width: 100%;
+  margin: 24px 0;
+  padding: 0 16px;
+
+  @media (max-width: ${breakpoints.tablet}) {
+    font-size: 22px;
+    margin: 16px 0;
   }
 `;
 

@@ -1,6 +1,6 @@
 import { useNavigate } from "react-router-dom";
 import { CourseList } from ".";
-import { FixedAdminButton } from "./styled";
+import { FixedAdminButton, PageTitle } from "./styled";
 
 export function CourseListWrapper() {
   const navigate = useNavigate();
@@ -10,6 +10,7 @@ export function CourseListWrapper() {
       <FixedAdminButton onClick={() => navigate("/admin")}>
         Для преподавателей
       </FixedAdminButton>
+      <PageTitle>Проверка лабораторных работ</PageTitle>
       <CourseList
         onSelectCourse={(courseId) => navigate(`/course/${courseId}`)}
       />

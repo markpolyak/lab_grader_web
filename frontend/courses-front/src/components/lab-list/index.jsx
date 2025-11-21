@@ -9,6 +9,7 @@ import {
 } from "../group-list/styled";
 import { CardTitle, MainContainer } from "../../../theme";
 import { ButtonBack } from "../course-list/styled";
+import { Breadcrumb } from "../breadcrumb";
 
 export const LabList = ({ courseId, groupId, onSelectLab, onBack }) => {
   const [labs, setLabs] = useState([]);
@@ -27,6 +28,7 @@ export const LabList = ({ courseId, groupId, onSelectLab, onBack }) => {
   return (
     <MainContainer>
       <ButtonBack onClick={onBack}>← Назад</ButtonBack>
+      <Breadcrumb courseId={courseId} groupId={groupId} />
       <CardTitle>Лабораторные работы</CardTitle>
       {loading ? (
         <Spin size="default" />
