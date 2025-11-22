@@ -290,3 +290,163 @@ class TestLabGraderGrade:
         assert "workflows" in result.message.lower()
         # CI should not be called
         mock_github.get_check_runs.assert_not_called()
+
+
+class TestLabGraderPenalty:
+    """Tests for penalty calculation integration."""
+
+    @pytest.fixture
+    def mock_github(self):
+        return MagicMock(spec=GitHubClient)
+
+    @pytest.fixture
+    def grader(self, mock_github):
+        return LabGrader(mock_github)
+
+    def _setup_successful_ci(self, mock_github, completed_at="2024-03-20T10:00:00Z"):
+        """Setup mocks for successful CI run."""
+        mock_github.check_required_files.return_value = []
+        mock_github.has_workflows_directory.return_value = True
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {"name": "test", "conclusion": "success", "html_url": "url1", "completed_at": completed_at},
+        ]
+
+    def test_on_time_no_penalty(self, grader, mock_github):
+        """Test no penalty when submitted before deadline."""
+        from datetime import datetime, timezone
+
+        self._setup_successful_ci(mock_github, completed_at="2024-03-14T10:00:00Z")
+        deadline = datetime(2024, 3, 15, 23, 59, tzinfo=timezone.utc)
+        config = {"github-prefix": "lab1", "penalty-max": 5}
+
+        result = grader.grade("org", "student1", config, deadline=deadline)
+
+        assert result.status == "updated"
+        assert result.result == "v"
+        assert "-" not in result.result
+
+    def test_penalty_applied_late_submission(self, grader, mock_github):
+        """Test penalty applied when submitted after deadline."""
+        from datetime import datetime, timezone
+
+        # Completed 10 days after deadline (2 weeks penalty)
+        self._setup_successful_ci(mock_github, completed_at="2024-03-25T10:00:00Z")
+        deadline = datetime(2024, 3, 15, 23, 59, tzinfo=timezone.utc)
+        config = {"github-prefix": "lab1", "penalty-max": 9}
+
+        result = grader.grade("org", "student1", config, deadline=deadline)
+
+        assert result.status == "updated"
+        assert result.result == "v-2"  # 10 days = 2 weeks
+        assert "штраф" in result.message.lower()
+
+    def test_penalty_capped_at_max(self, grader, mock_github):
+        """Test penalty doesn't exceed penalty-max."""
+        from datetime import datetime, timezone
+
+        # Completed 100 days after deadline
+        self._setup_successful_ci(mock_github, completed_at="2024-06-25T10:00:00Z")
+        deadline = datetime(2024, 3, 15, 23, 59, tzinfo=timezone.utc)
+        config = {"github-prefix": "lab1", "penalty-max": 5}
+
+        result = grader.grade("org", "student1", config, deadline=deadline)
+
+        assert result.status == "updated"
+        assert result.result == "v-5"  # Capped at 5
+
+    def test_no_deadline_no_penalty(self, grader, mock_github):
+        """Test no penalty calculation when deadline not provided."""
+        self._setup_successful_ci(mock_github, completed_at="2024-06-25T10:00:00Z")
+        config = {"github-prefix": "lab1", "penalty-max": 5}
+
+        result = grader.grade("org", "student1", config, deadline=None)
+
+        assert result.status == "updated"
+        assert result.result == "v"
+
+
+class TestLabGraderTaskId:
+    """Tests for TASKID validation integration."""
+
+    @pytest.fixture
+    def mock_github(self):
+        return MagicMock(spec=GitHubClient)
+
+    @pytest.fixture
+    def grader(self, mock_github):
+        return LabGrader(mock_github)
+
+    def _setup_successful_ci(self, mock_github, job_id=12345):
+        """Setup mocks for successful CI run."""
+        mock_github.check_required_files.return_value = []
+        mock_github.has_workflows_directory.return_value = True
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {
+                "name": "test",
+                "conclusion": "success",
+                "html_url": f"https://github.com/org/repo/actions/runs/1/jobs/{job_id}",
+                "completed_at": "2024-03-14T10:00:00Z"
+            },
+        ]
+
+    def test_taskid_valid(self, grader, mock_github):
+        """Test success when TASKID matches expected."""
+        self._setup_successful_ci(mock_github)
+        mock_github.get_job_logs.return_value = "2024-01-15T10:30:00.000Z TASKID is 5\n"
+        config = {"github-prefix": "lab1", "taskid-max": 20}
+
+        result = grader.grade("org", "student1", config, expected_taskid=5)
+
+        assert result.status == "updated"
+        assert result.result == "v"
+
+    def test_taskid_mismatch(self, grader, mock_github):
+        """Test error when TASKID doesn't match expected."""
+        self._setup_successful_ci(mock_github)
+        mock_github.get_job_logs.return_value = "2024-01-15T10:30:00.000Z TASKID is 10\n"
+        config = {"github-prefix": "lab1", "taskid-max": 20}
+
+        result = grader.grade("org", "student1", config, expected_taskid=5)
+
+        assert result.status == "error"
+        assert result.result == "?! Wrong TASKID!"
+        assert "вариант" in result.message.lower()
+
+    def test_taskid_not_found(self, grader, mock_github):
+        """Test error when TASKID not found in logs."""
+        self._setup_successful_ci(mock_github)
+        mock_github.get_job_logs.return_value = "2024-01-15T10:30:00.000Z No taskid here\n"
+        config = {"github-prefix": "lab1", "taskid-max": 20}
+
+        result = grader.grade("org", "student1", config, expected_taskid=5)
+
+        assert result.status == "error"
+        assert result.result == "?! Wrong TASKID!"
+        assert "не найден" in result.message.lower()
+
+    def test_taskid_ignored_when_flag_set(self, grader, mock_github):
+        """Test TASKID check skipped when ignore-task-id is True."""
+        self._setup_successful_ci(mock_github)
+        mock_github.get_job_logs.return_value = "2024-01-15T10:30:00.000Z No taskid\n"
+        config = {"github-prefix": "lab1", "taskid-max": 20, "ignore-task-id": True}
+
+        result = grader.grade("org", "student1", config, expected_taskid=5)
+
+        assert result.status == "updated"
+        assert result.result == "v"
+        # Logs should not be fetched
+        mock_github.get_job_logs.assert_not_called()
+
+    def test_no_expected_taskid_skips_check(self, grader, mock_github):
+        """Test TASKID check skipped when expected_taskid is None."""
+        self._setup_successful_ci(mock_github)
+        config = {"github-prefix": "lab1", "taskid-max": 20}
+
+        result = grader.grade("org", "student1", config, expected_taskid=None)
+
+        assert result.status == "updated"
+        assert result.result == "v"
+        # Logs should not be fetched
+        mock_github.get_job_logs.assert_not_called()

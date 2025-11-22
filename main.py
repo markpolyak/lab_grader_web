@@ -21,6 +21,9 @@ from grading import (
     find_student_row,
     find_lab_column_by_name,
     calculate_lab_column,
+    get_deadline_from_sheet,
+    get_student_order,
+    calculate_expected_taskid,
 )
 
 # Configure logging to both file and console
@@ -644,8 +647,40 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         current_value = sheet.cell(row_idx, lab_col).value or ""
         logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
 
-        # Run grading with cell protection check
-        grade_result = grader.grade(org, username, lab_config_dict, current_cell_value=current_value)
+        # Get deadline from spreadsheet (row 1, above lab header in row 2)
+        deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1)
+        if deadline:
+            logger.info(f"Found deadline for lab: {deadline}")
+        else:
+            logger.debug(f"No deadline found for lab at column {lab_col}")
+
+        # Calculate expected TASKID if configured
+        expected_taskid = None
+        task_id_column_config = course_info.get("google", {}).get("task-id-column")
+        taskid_max = lab_config_dict.get("taskid-max")
+        ignore_taskid = lab_config_dict.get("ignore-task-id", False)
+
+        if task_id_column_config is not None and taskid_max is not None and not ignore_taskid:
+            # task_id_column is 0-based in config, convert to 1-based for gspread
+            task_id_column = task_id_column_config + 1
+            student_order = get_student_order(sheet, row_idx, task_id_column)
+
+            if student_order is not None:
+                taskid_shift = lab_config_dict.get("taskid-shift", 0)
+                expected_taskid = calculate_expected_taskid(student_order, taskid_shift, taskid_max)
+                logger.info(f"Expected TASKID: {expected_taskid} (order={student_order}, shift={taskid_shift}, max={taskid_max})")
+            else:
+                logger.warning(f"Could not get student order from column {task_id_column}, row {row_idx}")
+        else:
+            logger.debug(f"TASKID check skipped: task_id_column={task_id_column_config}, taskid_max={taskid_max}, ignore={ignore_taskid}")
+
+        # Run grading with deadline and TASKID validation
+        grade_result = grader.grade(
+            org, username, lab_config_dict,
+            current_cell_value=current_value,
+            deadline=deadline,
+            expected_taskid=expected_taskid,
+        )
 
         # Handle different result statuses
         if grade_result.status == "error":

@@ -6,6 +6,7 @@ all grading operations: GitHub checks, CI evaluation, and result formatting.
 """
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from .github_client import (
@@ -19,8 +20,11 @@ from .ci_checker import (
     evaluate_ci_results,
     get_ci_config_jobs,
     format_ci_result_string,
+    CheckRun,
 )
 from .sheets_client import can_overwrite_cell
+from .penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
+from .taskid import extract_taskid_from_logs, calculate_expected_taskid, validate_taskid
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +38,15 @@ class GradeResult:
     passed: str | None  # "3/4 тестов пройдено"
     checks: list[str] = field(default_factory=list)  # CI check summaries
     current_grade: str | None = None  # Existing grade if rejected
+
+
+@dataclass
+class CIEvaluation:
+    """Internal result of CI evaluation with full details."""
+    grade_result: GradeResult  # The GradeResult to return
+    ci_passed: bool  # Whether all CI checks passed
+    successful_runs: list[CheckRun] = field(default_factory=list)  # For TASKID extraction
+    latest_success_time: datetime | None = None  # For penalty calculation
 
 
 class LabGrader:
@@ -170,6 +183,192 @@ class LabGrader:
 
         return None
 
+    def check_taskid(
+        self,
+        org: str,
+        repo_name: str,
+        successful_runs: list[CheckRun],
+        expected_taskid: int,
+    ) -> GradeResult | None:
+        """
+        Check TASKID from job logs matches expected value.
+
+        Reads logs from successful CI jobs and extracts TASKID.
+        If TASKID doesn't match expected, returns error result.
+
+        Args:
+            org: GitHub organization
+            repo_name: Repository name
+            successful_runs: List of successful CheckRun objects
+            expected_taskid: Expected TASKID for this student
+
+        Returns:
+            GradeResult with error if TASKID mismatch, None if OK
+        """
+        taskid_found = None
+        taskid_error = None
+
+        # Try to get TASKID from any successful job's logs
+        for run in successful_runs:
+            # Extract job ID from html_url (format: .../jobs/12345)
+            if "/jobs/" in run.html_url:
+                try:
+                    job_id = int(run.html_url.split("/jobs/")[-1].split("?")[0])
+                except (ValueError, IndexError):
+                    continue
+
+                logs = self.github.get_job_logs(org, repo_name, job_id)
+                if logs:
+                    result = extract_taskid_from_logs(logs)
+                    if result.found is not None:
+                        taskid_found = result.found
+                        break
+                    elif result.error and "несколько" in result.error:
+                        # Multiple different TASKIDs - this is an error
+                        taskid_error = result.error
+                        break
+
+        if taskid_error:
+            return GradeResult(
+                status="error",
+                result=None,
+                message=f"⚠️ {taskid_error}",
+                passed=None,
+            )
+
+        if taskid_found is None:
+            return GradeResult(
+                status="error",
+                result="?! Wrong TASKID!",
+                message="⚠️ TASKID не найден в логах. Убедитесь, что программа выводит номер варианта.",
+                passed=None,
+            )
+
+        is_valid, error_msg = validate_taskid(taskid_found, expected_taskid)
+        if not is_valid:
+            logger.warning(f"Wrong TASKID for {repo_name}: found {taskid_found}, expected {expected_taskid}")
+            return GradeResult(
+                status="error",
+                result="?! Wrong TASKID!",
+                message=f"⚠️ {error_msg}. Вы выполнили чужой вариант!",
+                passed=None,
+            )
+
+        logger.info(f"TASKID validated: {taskid_found} matches expected {expected_taskid}")
+        return None
+
+    def _evaluate_ci_internal(
+        self,
+        org: str,
+        repo_name: str,
+        lab_config: dict[str, Any]
+    ) -> CIEvaluation:
+        """
+        Evaluate CI results with full details for internal use.
+
+        Returns CIEvaluation with successful_runs and latest_success_time
+        for TASKID validation and penalty calculation.
+
+        Args:
+            org: GitHub organization
+            repo_name: Repository name
+            lab_config: Lab configuration dict from YAML
+
+        Returns:
+            CIEvaluation with full CI details
+        """
+        commit = self.github.get_latest_commit(org, repo_name)
+        if commit is None:
+            return CIEvaluation(
+                grade_result=GradeResult(
+                    status="error",
+                    result=None,
+                    message="Нет коммитов в репозитории",
+                    passed=None,
+                ),
+                ci_passed=False,
+            )
+
+        check_runs_data = self.github.get_check_runs(org, repo_name, commit.sha)
+
+        if check_runs_data is None:
+            return CIEvaluation(
+                grade_result=GradeResult(
+                    status="error",
+                    result=None,
+                    message="Проверки CI не найдены",
+                    passed=None,
+                ),
+                ci_passed=False,
+            )
+
+        if not check_runs_data:
+            return CIEvaluation(
+                grade_result=GradeResult(
+                    status="pending",
+                    result=None,
+                    message="Нет активных CI-проверок ⏳",
+                    passed=None,
+                ),
+                ci_passed=False,
+            )
+
+        # Parse and filter check runs
+        check_runs = parse_check_runs(check_runs_data)
+        ci_jobs = get_ci_config_jobs(lab_config)
+        relevant_runs = filter_relevant_jobs(check_runs, ci_jobs)
+
+        if not relevant_runs:
+            return CIEvaluation(
+                grade_result=GradeResult(
+                    status="pending",
+                    result=None,
+                    message="Нет активных CI-проверок ⏳",
+                    passed=None,
+                ),
+                ci_passed=False,
+            )
+
+        # Evaluate results
+        ci_result = evaluate_ci_results(relevant_runs)
+
+        if ci_result.has_pending:
+            return CIEvaluation(
+                grade_result=GradeResult(
+                    status="pending",
+                    result=None,
+                    message="CI-проверки ещё выполняются ⏳",
+                    passed=format_ci_result_string(ci_result.passed_count, ci_result.total_count),
+                    checks=ci_result.summary,
+                ),
+                ci_passed=False,
+            )
+
+        # Get successful runs for TASKID extraction
+        successful_runs = [run for run in relevant_runs if run.conclusion == "success"]
+
+        # Determine grade
+        final_result = "v" if ci_result.passed else "x"
+        result_string = format_ci_result_string(ci_result.passed_count, ci_result.total_count)
+
+        if ci_result.passed:
+            message = "Результат CI: ✅ Все проверки пройдены"
+        else:
+            message = "Результат CI: ❌ Обнаружены ошибки"
+
+        return CIEvaluation(
+            grade_result=GradeResult(
+                status="updated",
+                result=final_result,
+                message=message,
+                passed=result_string,
+                checks=ci_result.summary,
+            ),
+            ci_passed=ci_result.passed,
+            successful_runs=successful_runs,
+            latest_success_time=ci_result.latest_success_time,
+        )
+
     def evaluate_ci(
         self,
         org: str,
@@ -187,81 +386,17 @@ class LabGrader:
         Returns:
             GradeResult with CI evaluation
         """
-        commit = self.github.get_latest_commit(org, repo_name)
-        if commit is None:
-            return GradeResult(
-                status="error",
-                result=None,
-                message="Нет коммитов в репозитории",
-                passed=None,
-            )
-
-        check_runs_data = self.github.get_check_runs(org, repo_name, commit.sha)
-
-        if check_runs_data is None:
-            return GradeResult(
-                status="error",
-                result=None,
-                message="Проверки CI не найдены",
-                passed=None,
-            )
-
-        if not check_runs_data:
-            return GradeResult(
-                status="pending",
-                result=None,
-                message="Нет активных CI-проверок ⏳",
-                passed=None,
-            )
-
-        # Parse and filter check runs
-        check_runs = parse_check_runs(check_runs_data)
-        ci_jobs = get_ci_config_jobs(lab_config)
-        relevant_runs = filter_relevant_jobs(check_runs, ci_jobs)
-
-        if not relevant_runs:
-            return GradeResult(
-                status="pending",
-                result=None,
-                message="Нет активных CI-проверок ⏳",
-                passed=None,
-            )
-
-        # Evaluate results
-        ci_result = evaluate_ci_results(relevant_runs)
-
-        if ci_result.has_pending:
-            return GradeResult(
-                status="pending",
-                result=None,
-                message="CI-проверки ещё выполняются ⏳",
-                passed=format_ci_result_string(ci_result.passed_count, ci_result.total_count),
-                checks=ci_result.summary,
-            )
-
-        # Determine grade
-        final_result = "v" if ci_result.passed else "x"
-        result_string = format_ci_result_string(ci_result.passed_count, ci_result.total_count)
-
-        if ci_result.passed:
-            message = "Результат CI: ✅ Все проверки пройдены"
-        else:
-            message = "Результат CI: ❌ Обнаружены ошибки"
-
-        return GradeResult(
-            status="updated",
-            result=final_result,
-            message=message,
-            passed=result_string,
-            checks=ci_result.summary,
-        )
+        evaluation = self._evaluate_ci_internal(org, repo_name, lab_config)
+        return evaluation.grade_result
 
     def grade(
         self,
         org: str,
         username: str,
         lab_config: dict[str, Any],
-        current_cell_value: str | None = None
+        current_cell_value: str | None = None,
+        deadline: datetime | None = None,
+        expected_taskid: int | None = None,
     ) -> GradeResult:
         """
         Perform full grading workflow.
@@ -270,13 +405,17 @@ class LabGrader:
         1. Check repository (files, workflows, commits)
         2. Check for forbidden modifications
         3. Evaluate CI results
-        4. Check if grade can be updated (cell protection)
+        4. Validate TASKID (if required)
+        5. Calculate penalty (if deadline provided)
+        6. Check if grade can be updated (cell protection)
 
         Args:
             org: GitHub organization
             username: Student's GitHub username
             lab_config: Lab configuration dict from YAML
             current_cell_value: Current value in grade cell (for protection check)
+            deadline: Deadline datetime for penalty calculation (None = no penalty)
+            expected_taskid: Expected TASKID for validation (None = skip validation)
 
         Returns:
             GradeResult with final status and grade
@@ -295,23 +434,74 @@ class LabGrader:
         if forbidden_error:
             return forbidden_error
 
-        # Step 3: CI evaluation
-        ci_result = self.evaluate_ci(org, repo_name, lab_config)
+        # Step 3: CI evaluation (use internal method for full details)
+        ci_evaluation = self._evaluate_ci_internal(org, repo_name, lab_config)
 
         # If CI is pending or error, return as-is
-        if ci_result.status != "updated":
-            return ci_result
+        if ci_evaluation.grade_result.status != "updated":
+            return ci_evaluation.grade_result
 
-        # Step 4: Check cell protection (if current value provided)
+        # If CI failed, return failure without TASKID/penalty checks
+        if not ci_evaluation.ci_passed:
+            return ci_evaluation.grade_result
+
+        # Step 4: Validate TASKID (if required)
+        ignore_taskid = lab_config.get("ignore-task-id", False)
+        if expected_taskid is not None and not ignore_taskid:
+            taskid_error = self.check_taskid(
+                org, repo_name,
+                ci_evaluation.successful_runs,
+                expected_taskid,
+            )
+            if taskid_error:
+                return taskid_error
+
+        # Step 5: Calculate penalty (if deadline provided)
+        final_result = "v"  # CI passed
+        penalty = 0
+        penalty_max = lab_config.get("penalty-max", 0)
+
+        if deadline is not None and ci_evaluation.latest_success_time is not None:
+            # Get penalty strategy from config (default: WEEKLY)
+            strategy_name = lab_config.get("penalty-strategy", "weekly")
+            try:
+                strategy = PenaltyStrategy(strategy_name)
+            except ValueError:
+                strategy = PenaltyStrategy.WEEKLY
+
+            penalty = calculate_penalty(
+                completed_at=ci_evaluation.latest_success_time,
+                deadline=deadline,
+                penalty_max=penalty_max,
+                strategy=strategy,
+            )
+
+            if penalty > 0:
+                final_result = format_grade_with_penalty("v", penalty)
+                logger.info(f"Applied penalty {penalty} for late submission: {final_result}")
+
+        # Step 6: Check cell protection (if current value provided)
         if current_cell_value is not None:
             if not can_overwrite_cell(current_cell_value):
                 return GradeResult(
                     status="rejected",
                     result=current_cell_value,
                     message="⚠️ Работа уже была проверена ранее. Обратитесь к преподавателю для пересдачи.",
-                    passed=ci_result.passed,
-                    checks=ci_result.checks,
+                    passed=ci_evaluation.grade_result.passed,
+                    checks=ci_evaluation.grade_result.checks,
                     current_grade=current_cell_value,
                 )
 
-        return ci_result
+        # Build final message
+        if penalty > 0:
+            message = f"Результат CI: ✅ Все проверки пройдены (штраф: -{penalty})"
+        else:
+            message = ci_evaluation.grade_result.message
+
+        return GradeResult(
+            status="updated",
+            result=final_result,
+            message=message,
+            passed=ci_evaluation.grade_result.passed,
+            checks=ci_evaluation.grade_result.checks,
+        )

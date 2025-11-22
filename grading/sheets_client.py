@@ -4,9 +4,12 @@ Google Sheets client for lab grading.
 This module provides helpers for interacting with Google Sheets
 to find students, update grades, and manage lab data.
 """
+import logging
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
+logger = logging.getLogger(__name__)
 
 # Cell protection rules: these values can be overwritten
 OVERWRITABLE_VALUES = {"", "x", "?"}
@@ -216,3 +219,91 @@ def prepare_grade_update(
         previous_value=current_value,
         new_value=None
     )
+
+
+def get_deadline_from_sheet(
+    worksheet,
+    lab_col: int,
+    deadline_row: int = 1
+) -> datetime | None:
+    """
+    Get deadline datetime from spreadsheet.
+
+    Deadline is typically stored in the row above the lab header.
+
+    Args:
+        worksheet: gspread Worksheet object
+        lab_col: 1-based column number of the lab
+        deadline_row: Row number containing deadline (default 1)
+
+    Returns:
+        datetime object or None if not found/parseable
+
+    Supported formats:
+        - "DD.MM.YYYY" (e.g., "15.03.2025")
+        - "DD.MM.YYYY HH:MM" (e.g., "15.03.2025 23:59")
+        - "YYYY-MM-DD" (e.g., "2025-03-15")
+        - "YYYY-MM-DDTHH:MM:SS" (ISO format)
+    """
+    try:
+        cell_value = worksheet.cell(deadline_row, lab_col).value
+        if not cell_value:
+            return None
+
+        cell_value = cell_value.strip()
+
+        # Try different date formats
+        formats = [
+            "%d.%m.%Y %H:%M",      # 15.03.2025 23:59
+            "%d.%m.%Y",             # 15.03.2025
+            "%Y-%m-%d %H:%M:%S",    # 2025-03-15 23:59:59
+            "%Y-%m-%d %H:%M",       # 2025-03-15 23:59
+            "%Y-%m-%d",             # 2025-03-15
+            "%Y-%m-%dT%H:%M:%S",    # ISO format
+        ]
+
+        for fmt in formats:
+            try:
+                return datetime.strptime(cell_value, fmt)
+            except ValueError:
+                continue
+
+        logger.warning(f"Could not parse deadline '{cell_value}' at row {deadline_row}, col {lab_col}")
+        return None
+    except Exception as e:
+        logger.error(f"Error reading deadline: {e}")
+        return None
+
+
+def get_student_order(
+    worksheet,
+    row: int,
+    task_id_column: int
+) -> int | None:
+    """
+    Get student's task ID / order number from spreadsheet.
+
+    Args:
+        worksheet: gspread Worksheet object
+        row: Student's row number (1-based)
+        task_id_column: Column number containing task IDs (0-based in config, converted to 1-based)
+
+    Returns:
+        Integer order number or None if not found
+
+    Note:
+        task_id_column from config is 0-based, but gspread uses 1-based indexing,
+        so caller should add 1 before passing to this function.
+    """
+    try:
+        cell_value = worksheet.cell(row, task_id_column).value
+        if not cell_value:
+            return None
+
+        return int(cell_value.strip())
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Could not parse task ID at row {row}, col {task_id_column}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Error reading task ID: {e}")
+        return None
