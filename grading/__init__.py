@@ -51,6 +51,14 @@ from .sheets_client import (
     GradeUpdate,
 )
 
+from .grader import (
+    LabGrader,
+    GradeResult,
+    GradeStatus,
+    RepoValidationResult,
+    build_repo_name,
+)
+
 __all__ = [
     # penalty
     "calculate_penalty",
@@ -84,4 +92,10 @@ __all__ = [
     "StudentLocation",
     "LabColumn",
     "GradeUpdate",
+    # grader
+    "LabGrader",
+    "GradeResult",
+    "GradeStatus",
+    "RepoValidationResult",
+    "build_repo_name",
 ]
