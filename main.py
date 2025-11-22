@@ -17,7 +17,6 @@ from datetime import datetime
 
 from grading import (
     LabGrader,
-    LabConfig,
     GitHubClient,
     find_student_row,
     find_lab_column_by_name,
@@ -590,13 +589,12 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
             logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}")
             raise HTTPException(status_code=400, detail="Missing course configuration")
 
-        # Create lab config and grader
-        lab_config = LabConfig.from_dict(lab_config_dict, lab_number)
+        # Create grader
         github_client = GitHubClient(GITHUB_TOKEN)
         grader = LabGrader(github_client)
 
         username = request.github
-        repo_name = f"{lab_config.github_prefix}-{username}"
+        repo_name = f"{repo_prefix}-{username}"
         logger.info(f"Checking repository: {org}/{repo_name}")
 
         # Connect to Google Sheets to get current cell value
@@ -628,7 +626,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
             raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
 
         # Find lab column
-        lab_short_name = lab_config.short_name
+        lab_short_name = lab_config_dict.get("short-name")
         if lab_short_name:
             lab_col = find_lab_column_by_name(sheet, lab_short_name)
             if lab_col:
@@ -647,7 +645,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
 
         # Run grading with cell protection check
-        grade_result = grader.grade(org, username, lab_config, current_cell_value=current_value)
+        grade_result = grader.grade(org, username, lab_config_dict, current_cell_value=current_value)
 
         # Handle different result statuses
         if grade_result.status == "error":

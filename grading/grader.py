@@ -36,37 +36,6 @@ class GradeResult:
     current_grade: str | None = None  # Existing grade if rejected
 
 
-@dataclass
-class LabConfig:
-    """Configuration for a specific lab."""
-    github_prefix: str
-    short_name: str | None = None
-    required_files: list[str] = field(default_factory=list)
-    forbidden_modifications: list[str] = field(default_factory=list)
-    ci_jobs: list[str] | None = None  # None = use defaults
-    taskid_max: int | None = None
-    taskid_shift: int = 0
-    ignore_task_id: bool = False
-    penalty_max: int = 0
-
-    @classmethod
-    def from_dict(cls, config: dict[str, Any], lab_number: int) -> "LabConfig":
-        """Create LabConfig from lab configuration dict."""
-        ci_jobs = get_ci_config_jobs(config)
-
-        return cls(
-            github_prefix=config.get("github-prefix", ""),
-            short_name=config.get("short-name"),
-            required_files=config.get("files", []),
-            forbidden_modifications=config.get("forbidden-modifications", []),
-            ci_jobs=ci_jobs,
-            taskid_max=config.get("taskid-max"),
-            taskid_shift=config.get("taskid-shift", 0),
-            ignore_task_id=config.get("ignore-task-id", False),
-            penalty_max=config.get("penalty-max", 0),
-        )
-
-
 class LabGrader:
     """
     Orchestrates lab grading operations.
@@ -74,6 +43,8 @@ class LabGrader:
     This class coordinates GitHub API calls, CI result evaluation,
     and grade determination without directly interacting with Google Sheets.
     Sheet updates are handled by the caller (endpoint).
+
+    Lab config is passed as dict directly from YAML, no separate config class needed.
     """
 
     def __init__(self, github_client: GitHubClient):
@@ -89,7 +60,7 @@ class LabGrader:
         self,
         org: str,
         repo_name: str,
-        lab_config: LabConfig
+        lab_config: dict[str, Any]
     ) -> GradeResult | None:
         """
         Perform repository-level checks.
@@ -102,16 +73,15 @@ class LabGrader:
         Args:
             org: GitHub organization
             repo_name: Repository name
-            lab_config: Lab configuration
+            lab_config: Lab configuration dict from YAML
 
         Returns:
             GradeResult with error if check fails, None if all pass
         """
         # Check required files
-        if lab_config.required_files:
-            missing = self.github.check_required_files(
-                org, repo_name, lab_config.required_files
-            )
+        required_files = lab_config.get("files", [])
+        if required_files:
+            missing = self.github.check_required_files(org, repo_name, required_files)
             if missing:
                 return GradeResult(
                     status="error",
@@ -145,7 +115,7 @@ class LabGrader:
         self,
         org: str,
         repo_name: str,
-        lab_config: LabConfig
+        lab_config: dict[str, Any]
     ) -> GradeResult | None:
         """
         Check for forbidden file modifications.
@@ -153,7 +123,7 @@ class LabGrader:
         Args:
             org: GitHub organization
             repo_name: Repository name
-            lab_config: Lab configuration
+            lab_config: Lab configuration dict from YAML
 
         Returns:
             GradeResult with error if violation found, None otherwise
@@ -163,9 +133,10 @@ class LabGrader:
             return None
 
         # Get forbidden patterns from config or defaults
-        forbidden = lab_config.forbidden_modifications.copy()
+        required_files = lab_config.get("files", [])
+        forbidden = lab_config.get("forbidden-modifications", []).copy()
         if not forbidden:
-            forbidden = get_default_forbidden_patterns(lab_config.required_files)
+            forbidden = get_default_forbidden_patterns(required_files)
 
         if not forbidden:
             return None
@@ -203,7 +174,7 @@ class LabGrader:
         self,
         org: str,
         repo_name: str,
-        lab_config: LabConfig
+        lab_config: dict[str, Any]
     ) -> GradeResult:
         """
         Evaluate CI results for the latest commit.
@@ -211,7 +182,7 @@ class LabGrader:
         Args:
             org: GitHub organization
             repo_name: Repository name
-            lab_config: Lab configuration
+            lab_config: Lab configuration dict from YAML
 
         Returns:
             GradeResult with CI evaluation
@@ -245,7 +216,8 @@ class LabGrader:
 
         # Parse and filter check runs
         check_runs = parse_check_runs(check_runs_data)
-        relevant_runs = filter_relevant_jobs(check_runs, lab_config.ci_jobs)
+        ci_jobs = get_ci_config_jobs(lab_config)
+        relevant_runs = filter_relevant_jobs(check_runs, ci_jobs)
 
         if not relevant_runs:
             return GradeResult(
@@ -288,7 +260,7 @@ class LabGrader:
         self,
         org: str,
         username: str,
-        lab_config: LabConfig,
+        lab_config: dict[str, Any],
         current_cell_value: str | None = None
     ) -> GradeResult:
         """
@@ -303,13 +275,14 @@ class LabGrader:
         Args:
             org: GitHub organization
             username: Student's GitHub username
-            lab_config: Lab configuration
+            lab_config: Lab configuration dict from YAML
             current_cell_value: Current value in grade cell (for protection check)
 
         Returns:
             GradeResult with final status and grade
         """
-        repo_name = f"{lab_config.github_prefix}-{username}"
+        github_prefix = lab_config.get("github-prefix", "")
+        repo_name = f"{github_prefix}-{username}"
         logger.info(f"Grading repository: {org}/{repo_name}")
 
         # Step 1: Repository checks

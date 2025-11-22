@@ -1,47 +1,9 @@
 """Tests for grading orchestrator."""
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-from grading.grader import LabGrader, LabConfig, GradeResult
+from grading.grader import LabGrader, GradeResult
 from grading.github_client import GitHubClient, CommitInfo
-
-
-class TestLabConfig:
-    """Tests for LabConfig dataclass."""
-
-    def test_from_dict_minimal(self):
-        """Test creating config with minimal data."""
-        config = {"github-prefix": "lab1"}
-        lab_config = LabConfig.from_dict(config, 1)
-
-        assert lab_config.github_prefix == "lab1"
-        assert lab_config.short_name is None
-        assert lab_config.required_files == []
-        assert lab_config.ci_jobs is None
-
-    def test_from_dict_full(self):
-        """Test creating config with all fields."""
-        config = {
-            "github-prefix": "os-task2",
-            "short-name": "ЛР2",
-            "files": ["lab2.cpp", "Makefile"],
-            "forbidden-modifications": ["test_main.py"],
-            "ci": {"workflows": ["test", "lint"]},
-            "taskid-max": 20,
-            "taskid-shift": 4,
-            "ignore-task-id": True,
-            "penalty-max": 9,
-        }
-        lab_config = LabConfig.from_dict(config, 2)
-
-        assert lab_config.github_prefix == "os-task2"
-        assert lab_config.short_name == "ЛР2"
-        assert lab_config.required_files == ["lab2.cpp", "Makefile"]
-        assert lab_config.ci_jobs == ["test", "lint"]
-        assert lab_config.taskid_max == 20
-        assert lab_config.taskid_shift == 4
-        assert lab_config.ignore_task_id is True
-        assert lab_config.penalty_max == 9
 
 
 class TestLabGraderCheckRepository:
@@ -59,28 +21,28 @@ class TestLabGraderCheckRepository:
 
     @pytest.fixture
     def basic_config(self):
-        """Create basic lab config."""
-        return LabConfig(github_prefix="lab1")
+        """Create basic lab config dict."""
+        return {"github-prefix": "lab1"}
 
-    def test_missing_required_file(self, grader, mock_github, basic_config):
+    def test_missing_required_file(self, grader, mock_github):
         """Test error when required file is missing."""
-        basic_config.required_files = ["main.cpp"]
+        config = {"github-prefix": "lab1", "files": ["main.cpp"]}
         mock_github.check_required_files.return_value = ["main.cpp"]
 
-        result = grader.check_repository("org", "lab1-user", basic_config)
+        result = grader.check_repository("org", "lab1-user", config)
 
         assert result is not None
         assert result.status == "error"
         assert "main.cpp" in result.message
 
-    def test_all_files_exist(self, grader, mock_github, basic_config):
+    def test_all_files_exist(self, grader, mock_github):
         """Test success when all required files exist."""
-        basic_config.required_files = ["main.cpp"]
+        config = {"github-prefix": "lab1", "files": ["main.cpp"]}
         mock_github.check_required_files.return_value = []
         mock_github.has_workflows_directory.return_value = True
         mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
 
-        result = grader.check_repository("org", "lab1-user", basic_config)
+        result = grader.check_repository("org", "lab1-user", config)
 
         assert result is None  # No error
 
@@ -121,10 +83,7 @@ class TestLabGraderCheckForbiddenFiles:
 
     def test_no_violations(self, grader, mock_github):
         """Test success when no forbidden files are modified."""
-        config = LabConfig(
-            github_prefix="lab1",
-            required_files=["test_main.py"],
-        )
+        config = {"github-prefix": "lab1", "files": ["test_main.py"]}
         mock_github.get_latest_commit.return_value = CommitInfo(
             sha="abc123",
             files=[{"filename": "main.cpp", "status": "modified"}]
@@ -136,10 +95,7 @@ class TestLabGraderCheckForbiddenFiles:
 
     def test_test_main_modified(self, grader, mock_github):
         """Test error when test_main.py is modified."""
-        config = LabConfig(
-            github_prefix="lab1",
-            required_files=["test_main.py"],
-        )
+        config = {"github-prefix": "lab1", "files": ["test_main.py"]}
         mock_github.get_latest_commit.return_value = CommitInfo(
             sha="abc123",
             files=[{"filename": "test_main.py", "status": "modified"}]
@@ -153,10 +109,7 @@ class TestLabGraderCheckForbiddenFiles:
 
     def test_tests_folder_modified(self, grader, mock_github):
         """Test error when tests/ folder is modified."""
-        config = LabConfig(
-            github_prefix="lab1",
-            required_files=["test_main.py"],
-        )
+        config = {"github-prefix": "lab1", "files": ["test_main.py"]}
         mock_github.get_latest_commit.return_value = CommitInfo(
             sha="abc123",
             files=[{"filename": "tests/test_unit.py", "status": "removed"}]
@@ -182,12 +135,12 @@ class TestLabGraderEvaluateCI:
 
     @pytest.fixture
     def basic_config(self):
-        return LabConfig(github_prefix="lab1")
+        return {"github-prefix": "lab1"}
 
     def test_all_checks_pass(self, grader, mock_github):
         """Test grade 'v' when all CI checks pass."""
-        # Use explicit ci_jobs to control filtering
-        config = LabConfig(github_prefix="lab1", ci_jobs=["test", "lint"])
+        # Use explicit ci.workflows to control filtering
+        config = {"github-prefix": "lab1", "ci": {"workflows": ["test", "lint"]}}
         mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
         mock_github.get_check_runs.return_value = [
             {"name": "test", "conclusion": "success", "html_url": "url1", "completed_at": "2024-01-15T10:00:00Z"},
@@ -202,8 +155,8 @@ class TestLabGraderEvaluateCI:
 
     def test_some_checks_fail(self, grader, mock_github):
         """Test grade 'x' when some CI checks fail."""
-        # Use explicit ci_jobs to control filtering
-        config = LabConfig(github_prefix="lab1", ci_jobs=["test", "lint"])
+        # Use explicit ci.workflows to control filtering
+        config = {"github-prefix": "lab1", "ci": {"workflows": ["test", "lint"]}}
         mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
         mock_github.get_check_runs.return_value = [
             {"name": "test", "conclusion": "success", "html_url": "url1", "completed_at": "2024-01-15T10:00:00Z"},
@@ -239,7 +192,7 @@ class TestLabGraderEvaluateCI:
 
     def test_configured_jobs_filter(self, grader, mock_github):
         """Test that only configured jobs are evaluated."""
-        config = LabConfig(github_prefix="lab1", ci_jobs=["test"])
+        config = {"github-prefix": "lab1", "ci": {"workflows": ["test"]}}
         mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
         mock_github.get_check_runs.return_value = [
             {"name": "test", "conclusion": "success", "html_url": "url1", "completed_at": "2024-01-15T10:00:00Z"},
@@ -267,7 +220,7 @@ class TestLabGraderGrade:
 
     @pytest.fixture
     def basic_config(self):
-        return LabConfig(github_prefix="lab1")
+        return {"github-prefix": "lab1"}
 
     def test_full_success_flow(self, grader, mock_github, basic_config):
         """Test complete successful grading flow."""
