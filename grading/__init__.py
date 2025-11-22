@@ -7,6 +7,7 @@ This module contains functions for various aspects of lab grading:
 - ci_checker: Evaluate CI check results
 - github_client: GitHub API client
 - sheets_client: Google Sheets helpers
+- grader: Orchestrator for grading workflow
 """
 
 from .penalty import (
@@ -51,6 +52,12 @@ from .sheets_client import (
     GradeUpdate,
 )
 
+from .grader import (
+    LabGrader,
+    LabConfig,
+    GradeResult,
+)
+
 __all__ = [
     # penalty
     "calculate_penalty",
@@ -84,4 +91,8 @@ __all__ = [
     "StudentLocation",
     "LabColumn",
     "GradeUpdate",
+    # grader
+    "LabGrader",
+    "LabConfig",
+    "GradeResult",
 ]
