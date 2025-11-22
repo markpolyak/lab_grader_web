@@ -15,6 +15,15 @@ import re
 import logging
 from datetime import datetime
 
+from grading import (
+    LabGrader,
+    LabConfig,
+    GitHubClient,
+    find_student_row,
+    find_lab_column_by_name,
+    calculate_lab_column,
+)
+
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -556,139 +565,54 @@ class GradeRequest(BaseModel):
 
 @app.post("/courses/{course_id}/groups/{group_id}/labs/{lab_id}/grade")
 def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest):
+    """
+    Grade a lab submission by checking GitHub repository and CI status.
+
+    Uses the LabGrader orchestrator for GitHub checks and CI evaluation,
+    then updates the grade in Google Sheets.
+    """
     logger.info(f"Grading attempt - Course: {course_id}, Group: {group_id}, Lab: {lab_id}, GitHub: {request.github}")
 
     try:
+        # Load course and lab configuration
         course_info = get_course_by_id(course_id)
         org = course_info.get("github", {}).get("organization")
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
 
         labs = course_info.get("labs", {})
-        # Extract lab number for config lookup (config uses "2", not "ЛР2")
         lab_number = parse_lab_id(lab_id)
-        lab_config = labs.get(str(lab_number), {})
-        repo_prefix = lab_config.get("github-prefix")
+        lab_config_dict = labs.get(str(lab_number), {})
+        repo_prefix = lab_config_dict.get("github-prefix")
 
-        logger.debug(f"Looking for lab config with key '{lab_number}', found: {lab_config is not None}")
+        logger.debug(f"Looking for lab config with key '{lab_number}', found: {bool(lab_config_dict)}")
 
         if not all([org, spreadsheet_id, repo_prefix]):
-            logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}, lab_number={lab_number}")
+            logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}")
             raise HTTPException(status_code=400, detail="Missing course configuration")
 
+        # Create lab config and grader
+        lab_config = LabConfig.from_dict(lab_config_dict, lab_number)
+        github_client = GitHubClient(GITHUB_TOKEN)
+        grader = LabGrader(github_client)
+
         username = request.github
-        repo_name = f"{repo_prefix}-{username}"
+        repo_name = f"{lab_config.github_prefix}-{username}"
         logger.info(f"Checking repository: {org}/{repo_name}")
 
-        headers = {
-            "Authorization": f"Bearer {GITHUB_TOKEN}",
-            "Accept": "application/vnd.github+json"
-        }
-
-        # Check for required files from lab config (optional)
-        required_files = lab_config.get("files", [])
-        if required_files:
-            logger.info(f"Checking for required files: {required_files}")
-            for required_file in required_files:
-                file_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/{required_file}"
-                file_resp = requests.get(file_url, headers=headers)
-                if file_resp.status_code != 200:
-                    logger.warning(f"Required file '{required_file}' not found in {org}/{repo_name} (status: {file_resp.status_code})")
-                    raise HTTPException(status_code=400, detail=f"⚠️ Файл {required_file} не найден в репозитории")
-                logger.info(f"Required file '{required_file}' found")
-        else:
-            logger.info(f"No required files specified in lab config")
-
-        # Check for workflows
-        workflows_url = f"https://api.github.com/repos/{org}/{repo_name}/contents/.github/workflows"
-        workflows_resp = requests.get(workflows_url, headers=headers)
-        if workflows_resp.status_code != 200:
-            logger.warning(f"Workflows directory not found in {org}/{repo_name} (status: {workflows_resp.status_code})")
-            raise HTTPException(status_code=400, detail="⚠️ Папка .github/workflows не найдена. CI не настроен")
-        logger.info(f"Workflows directory found")
-
-        # Check for commits
-        commits_url = f"https://api.github.com/repos/{org}/{repo_name}/commits"
-        commits_resp = requests.get(commits_url, headers=headers)
-        if commits_resp.status_code != 200:
-            logger.error(f"Failed to fetch commits from {org}/{repo_name} (status: {commits_resp.status_code})")
-            raise HTTPException(status_code=404, detail="Нет коммитов в репозитории")
-
-        commits_data = commits_resp.json()
-        if not commits_data:
-            logger.warning(f"No commits found in {org}/{repo_name}")
-            raise HTTPException(status_code=404, detail="Нет коммитов в репозитории")
-
-        latest_sha = commits_data[0]["sha"]
-        logger.info(f"Latest commit: {latest_sha}")
-
-        # Check for forbidden file modifications (if configured)
-        commit_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}"
-        commit_resp = requests.get(commit_url, headers=headers)
-        commit_files = commit_resp.json().get("files", [])
-        logger.info(f"Checking {len(commit_files)} modified files in latest commit")
-
-        # Check if test files were modified (only for labs with test_main.py)
-        forbidden_files = lab_config.get("forbidden-modifications", [])
-        if "test_main.py" in required_files or "test_main.py" in forbidden_files:
-            for f in commit_files:
-                if f["filename"] == "test_main.py" and f["status"] in ("removed", "modified"):
-                    logger.warning(f"Forbidden modification detected: test_main.py was {f['status']}")
-                    raise HTTPException(status_code=403, detail="🚨 Нельзя изменять test_main.py")
-                if f["filename"].startswith("tests/") and f["status"] in ("removed", "modified"):
-                    logger.warning(f"Forbidden modification detected: {f['filename']} was {f['status']}")
-                    raise HTTPException(status_code=403, detail="🚨 Нельзя изменять папку tests/")
-            logger.info(f"No forbidden file modifications detected")
-        else:
-            logger.info(f"No forbidden file checks configured for this lab")
-
-        # Fetch CI check runs
-        check_url = f"https://api.github.com/repos/{org}/{repo_name}/commits/{latest_sha}/check-runs"
-        check_resp = requests.get(check_url, headers=headers)
-        if check_resp.status_code != 200:
-            logger.error(f"Failed to fetch CI checks for {latest_sha} (status: {check_resp.status_code})")
-            raise HTTPException(status_code=404, detail="Проверки CI не найдены")
-
-        check_runs = check_resp.json().get("check_runs", [])
-        if not check_runs:
-            logger.info(f"No active CI checks found for {latest_sha}")
-            return {"status": "pending", "message": "Нет активных CI-проверок ⏳"}
-
-        logger.info(f"Processing {len(check_runs)} CI check runs")
-        summary = []
-        passed_count = 0
-
-        for check in check_runs:
-            name = check.get("name", "Unnamed check")
-            conclusion = check.get("conclusion")
-            html_url = check.get("html_url")
-            if conclusion == "success":
-                emoji = "✅"
-                passed_count += 1
-            elif conclusion == "failure":
-                emoji = "❌"
-            else:
-                emoji = "⏳"
-            summary.append(f"{emoji} {name} — {html_url}")
-            logger.info(f"CI check '{name}': {conclusion}")
-
-        total_checks = len(check_runs)
-        result_string = f"{passed_count}/{total_checks} тестов пройдено"
-        final_result = "v" if passed_count == total_checks else "x"
-        logger.info(f"CI check results: {result_string}, final result: {final_result}")
-
-        # Update Google Sheets
-        logger.info(f"Updating Google Sheets for group {group_id}")
+        # Connect to Google Sheets to get current cell value
+        logger.info(f"Connecting to Google Sheets for group {group_id}")
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-        client = gspread.authorize(creds)
+        sheets_client = gspread.authorize(creds)
 
         try:
-            sheet = client.open_by_key(spreadsheet_id).worksheet(group_id)
+            sheet = sheets_client.open_by_key(spreadsheet_id).worksheet(group_id)
             logger.info(f"Successfully opened worksheet '{group_id}'")
         except Exception as e:
             logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
             raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
 
+        # Find GitHub column and student row
         header_row = sheet.row_values(1)
         try:
             github_col_idx = header_row.index("GitHub") + 1
@@ -697,60 +621,70 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
             raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден")
 
         github_values = sheet.col_values(github_col_idx)[2:]
-        if username not in github_values:
+        row_idx = find_student_row(github_values, username)
+
+        if row_idx is None:
             logger.warning(f"GitHub username '{username}' not found in spreadsheet for group {group_id}")
             raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
 
-        row_idx = github_values.index(username) + 3
-
-        # Find lab column: prefer short-name lookup, fallback to offset calculation
-        lab_short_name = lab_config.get("short-name")
-        lab_number = parse_lab_id(lab_id)
-
+        # Find lab column
+        lab_short_name = lab_config.short_name
         if lab_short_name:
-            # Search for lab column by short-name anywhere in the sheet
-            cell = sheet.find(lab_short_name)
-            if cell:
-                lab_col = cell.col  # gspread find() returns 1-based indices
-                logger.info(f"Found lab column '{lab_short_name}' at row {cell.row}, column {lab_col}")
+            lab_col = find_lab_column_by_name(sheet, lab_short_name)
+            if lab_col:
+                logger.info(f"Found lab column '{lab_short_name}' at column {lab_col}")
             else:
-                logger.error(f"Lab column '{lab_short_name}' not found anywhere in spreadsheet")
+                logger.error(f"Lab column '{lab_short_name}' not found in spreadsheet")
                 raise HTTPException(status_code=400, detail=f"Столбец '{lab_short_name}' не найден в таблице")
         else:
-            # Fallback: calculate column using offset + lab number
             logger.warning(f"Lab config for '{lab_id}' is missing 'short-name', using offset calculation")
             lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
-            lab_col = lab_offset + lab_number
+            lab_col = calculate_lab_column(lab_number, lab_offset)
             logger.info(f"Calculated lab column using offset: {lab_offset} + {lab_number} = {lab_col}")
 
-        # Check current cell value before updating
+        # Get current cell value for protection check
         current_value = sheet.cell(row_idx, lab_col).value or ""
         logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
 
-        # Allow update only if cell contains "x" or starts with "?"
-        can_update = current_value == "x" or current_value.startswith("?") or current_value == ""
+        # Run grading with cell protection check
+        grade_result = grader.grade(org, username, lab_config, current_cell_value=current_value)
 
-        if not can_update:
-            logger.warning(f"Update rejected: cell already contains '{current_value}' (not 'x' or '?...')")
+        # Handle different result statuses
+        if grade_result.status == "error":
+            logger.warning(f"Grading error: {grade_result.message}")
+            raise HTTPException(status_code=400, detail=grade_result.message)
+
+        if grade_result.status == "pending":
+            logger.info(f"Grading pending: {grade_result.message}")
             return {
-                "status": "rejected",
-                "result": current_value,
-                "message": "⚠️ Работа уже была проверена ранее. Обратитесь к преподавателю для пересдачи.",
-                "passed": result_string,
-                "checks": summary,
-                "current_grade": current_value
+                "status": "pending",
+                "message": grade_result.message,
+                "passed": grade_result.passed,
+                "checks": grade_result.checks
             }
 
-        logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{final_result}'")
-        sheet.update_cell(row_idx, lab_col, final_result)
+        if grade_result.status == "rejected":
+            logger.warning(f"Update rejected: cell already contains '{current_value}'")
+            return {
+                "status": "rejected",
+                "result": grade_result.result,
+                "message": grade_result.message,
+                "passed": grade_result.passed,
+                "checks": grade_result.checks,
+                "current_grade": grade_result.current_grade
+            }
+
+        # Update Google Sheets with new grade
+        logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{grade_result.result}'")
+        sheet.update_cell(row_idx, lab_col, grade_result.result)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
 
         return {
             "status": "updated",
-            "result": final_result,
-            "message": f"Результат CI: {'✅ Все проверки пройдены' if final_result == 'v' else '❌ Обнаружены ошибки'}",
-            "passed": result_string,
-            "checks": summary
+            "result": grade_result.result,
+            "message": grade_result.message,
+            "passed": grade_result.passed,
+            "checks": grade_result.checks
         }
     except HTTPException:
         raise
