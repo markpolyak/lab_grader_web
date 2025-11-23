@@ -88,21 +88,23 @@ class TestFilterRelevantJobs:
         filtered = filter_relevant_jobs(runs, [])
         assert filtered == []
 
-    def test_use_defaults_when_none(self):
-        """Use default jobs when config is None."""
+    def test_returns_all_when_none(self):
+        """Return all jobs when config is None (original behavior)."""
         runs = [
             CheckRun("test", "success", "url1"),
             CheckRun("random-job", "success", "url2"),
             CheckRun("build", "success", "url3"),
         ]
         filtered = filter_relevant_jobs(runs, None)
-        assert len(filtered) == 2
+        # All jobs returned when no filtering configured
+        assert len(filtered) == 3
         names = [r.name for r in filtered]
         assert "test" in names
+        assert "random-job" in names
         assert "build" in names
 
-    def test_no_defaults_found_returns_all(self):
-        """If no default jobs match, return all jobs."""
+    def test_returns_all_custom_jobs(self):
+        """Return all jobs regardless of names when config is None."""
         runs = [
             CheckRun("custom-job-1", "success", "url1"),
             CheckRun("custom-job-2", "failure", "url2"),
@@ -110,15 +112,18 @@ class TestFilterRelevantJobs:
         filtered = filter_relevant_jobs(runs, None)
         assert len(filtered) == 2
 
-    def test_partial_default_match(self):
-        """Return only matching default jobs."""
+    def test_returns_all_mixed_jobs(self):
+        """Return all jobs when mixed default and custom names."""
         runs = [
             CheckRun("test", "success", "url1"),
             CheckRun("custom-job", "success", "url2"),
         ]
         filtered = filter_relevant_jobs(runs, None)
-        assert len(filtered) == 1
-        assert filtered[0].name == "test"
+        # All jobs returned, not just defaults
+        assert len(filtered) == 2
+        names = [r.name for r in filtered]
+        assert "test" in names
+        assert "custom-job" in names
 
 
 class TestEvaluateCIResults:

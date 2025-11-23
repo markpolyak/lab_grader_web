@@ -22,6 +22,7 @@ from grading import (
     find_student_row,
     find_lab_column_by_name,
     calculate_lab_column,
+    can_overwrite_cell,
     get_deadline_from_sheet,
     get_student_order,
     calculate_expected_taskid,
@@ -573,6 +574,12 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
 
     Uses the LabGrader orchestrator for GitHub checks and CI evaluation,
     then updates the grade in Google Sheets.
+
+    Flow (preserves original behavior):
+    1. GitHub checks (files, workflows, commits, forbidden mods)
+    2. CI evaluation
+    3. Return early for errors/pending (no Sheets connection needed)
+    4. Connect to Sheets only when we have a result to write
     """
     logger.info(f"Grading attempt - Course: {course_id}, Group: {group_id}, Lab: {lab_id}, GitHub: {request.github}")
 
@@ -593,7 +600,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
             logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}")
             raise HTTPException(status_code=400, detail="Missing course configuration")
 
-        # Create grader
+        # Create grader and do GitHub checks FIRST (before Sheets connection)
         github_client = GitHubClient(GITHUB_TOKEN)
         grader = LabGrader(github_client)
 
@@ -601,7 +608,37 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         repo_name = f"{repo_prefix}-{username}"
         logger.info(f"Checking repository: {org}/{repo_name}")
 
-        # Connect to Google Sheets to get current cell value
+        # Step 1: Check repository (required files, workflows, commits)
+        repo_error = grader.check_repository(org, repo_name, lab_config_dict)
+        if repo_error:
+            logger.warning(f"Repository check failed: {repo_error.message}")
+            raise HTTPException(status_code=400, detail=repo_error.message)
+
+        # Step 2: Check forbidden file modifications
+        forbidden_error = grader.check_forbidden_files(org, repo_name, lab_config_dict)
+        if forbidden_error:
+            logger.warning(f"Forbidden modification: {forbidden_error.message}")
+            raise HTTPException(status_code=403, detail=forbidden_error.message)
+
+        # Step 3: Evaluate CI results
+        ci_evaluation = grader._evaluate_ci_internal(org, repo_name, lab_config_dict)
+
+        # Return early for errors (no Sheets needed)
+        if ci_evaluation.grade_result.status == GradeStatus.ERROR:
+            logger.warning(f"CI error: {ci_evaluation.grade_result.message}")
+            raise HTTPException(status_code=400, detail=ci_evaluation.grade_result.message)
+
+        # Return early for pending (no Sheets needed)
+        if ci_evaluation.grade_result.status == GradeStatus.PENDING:
+            logger.info(f"CI pending: {ci_evaluation.grade_result.message}")
+            return {
+                "status": "pending",
+                "message": ci_evaluation.grade_result.message,
+                "passed": ci_evaluation.grade_result.passed,
+                "checks": ci_evaluation.grade_result.checks
+            }
+
+        # CI evaluation complete - now connect to Sheets for writing result
         logger.info(f"Connecting to Google Sheets for group {group_id}")
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
         creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
@@ -648,77 +685,81 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         current_value = sheet.cell(row_idx, lab_col).value or ""
         logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
 
-        # Get deadline from spreadsheet (row 1, above lab header in row 2)
-        deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1)
-        if deadline:
-            logger.info(f"Found deadline for lab: {deadline}")
-        else:
-            logger.debug(f"No deadline found for lab at column {lab_col}")
+        # Determine final grade
+        final_result = ci_evaluation.grade_result.result  # "v" or "x"
+        final_message = ci_evaluation.grade_result.message
 
-        # Calculate expected TASKID if configured
-        expected_taskid = None
-        task_id_column_config = course_info.get("google", {}).get("task-id-column")
-        taskid_max = lab_config_dict.get("taskid-max")
-        ignore_taskid = lab_config_dict.get("ignore-task-id", False)
+        # Additional checks only if CI passed
+        if ci_evaluation.ci_passed:
+            # Check TASKID if configured
+            task_id_column_config = course_info.get("google", {}).get("task-id-column")
+            taskid_max = lab_config_dict.get("taskid-max")
+            ignore_taskid = lab_config_dict.get("ignore-task-id", False)
 
-        if task_id_column_config is not None and taskid_max is not None and not ignore_taskid:
-            # task_id_column is 0-based in config, convert to 1-based for gspread
-            task_id_column = task_id_column_config + 1
-            student_order = get_student_order(sheet, row_idx, task_id_column)
+            if task_id_column_config is not None and taskid_max is not None and not ignore_taskid:
+                task_id_column = task_id_column_config + 1
+                student_order = get_student_order(sheet, row_idx, task_id_column)
 
-            if student_order is not None:
-                taskid_shift = lab_config_dict.get("taskid-shift", 0)
-                expected_taskid = calculate_expected_taskid(student_order, taskid_shift, taskid_max)
-                logger.info(f"Expected TASKID: {expected_taskid} (order={student_order}, shift={taskid_shift}, max={taskid_max})")
-            else:
-                logger.warning(f"Could not get student order from column {task_id_column}, row {row_idx}")
-        else:
-            logger.debug(f"TASKID check skipped: task_id_column={task_id_column_config}, taskid_max={taskid_max}, ignore={ignore_taskid}")
+                if student_order is not None:
+                    taskid_shift = lab_config_dict.get("taskid-shift", 0)
+                    expected_taskid = calculate_expected_taskid(student_order, taskid_shift, taskid_max)
+                    logger.info(f"Expected TASKID: {expected_taskid} (order={student_order}, shift={taskid_shift}, max={taskid_max})")
 
-        # Run grading with deadline and TASKID validation
-        grade_result = grader.grade(
-            org, username, lab_config_dict,
-            current_cell_value=current_value,
-            deadline=deadline,
-            expected_taskid=expected_taskid,
-        )
+                    taskid_error = grader.check_taskid(
+                        org, repo_name,
+                        ci_evaluation.successful_runs,
+                        expected_taskid,
+                    )
+                    if taskid_error:
+                        logger.warning(f"TASKID error: {taskid_error.message}")
+                        raise HTTPException(status_code=400, detail=taskid_error.message)
 
-        # Handle different result statuses
-        if grade_result.status == GradeStatus.ERROR:
-            logger.warning(f"Grading error: {grade_result.message}")
-            raise HTTPException(status_code=400, detail=grade_result.message)
+            # Calculate penalty if deadline configured
+            deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1)
+            if deadline and ci_evaluation.latest_success_time:
+                from grading.penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
+                penalty_max = lab_config_dict.get("penalty-max", 0)
+                strategy_name = lab_config_dict.get("penalty-strategy", "weekly")
+                try:
+                    strategy = PenaltyStrategy(strategy_name)
+                except ValueError:
+                    strategy = PenaltyStrategy.WEEKLY
 
-        if grade_result.status == GradeStatus.PENDING:
-            logger.info(f"Grading pending: {grade_result.message}")
-            return {
-                "status": "pending",
-                "message": grade_result.message,
-                "passed": grade_result.passed,
-                "checks": grade_result.checks
-            }
+                penalty = calculate_penalty(
+                    completed_at=ci_evaluation.latest_success_time,
+                    deadline=deadline,
+                    penalty_max=penalty_max,
+                    strategy=strategy,
+                )
 
-        if grade_result.status == GradeStatus.REJECTED:
+                if penalty > 0:
+                    final_result = format_grade_with_penalty("v", penalty)
+                    final_message = f"Результат CI: ✅ Все проверки пройдены (штраф: -{penalty})"
+                    logger.info(f"Applied penalty {penalty} for late submission: {final_result}")
+
+        # Check cell protection
+        if not can_overwrite_cell(current_value):
             logger.warning(f"Update rejected: cell already contains '{current_value}'")
             return {
                 "status": "rejected",
-                "result": grade_result.result,
-                "message": grade_result.message,
-                "passed": grade_result.passed,
-                "checks": grade_result.checks,
-                "current_grade": grade_result.current_grade
+                "result": current_value,
+                "message": "⚠️ Работа уже была проверена ранее. Обратитесь к преподавателю для пересдачи.",
+                "passed": ci_evaluation.grade_result.passed,
+                "checks": ci_evaluation.grade_result.checks,
+                "current_grade": current_value
             }
 
         # Update Google Sheets with new grade
-        logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{grade_result.result}'")
-        sheet.update_cell(row_idx, lab_col, grade_result.result)
+        logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{final_result}'")
+        sheet.update_cell(row_idx, lab_col, final_result)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
 
         return {
             "status": "updated",
-            "result": grade_result.result,
-            "message": grade_result.message,
-            "passed": grade_result.passed,
-            "checks": grade_result.checks
+            "result": final_result,
+            "message": final_message,
+            "passed": ci_evaluation.grade_result.passed,
+            "checks": ci_evaluation.grade_result.checks
         }
     except HTTPException:
         raise
