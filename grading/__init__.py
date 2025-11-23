@@ -38,6 +38,7 @@ from .github_client import (
     GitHubClient,
     CommitInfo,
     check_forbidden_modifications,
+    check_forbidden_files_in_list,
     get_default_forbidden_patterns,
 )
 
@@ -49,6 +50,8 @@ from .sheets_client import (
     prepare_grade_update,
     get_deadline_from_sheet,
     get_student_order,
+    set_cell_warning,
+    format_forbidden_files_note,
     StudentLocation,
     LabColumn,
     GradeUpdate,
@@ -58,6 +61,7 @@ from .grader import (
     LabGrader,
     GradeResult,
     GradeStatus,
+    ForbiddenFilesWarning,
 )
 
 __all__ = [
@@ -83,6 +87,7 @@ __all__ = [
     "GitHubClient",
     "CommitInfo",
     "check_forbidden_modifications",
+    "check_forbidden_files_in_list",
     "get_default_forbidden_patterns",
     # sheets_client
     "find_student_row",
@@ -92,6 +97,8 @@ __all__ = [
     "prepare_grade_update",
     "get_deadline_from_sheet",
     "get_student_order",
+    "set_cell_warning",
+    "format_forbidden_files_note",
     "StudentLocation",
     "LabColumn",
     "GradeUpdate",
@@ -99,4 +106,5 @@ __all__ = [
     "LabGrader",
     "GradeResult",
     "GradeStatus",
+    "ForbiddenFilesWarning",
 ]

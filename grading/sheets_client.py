@@ -11,6 +11,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Yellow background color for warnings (RGB values 0-1)
+WARNING_BACKGROUND_COLOR = {
+    "red": 1.0,
+    "green": 0.95,
+    "blue": 0.6,
+}
+
 # Cell protection rules: these values can be overwritten
 OVERWRITABLE_VALUES = {"", "x", "?"}
 OVERWRITABLE_PREFIXES = ("?",)  # Cells starting with "?" can be overwritten
@@ -307,3 +314,77 @@ def get_student_order(
     except Exception as e:
         logger.error(f"Error reading task ID: {e}")
         return None
+
+
+def set_cell_warning(
+    worksheet,
+    row: int,
+    col: int,
+    note: str,
+) -> bool:
+    """
+    Set warning formatting on a cell: yellow background and note/comment.
+
+    Uses Google Sheets API batch_update for formatting and note update.
+
+    Args:
+        worksheet: gspread Worksheet object
+        row: 1-based row number
+        col: 1-based column number
+        note: Comment/note text to add to the cell
+
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        spreadsheet = worksheet.spreadsheet
+        sheet_id = worksheet.id
+
+        # Build batch update request for yellow background
+        requests = [
+            {
+                "repeatCell": {
+                    "range": {
+                        "sheetId": sheet_id,
+                        "startRowIndex": row - 1,
+                        "endRowIndex": row,
+                        "startColumnIndex": col - 1,
+                        "endColumnIndex": col,
+                    },
+                    "cell": {
+                        "userEnteredFormat": {
+                            "backgroundColor": WARNING_BACKGROUND_COLOR,
+                        },
+                        "note": note,
+                    },
+                    "fields": "userEnteredFormat.backgroundColor,note",
+                }
+            }
+        ]
+
+        spreadsheet.batch_update({"requests": requests})
+        logger.info(f"Set warning format on cell ({row}, {col})")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to set cell warning: {e}")
+        return False
+
+
+def format_forbidden_files_note(violations: list[str]) -> str:
+    """
+    Format a note/comment for forbidden file modifications.
+
+    Args:
+        violations: List of forbidden file paths that were modified
+
+    Returns:
+        Formatted note text
+
+    Examples:
+        >>> format_forbidden_files_note(["test_main.py"])
+        '⚠️ Изменены запрещённые файлы:\\n- test_main.py'
+    """
+    header = "⚠️ Изменены запрещённые файлы:"
+    files_list = "\n".join(f"- {f}" for f in violations)
+    return f"{header}\n{files_list}"

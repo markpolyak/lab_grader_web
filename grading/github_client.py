@@ -14,6 +14,7 @@ class CommitInfo:
     """Information about a commit."""
     sha: str
     files: list[dict[str, Any]]  # List of {filename, status, ...}
+    all_modified_files: list[str] | None = None  # All files modified across all commits
 
 
 @dataclass
@@ -196,6 +197,57 @@ class GitHubClient:
 
         return resp.text
 
+    def get_all_modified_files(self, org: str, repo: str) -> list[str]:
+        """
+        Get all files that were modified across all commits in the repository.
+
+        This iterates through all commits and collects unique file paths
+        that were added, modified, or removed.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+
+        Returns:
+            List of unique file paths that were modified in any commit
+        """
+        modified_files: set[str] = set()
+
+        # Get all commits (paginated)
+        page = 1
+        per_page = 100
+        while True:
+            url = f"{self.BASE_URL}/repos/{org}/{repo}/commits"
+            params = {"page": page, "per_page": per_page}
+            resp = requests.get(url, headers=self.headers, params=params)
+
+            if resp.status_code != 200:
+                break
+
+            commits = resp.json()
+            if not commits:
+                break
+
+            # Get details for each commit to see modified files
+            for commit_summary in commits:
+                commit_sha = commit_summary["sha"]
+                commit_url = f"{self.BASE_URL}/repos/{org}/{repo}/commits/{commit_sha}"
+                commit_resp = requests.get(commit_url, headers=self.headers)
+
+                if commit_resp.status_code == 200:
+                    commit_data = commit_resp.json()
+                    for file_info in commit_data.get("files", []):
+                        filename = file_info.get("filename", "")
+                        if filename:
+                            modified_files.add(filename)
+
+            # Check if there are more pages
+            if len(commits) < per_page:
+                break
+            page += 1
+
+        return list(modified_files)
+
 
 def check_forbidden_modifications(
     commit_files: list[dict[str, Any]],
@@ -226,6 +278,42 @@ def check_forbidden_modifications(
         if status not in ("removed", "modified"):
             continue
 
+        for pattern in forbidden_patterns:
+            # Exact match or prefix match (for directories like "tests/")
+            if filename == pattern or filename.startswith(pattern):
+                violations.append(filename)
+                break
+
+    return violations
+
+
+def check_forbidden_files_in_list(
+    all_files: list[str],
+    forbidden_patterns: list[str]
+) -> list[str]:
+    """
+    Check if any forbidden files are in the list of modified files.
+
+    Unlike check_forbidden_modifications, this works with a simple list of filenames
+    without status information. Use this when checking all files modified across
+    all commits in a repository.
+
+    Args:
+        all_files: List of file paths that were modified
+        forbidden_patterns: List of forbidden file paths or prefixes
+
+    Returns:
+        List of forbidden files that were found
+
+    Examples:
+        >>> check_forbidden_files_in_list(["test_main.py", "main.cpp"], ["test_main.py"])
+        ['test_main.py']
+        >>> check_forbidden_files_in_list(["tests/test1.py"], ["tests/"])
+        ['tests/test1.py']
+    """
+    violations = []
+
+    for filename in all_files:
         for pattern in forbidden_patterns:
             # Exact match or prefix match (for directories like "tests/")
             if filename == pattern or filename.startswith(pattern):

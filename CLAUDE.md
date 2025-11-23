@@ -79,7 +79,17 @@ labs:
         - cpplint
     files:                        # Required files in repo
       - lab2.cpp
+    forbidden-files:              # Files students can't modify (warning, not blocking)
+      - test_main.py              # Exact file match
+      - tests/                    # Directory prefix match
 ```
+
+### Forbidden Files Detection
+
+When `forbidden-files` is configured, the system checks ALL commits in the repository:
+- If violations found: grade is still written, but cell is highlighted yellow with a comment
+- Warning is shown to student on frontend
+- This helps detect students who modify test files to cheat
 
 ## CI/CD
 

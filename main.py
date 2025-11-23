@@ -19,6 +19,7 @@ from grading import (
     LabGrader,
     GitHubClient,
     GradeStatus,
+    ForbiddenFilesWarning,
     find_student_row,
     find_lab_column_by_name,
     calculate_lab_column,
@@ -26,6 +27,8 @@ from grading import (
     get_deadline_from_sheet,
     get_student_order,
     calculate_expected_taskid,
+    set_cell_warning,
+    format_forbidden_files_note,
 )
 
 # Configure logging to both file and console
@@ -616,11 +619,10 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
             status_code = 404 if repo_error.error_code == "NO_COMMITS" else 400
             raise HTTPException(status_code=status_code, detail=repo_error.message)
 
-        # Step 2: Check forbidden file modifications
-        forbidden_error = grader.check_forbidden_files(org, repo_name, lab_config_dict)
-        if forbidden_error:
-            logger.warning(f"Forbidden modification: {forbidden_error.message}")
-            raise HTTPException(status_code=403, detail=forbidden_error.message)
+        # Step 2: Check forbidden file modifications (warning, not blocking)
+        forbidden_warning = grader.check_forbidden_files(org, repo_name, lab_config_dict)
+        if forbidden_warning:
+            logger.warning(f"Forbidden files modified: {forbidden_warning.violations}")
 
         # Step 3: Evaluate CI results
         ci_evaluation = grader._evaluate_ci_internal(org, repo_name, lab_config_dict)
@@ -756,13 +758,29 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         sheet.update_cell(row_idx, lab_col, final_result)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
 
-        return {
+        # If there were forbidden file modifications, mark cell with warning
+        warning_data = None
+        if forbidden_warning:
+            note = format_forbidden_files_note(forbidden_warning.violations)
+            set_cell_warning(sheet, row_idx, lab_col, note)
+            logger.info(f"Added warning to cell for forbidden files: {forbidden_warning.violations}")
+            warning_data = {
+                "message": forbidden_warning.message,
+                "files": forbidden_warning.violations,
+            }
+
+        response = {
             "status": "updated",
             "result": final_result,
             "message": final_message,
             "passed": ci_evaluation.grade_result.passed,
-            "checks": ci_evaluation.grade_result.checks
+            "checks": ci_evaluation.grade_result.checks,
         }
+
+        if warning_data:
+            response["warning"] = warning_data
+
+        return response
     except HTTPException:
         raise
     except Exception as e:
