@@ -612,7 +612,9 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         repo_error = grader.check_repository(org, repo_name, lab_config_dict)
         if repo_error:
             logger.warning(f"Repository check failed: {repo_error.message}")
-            raise HTTPException(status_code=400, detail=repo_error.message)
+            # Use 404 for "no commits" to match original behavior
+            status_code = 404 if repo_error.error_code == "NO_COMMITS" else 400
+            raise HTTPException(status_code=status_code, detail=repo_error.message)
 
         # Step 2: Check forbidden file modifications
         forbidden_error = grader.check_forbidden_files(org, repo_name, lab_config_dict)
