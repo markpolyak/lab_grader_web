@@ -76,11 +76,12 @@ def filter_relevant_jobs(
     Filter CI jobs based on configuration.
 
     If configured_jobs is provided, only those jobs are included.
-    If None, all jobs are returned (preserves original behavior).
+    If None, jobs matching DEFAULT_JOB_NAMES are used.
+    If no matches found with defaults, all jobs are returned.
 
     Args:
         check_runs: List of all check runs
-        configured_jobs: List of job names from lab config (None = all jobs)
+        configured_jobs: List of job names from lab config (None = use defaults)
 
     Returns:
         Filtered list of check runs
@@ -89,14 +90,18 @@ def filter_relevant_jobs(
         >>> runs = [CheckRun("test", "success", "url1"), CheckRun("lint", "failure", "url2")]
         >>> filter_relevant_jobs(runs, ["test"])
         [CheckRun(name='test', ...)]
-        >>> filter_relevant_jobs(runs, None)  # Returns all
-        [CheckRun(...), CheckRun(...)]
     """
     if configured_jobs is not None:
         # Filter by explicitly configured jobs
         return [run for run in check_runs if run.name in configured_jobs]
 
-    # No filtering - return all jobs (original behavior)
+    # Try to find default jobs
+    default_matches = [run for run in check_runs if run.name in DEFAULT_JOB_NAMES]
+
+    if default_matches:
+        return default_matches
+
+    # If no default jobs found, return all (backwards compatibility)
     return check_runs
 
 
