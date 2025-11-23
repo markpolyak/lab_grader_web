@@ -96,10 +96,12 @@ class TestFilterRelevantJobs:
             CheckRun("build", "success", "url3"),
         ]
         filtered = filter_relevant_jobs(runs, None)
+        # Only default jobs returned (test, build are in DEFAULT_JOB_NAMES)
         assert len(filtered) == 2
         names = [r.name for r in filtered]
         assert "test" in names
         assert "build" in names
+        assert "random-job" not in names
 
     def test_no_defaults_found_returns_all(self):
         """If no default jobs match, return all jobs."""
@@ -111,12 +113,13 @@ class TestFilterRelevantJobs:
         assert len(filtered) == 2
 
     def test_partial_default_match(self):
-        """Return only matching default jobs."""
+        """Return only matching default jobs when some match."""
         runs = [
             CheckRun("test", "success", "url1"),
             CheckRun("custom-job", "success", "url2"),
         ]
         filtered = filter_relevant_jobs(runs, None)
+        # Only "test" matches DEFAULT_JOB_NAMES
         assert len(filtered) == 1
         assert filtered[0].name == "test"
 

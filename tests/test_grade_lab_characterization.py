@@ -130,13 +130,14 @@ class TestGradeLabCharacterization:
             json={"sha": "abc123", "files": []},
             status=200
         )
+        # Note: "build" is in DEFAULT_JOB_NAMES, so it will be checked along with "test"
         responses.add(
             responses.GET,
             f"https://api.github.com/repos/{org}/{repo_name}/commits/abc123/check-runs",
             json={
                 "check_runs": [
                     {"name": "test", "conclusion": "success", "html_url": "http://test"},
-                    {"name": "lint", "conclusion": "failure", "html_url": "http://lint"}
+                    {"name": "build", "conclusion": "failure", "html_url": "http://build"}
                 ]
             },
             status=200
