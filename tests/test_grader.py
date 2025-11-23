@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import MagicMock
 
-from grading.grader import LabGrader, GradeResult
+from grading.grader import LabGrader, GradeResult, GradeStatus
 from grading.github_client import GitHubClient, CommitInfo
 
 
@@ -32,7 +32,7 @@ class TestLabGraderCheckRepository:
         result = grader.check_repository("org", "lab1-user", config)
 
         assert result is not None
-        assert result.status == "error"
+        assert result.status == GradeStatus.ERROR
         assert "main.cpp" in result.message
 
     def test_all_files_exist(self, grader, mock_github):
@@ -54,7 +54,7 @@ class TestLabGraderCheckRepository:
         result = grader.check_repository("org", "lab1-user", basic_config)
 
         assert result is not None
-        assert result.status == "error"
+        assert result.status == GradeStatus.ERROR
         assert "workflows" in result.message.lower()
 
     def test_no_commits(self, grader, mock_github, basic_config):
@@ -66,7 +66,7 @@ class TestLabGraderCheckRepository:
         result = grader.check_repository("org", "lab1-user", basic_config)
 
         assert result is not None
-        assert result.status == "error"
+        assert result.status == GradeStatus.ERROR
         assert "коммит" in result.message.lower()
 
 
@@ -104,7 +104,7 @@ class TestLabGraderCheckForbiddenFiles:
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
         assert result is not None
-        assert result.status == "error"
+        assert result.status == GradeStatus.ERROR
         assert "test_main.py" in result.message
 
     def test_tests_folder_modified(self, grader, mock_github):
@@ -118,7 +118,7 @@ class TestLabGraderCheckForbiddenFiles:
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
         assert result is not None
-        assert result.status == "error"
+        assert result.status == GradeStatus.ERROR
         assert "tests/" in result.message
 
 
@@ -149,7 +149,7 @@ class TestLabGraderEvaluateCI:
 
         result = grader.evaluate_ci("org", "lab1-user", config)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
         assert "2/2" in result.passed
 
@@ -165,7 +165,7 @@ class TestLabGraderEvaluateCI:
 
         result = grader.evaluate_ci("org", "lab1-user", config)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "x"
         assert "1/2" in result.passed
 
@@ -178,7 +178,7 @@ class TestLabGraderEvaluateCI:
 
         result = grader.evaluate_ci("org", "lab1-user", basic_config)
 
-        assert result.status == "pending"
+        assert result.status == GradeStatus.PENDING
         assert result.result is None
 
     def test_no_check_runs(self, grader, mock_github, basic_config):
@@ -188,7 +188,7 @@ class TestLabGraderEvaluateCI:
 
         result = grader.evaluate_ci("org", "lab1-user", basic_config)
 
-        assert result.status == "pending"
+        assert result.status == GradeStatus.PENDING
 
     def test_configured_jobs_filter(self, grader, mock_github):
         """Test that only configured jobs are evaluated."""
@@ -202,7 +202,7 @@ class TestLabGraderEvaluateCI:
         result = grader.evaluate_ci("org", "lab1-user", config)
 
         # Only "test" should be evaluated, which passed
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
         assert "1/1" in result.passed
 
@@ -233,7 +233,7 @@ class TestLabGraderGrade:
 
         result = grader.grade("org", "student1", basic_config)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
 
     def test_cell_protection_rejects_update(self, grader, mock_github, basic_config):
@@ -248,7 +248,7 @@ class TestLabGraderGrade:
         # Cell already has grade "v"
         result = grader.grade("org", "student1", basic_config, current_cell_value="v")
 
-        assert result.status == "rejected"
+        assert result.status == GradeStatus.REJECTED
         assert result.current_grade == "v"
 
     def test_cell_with_x_allows_update(self, grader, mock_github, basic_config):
@@ -262,7 +262,7 @@ class TestLabGraderGrade:
 
         result = grader.grade("org", "student1", basic_config, current_cell_value="x")
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
 
     def test_cell_with_question_mark_allows_update(self, grader, mock_github, basic_config):
@@ -276,7 +276,7 @@ class TestLabGraderGrade:
 
         result = grader.grade("org", "student1", basic_config, current_cell_value="?! Wrong TASKID")
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
 
     def test_stops_on_repository_error(self, grader, mock_github, basic_config):
@@ -286,7 +286,7 @@ class TestLabGraderGrade:
 
         result = grader.grade("org", "student1", basic_config)
 
-        assert result.status == "error"
+        assert result.status == GradeStatus.ERROR
         assert "workflows" in result.message.lower()
         # CI should not be called
         mock_github.get_check_runs.assert_not_called()
@@ -322,7 +322,7 @@ class TestLabGraderPenalty:
 
         result = grader.grade("org", "student1", config, deadline=deadline)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
         assert "-" not in result.result
 
@@ -337,7 +337,7 @@ class TestLabGraderPenalty:
 
         result = grader.grade("org", "student1", config, deadline=deadline)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v-2"  # 10 days = 2 weeks
         assert "штраф" in result.message.lower()
 
@@ -352,7 +352,7 @@ class TestLabGraderPenalty:
 
         result = grader.grade("org", "student1", config, deadline=deadline)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v-5"  # Capped at 5
 
     def test_no_deadline_no_penalty(self, grader, mock_github):
@@ -362,7 +362,7 @@ class TestLabGraderPenalty:
 
         result = grader.grade("org", "student1", config, deadline=None)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
 
 
@@ -399,7 +399,7 @@ class TestLabGraderTaskId:
 
         result = grader.grade("org", "student1", config, expected_taskid=5)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
 
     def test_taskid_mismatch(self, grader, mock_github):
@@ -410,7 +410,7 @@ class TestLabGraderTaskId:
 
         result = grader.grade("org", "student1", config, expected_taskid=5)
 
-        assert result.status == "error"
+        assert result.status == GradeStatus.ERROR
         assert result.result == "?! Wrong TASKID!"
         assert "вариант" in result.message.lower()
 
@@ -422,7 +422,7 @@ class TestLabGraderTaskId:
 
         result = grader.grade("org", "student1", config, expected_taskid=5)
 
-        assert result.status == "error"
+        assert result.status == GradeStatus.ERROR
         assert result.result == "?! Wrong TASKID!"
         assert "не найден" in result.message.lower()
 
@@ -434,7 +434,7 @@ class TestLabGraderTaskId:
 
         result = grader.grade("org", "student1", config, expected_taskid=5)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
         # Logs should not be fetched
         mock_github.get_job_logs.assert_not_called()
@@ -446,7 +446,7 @@ class TestLabGraderTaskId:
 
         result = grader.grade("org", "student1", config, expected_taskid=None)
 
-        assert result.status == "updated"
+        assert result.status == GradeStatus.UPDATED
         assert result.result == "v"
         # Logs should not be fetched
         mock_github.get_job_logs.assert_not_called()

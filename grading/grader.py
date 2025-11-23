@@ -7,6 +7,7 @@ all grading operations: GitHub checks, CI evaluation, and result formatting.
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from .github_client import (
@@ -29,15 +30,24 @@ from .taskid import extract_taskid_from_logs, calculate_expected_taskid, validat
 logger = logging.getLogger(__name__)
 
 
+class GradeStatus(Enum):
+    """Possible grading outcomes."""
+    UPDATED = "updated"      # Grade successfully determined
+    REJECTED = "rejected"    # Cell protected, grade not written
+    PENDING = "pending"      # CI checks not complete
+    ERROR = "error"          # Error during grading
+
+
 @dataclass
 class GradeResult:
     """Result of a grading operation."""
-    status: str  # "updated", "rejected", "pending", "error"
+    status: GradeStatus
     result: str | None  # Grade value: "v", "x", "v-3", etc.
     message: str  # User-facing message
     passed: str | None  # "3/4 тестов пройдено"
     checks: list[str] = field(default_factory=list)  # CI check summaries
     current_grade: str | None = None  # Existing grade if rejected
+    error_code: str | None = None  # For programmatic error handling
 
 
 @dataclass
@@ -97,29 +107,32 @@ class LabGrader:
             missing = self.github.check_required_files(org, repo_name, required_files)
             if missing:
                 return GradeResult(
-                    status="error",
+                    status=GradeStatus.ERROR,
                     result=None,
                     message=f"⚠️ Файл {missing[0]} не найден в репозитории",
                     passed=None,
+                    error_code="MISSING_FILES",
                 )
 
         # Check workflows directory
         if not self.github.has_workflows_directory(org, repo_name):
             return GradeResult(
-                status="error",
+                status=GradeStatus.ERROR,
                 result=None,
                 message="⚠️ Папка .github/workflows не найдена. CI не настроен",
                 passed=None,
+                error_code="NO_WORKFLOWS",
             )
 
         # Check for commits
         commit = self.github.get_latest_commit(org, repo_name)
         if commit is None:
             return GradeResult(
-                status="error",
+                status=GradeStatus.ERROR,
                 result=None,
                 message="Нет коммитов в репозитории",
                 passed=None,
+                error_code="NO_COMMITS",
             )
 
         return None
@@ -160,25 +173,28 @@ class LabGrader:
             # Return error for first violation
             if "test_main.py" in violations:
                 return GradeResult(
-                    status="error",
+                    status=GradeStatus.ERROR,
                     result=None,
                     message="🚨 Нельзя изменять test_main.py",
                     passed=None,
+                    error_code="FORBIDDEN_MODIFICATION",
                 )
             for v in violations:
                 if v.startswith("tests/"):
                     return GradeResult(
-                        status="error",
+                        status=GradeStatus.ERROR,
                         result=None,
                         message="🚨 Нельзя изменять папку tests/",
                         passed=None,
+                        error_code="FORBIDDEN_MODIFICATION",
                     )
             # Generic message for other forbidden files
             return GradeResult(
-                status="error",
+                status=GradeStatus.ERROR,
                 result=None,
                 message=f"🚨 Нельзя изменять файл {violations[0]}",
                 passed=None,
+                error_code="FORBIDDEN_MODIFICATION",
             )
 
         return None
@@ -230,28 +246,31 @@ class LabGrader:
 
         if taskid_error:
             return GradeResult(
-                status="error",
+                status=GradeStatus.ERROR,
                 result=None,
                 message=f"⚠️ {taskid_error}",
                 passed=None,
+                error_code="MULTIPLE_TASKIDS",
             )
 
         if taskid_found is None:
             return GradeResult(
-                status="error",
+                status=GradeStatus.ERROR,
                 result="?! Wrong TASKID!",
                 message="⚠️ TASKID не найден в логах. Убедитесь, что программа выводит номер варианта.",
                 passed=None,
+                error_code="TASKID_NOT_FOUND",
             )
 
         is_valid, error_msg = validate_taskid(taskid_found, expected_taskid)
         if not is_valid:
             logger.warning(f"Wrong TASKID for {repo_name}: found {taskid_found}, expected {expected_taskid}")
             return GradeResult(
-                status="error",
+                status=GradeStatus.ERROR,
                 result="?! Wrong TASKID!",
                 message=f"⚠️ {error_msg}. Вы выполнили чужой вариант!",
                 passed=None,
+                error_code="WRONG_TASKID",
             )
 
         logger.info(f"TASKID validated: {taskid_found} matches expected {expected_taskid}")
@@ -281,7 +300,7 @@ class LabGrader:
         if commit is None:
             return CIEvaluation(
                 grade_result=GradeResult(
-                    status="error",
+                    status=GradeStatus.ERROR,
                     result=None,
                     message="Нет коммитов в репозитории",
                     passed=None,
@@ -294,7 +313,7 @@ class LabGrader:
         if check_runs_data is None:
             return CIEvaluation(
                 grade_result=GradeResult(
-                    status="error",
+                    status=GradeStatus.ERROR,
                     result=None,
                     message="Проверки CI не найдены",
                     passed=None,
@@ -305,7 +324,7 @@ class LabGrader:
         if not check_runs_data:
             return CIEvaluation(
                 grade_result=GradeResult(
-                    status="pending",
+                    status=GradeStatus.PENDING,
                     result=None,
                     message="Нет активных CI-проверок ⏳",
                     passed=None,
@@ -321,7 +340,7 @@ class LabGrader:
         if not relevant_runs:
             return CIEvaluation(
                 grade_result=GradeResult(
-                    status="pending",
+                    status=GradeStatus.PENDING,
                     result=None,
                     message="Нет активных CI-проверок ⏳",
                     passed=None,
@@ -335,7 +354,7 @@ class LabGrader:
         if ci_result.has_pending:
             return CIEvaluation(
                 grade_result=GradeResult(
-                    status="pending",
+                    status=GradeStatus.PENDING,
                     result=None,
                     message="CI-проверки ещё выполняются ⏳",
                     passed=format_ci_result_string(ci_result.passed_count, ci_result.total_count),
@@ -358,7 +377,7 @@ class LabGrader:
 
         return CIEvaluation(
             grade_result=GradeResult(
-                status="updated",
+                status=GradeStatus.UPDATED,
                 result=final_result,
                 message=message,
                 passed=result_string,
@@ -438,7 +457,7 @@ class LabGrader:
         ci_evaluation = self._evaluate_ci_internal(org, repo_name, lab_config)
 
         # If CI is pending or error, return as-is
-        if ci_evaluation.grade_result.status != "updated":
+        if ci_evaluation.grade_result.status != GradeStatus.UPDATED:
             return ci_evaluation.grade_result
 
         # If CI failed, return failure without TASKID/penalty checks
@@ -484,7 +503,7 @@ class LabGrader:
         if current_cell_value is not None:
             if not can_overwrite_cell(current_cell_value):
                 return GradeResult(
-                    status="rejected",
+                    status=GradeStatus.REJECTED,
                     result=current_cell_value,
                     message="⚠️ Работа уже была проверена ранее. Обратитесь к преподавателю для пересдачи.",
                     passed=ci_evaluation.grade_result.passed,
@@ -499,7 +518,7 @@ class LabGrader:
             message = ci_evaluation.grade_result.message
 
         return GradeResult(
-            status="updated",
+            status=GradeStatus.UPDATED,
             result=final_result,
             message=message,
             passed=ci_evaluation.grade_result.passed,

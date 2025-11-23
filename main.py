@@ -18,6 +18,7 @@ from datetime import datetime
 from grading import (
     LabGrader,
     GitHubClient,
+    GradeStatus,
     find_student_row,
     find_lab_column_by_name,
     calculate_lab_column,
@@ -683,11 +684,11 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         )
 
         # Handle different result statuses
-        if grade_result.status == "error":
+        if grade_result.status == GradeStatus.ERROR:
             logger.warning(f"Grading error: {grade_result.message}")
             raise HTTPException(status_code=400, detail=grade_result.message)
 
-        if grade_result.status == "pending":
+        if grade_result.status == GradeStatus.PENDING:
             logger.info(f"Grading pending: {grade_result.message}")
             return {
                 "status": "pending",
@@ -696,7 +697,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
                 "checks": grade_result.checks
             }
 
-        if grade_result.status == "rejected":
+        if grade_result.status == GradeStatus.REJECTED:
             logger.warning(f"Update rejected: cell already contains '{current_value}'")
             return {
                 "status": "rejected",

@@ -57,6 +57,7 @@ from .sheets_client import (
 from .grader import (
     LabGrader,
     GradeResult,
+    GradeStatus,
 )
 
 __all__ = [
@@ -97,4 +98,5 @@ __all__ = [
     # grader
     "LabGrader",
     "GradeResult",
+    "GradeStatus",
 ]
