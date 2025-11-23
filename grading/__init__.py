@@ -7,6 +7,7 @@ This module contains functions for various aspects of lab grading:
 - ci_checker: Evaluate CI check results
 - github_client: GitHub API client
 - sheets_client: Google Sheets helpers
+- grader: Orchestrator for grading workflow
 """
 
 from .penalty import (
@@ -46,6 +47,8 @@ from .sheets_client import (
     calculate_lab_column,
     can_overwrite_cell,
     prepare_grade_update,
+    get_deadline_from_sheet,
+    get_student_order,
     StudentLocation,
     LabColumn,
     GradeUpdate,
@@ -55,8 +58,6 @@ from .grader import (
     LabGrader,
     GradeResult,
     GradeStatus,
-    RepoValidationResult,
-    build_repo_name,
 )
 
 __all__ = [
@@ -89,6 +90,8 @@ __all__ = [
     "calculate_lab_column",
     "can_overwrite_cell",
     "prepare_grade_update",
+    "get_deadline_from_sheet",
+    "get_student_order",
     "StudentLocation",
     "LabColumn",
     "GradeUpdate",
@@ -96,6 +99,4 @@ __all__ = [
     "LabGrader",
     "GradeResult",
     "GradeStatus",
-    "RepoValidationResult",
-    "build_repo_name",
 ]

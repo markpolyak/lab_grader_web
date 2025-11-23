@@ -19,8 +19,12 @@ def extract_taskid_from_logs(logs: str) -> TaskIdResult:
     """
     Extract TASKID from GitHub Actions job logs.
 
-    Looks for lines containing "TASKID is <number>" pattern.
-    GitHub Actions logs have timestamps at the beginning of each line.
+    Looks for lines starting with "TASKID is <number>" pattern (after GitHub timestamp).
+    GitHub Actions logs have timestamps at the beginning of each line like:
+    "2024-01-15T10:30:00.000Z TASKID is 15"
+
+    Important: Only matches TASKID at the START of line content (after timestamp).
+    Lines with "TASKID is" in the middle are ignored (e.g., "Some text TASKID is 99").
 
     Args:
         logs: Full text of the job logs
@@ -38,12 +42,13 @@ def extract_taskid_from_logs(logs: str) -> TaskIdResult:
     if not logs:
         return TaskIdResult(found=None, error="Логи пусты")
 
-    # Pattern: "TASKID is <number>" anywhere in line
-    # GitHub Actions adds timestamp prefix like "2024-01-15T10:30:00.000Z "
-    # But TASKID can also appear without timestamp in some cases
-    pattern = r'TASKID\s+is\s+(\d+)'
+    # Pattern: timestamp at line start, then "TASKID is <number>"
+    # GitHub Actions timestamp format: "2024-01-15T10:30:00.000Z " or "2024-01-15T10:30:00.1234567Z "
+    # Only matches TASKID at the start of line content (after timestamp)
+    # Does NOT match "Some text TASKID is 99" in the middle of a line
+    pattern = r'^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s+TASKID\s+is\s+(\d+)'
 
-    matches = re.findall(pattern, logs, re.IGNORECASE)
+    matches = re.findall(pattern, logs, re.MULTILINE | re.IGNORECASE)
 
     if len(matches) == 0:
         return TaskIdResult(found=None, error="TASKID не найден в логах")

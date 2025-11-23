@@ -37,21 +37,41 @@ class TestExtractTaskIdFromLogs:
         assert result.found == 7
         assert result.error is None
 
-    def test_taskid_without_timestamp(self):
-        """Extract TASKID without GitHub timestamp prefix."""
+    def test_taskid_without_timestamp_not_matched(self):
+        """TASKID without GitHub timestamp prefix is NOT matched."""
         logs = "TASKID is 42\nSome other output"
         result = extract_taskid_from_logs(logs)
-        assert result.found == 42
+        assert result.found is None
+        assert "не найден" in result.error
 
     def test_taskid_case_insensitive(self):
         """TASKID matching is case insensitive."""
-        logs = "taskid is 5\n"
+        logs = "2024-01-15T10:30:00.000Z taskid is 5\n"
         result = extract_taskid_from_logs(logs)
         assert result.found == 5
 
-        logs = "TaskId Is 10\n"
+        logs = "2024-01-15T10:30:00.000Z TaskId Is 10\n"
         result = extract_taskid_from_logs(logs)
         assert result.found == 10
+
+    def test_taskid_in_middle_of_line_ignored(self):
+        """TASKID in middle of line should NOT be matched."""
+        logs = """2024-01-15T10:30:00.000Z Some text TASKID is 99 more text
+2024-01-15T10:30:01.000Z Another line with TASKID is 88 embedded"""
+        result = extract_taskid_from_logs(logs)
+        # Neither should match - both are in the middle of lines
+        assert result.found is None
+        assert "не найден" in result.error
+
+    def test_taskid_at_start_matches_middle_ignored(self):
+        """Only TASKID at start of line (after timestamp) matches."""
+        logs = """2024-01-15T10:30:00.000Z Some text TASKID is 99 more text
+2024-01-15T10:30:01.000Z TASKID is 5
+2024-01-15T10:30:02.000Z Another TASKID is 88 embedded"""
+        result = extract_taskid_from_logs(logs)
+        # Only the second line matches (TASKID at start after timestamp)
+        assert result.found == 5
+        assert result.error is None
 
     def test_taskid_not_found(self):
         """Error when no TASKID in logs."""
@@ -85,7 +105,7 @@ class TestExtractTaskIdFromLogs:
 
     def test_taskid_with_extra_whitespace(self):
         """TASKID with extra whitespace still matched."""
-        logs = "TASKID  is   15\n"
+        logs = "2024-01-15T10:30:00.000Z TASKID  is   15\n"
         result = extract_taskid_from_logs(logs)
         assert result.found == 15
 
