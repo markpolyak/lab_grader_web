@@ -13,6 +13,7 @@ from typing import Any
 from .github_client import (
     GitHubClient,
     check_forbidden_modifications,
+    check_forbidden_files_in_list,
     get_default_forbidden_patterns,
 )
 from .ci_checker import (
@@ -57,6 +58,13 @@ class CIEvaluation:
     ci_passed: bool  # Whether all CI checks passed
     successful_runs: list[CheckRun] = field(default_factory=list)  # For TASKID extraction
     latest_success_time: datetime | None = None  # For penalty calculation
+
+
+@dataclass
+class ForbiddenFilesWarning:
+    """Warning about forbidden file modifications (not blocking)."""
+    violations: list[str]  # List of forbidden files that were modified
+    message: str  # User-facing warning message
 
 
 class LabGrader:
@@ -142,9 +150,12 @@ class LabGrader:
         org: str,
         repo_name: str,
         lab_config: dict[str, Any]
-    ) -> GradeResult | None:
+    ) -> ForbiddenFilesWarning | None:
         """
-        Check for forbidden file modifications.
+        Check for forbidden file modifications across all commits.
+
+        This method checks ALL commits in the repository, not just the latest one,
+        to detect any forbidden file modifications.
 
         Args:
             org: GitHub organization
@@ -152,49 +163,35 @@ class LabGrader:
             lab_config: Lab configuration dict from YAML
 
         Returns:
-            GradeResult with error if violation found, None otherwise
+            ForbiddenFilesWarning with violations if found, None otherwise
         """
-        commit = self.github.get_latest_commit(org, repo_name)
-        if commit is None:
-            return None
-
-        # Get forbidden patterns from config or defaults
-        required_files = lab_config.get("files", [])
-        forbidden = lab_config.get("forbidden-modifications", []).copy()
-        if not forbidden:
-            forbidden = get_default_forbidden_patterns(required_files)
+        # Get forbidden patterns from config (new field: forbidden-files)
+        forbidden = lab_config.get("forbidden-files", [])
 
         if not forbidden:
             return None
 
-        violations = check_forbidden_modifications(commit.files, forbidden)
+        # Get ALL modified files across all commits
+        all_modified = self.github.get_all_modified_files(org, repo_name)
+
+        if not all_modified:
+            return None
+
+        violations = check_forbidden_files_in_list(all_modified, forbidden)
 
         if violations:
-            # Return error for first violation
-            if "test_main.py" in violations:
-                return GradeResult(
-                    status=GradeStatus.ERROR,
-                    result=None,
-                    message="🚨 Нельзя изменять test_main.py",
-                    passed=None,
-                    error_code="FORBIDDEN_MODIFICATION",
-                )
-            for v in violations:
-                if v.startswith("tests/"):
-                    return GradeResult(
-                        status=GradeStatus.ERROR,
-                        result=None,
-                        message="🚨 Нельзя изменять папку tests/",
-                        passed=None,
-                        error_code="FORBIDDEN_MODIFICATION",
-                    )
-            # Generic message for other forbidden files
-            return GradeResult(
-                status=GradeStatus.ERROR,
-                result=None,
-                message=f"🚨 Нельзя изменять файл {violations[0]}",
-                passed=None,
-                error_code="FORBIDDEN_MODIFICATION",
+            # Build warning message
+            if len(violations) == 1:
+                message = f"⚠️ Обнаружено изменение запрещённого файла: {violations[0]}"
+            else:
+                files_str = ", ".join(violations[:3])
+                if len(violations) > 3:
+                    files_str += f" и ещё {len(violations) - 3}"
+                message = f"⚠️ Обнаружены изменения запрещённых файлов: {files_str}"
+
+            return ForbiddenFilesWarning(
+                violations=violations,
+                message=message,
             )
 
         return None

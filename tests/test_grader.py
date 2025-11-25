@@ -83,43 +83,56 @@ class TestLabGraderCheckForbiddenFiles:
 
     def test_no_violations(self, grader, mock_github):
         """Test success when no forbidden files are modified."""
-        config = {"github-prefix": "lab1", "files": ["test_main.py"]}
-        mock_github.get_latest_commit.return_value = CommitInfo(
-            sha="abc123",
-            files=[{"filename": "main.cpp", "status": "modified"}]
-        )
+        config = {"github-prefix": "lab1", "forbidden-files": ["test_main.py"]}
+        mock_github.get_all_modified_files.return_value = ["main.cpp", "lib.cpp"]
 
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
         assert result is None
 
+    def test_no_forbidden_files_config(self, grader, mock_github):
+        """Test returns None when forbidden-files not configured."""
+        config = {"github-prefix": "lab1"}  # No forbidden-files key
+
+        result = grader.check_forbidden_files("org", "lab1-user", config)
+
+        assert result is None
+        mock_github.get_all_modified_files.assert_not_called()
+
     def test_test_main_modified(self, grader, mock_github):
-        """Test error when test_main.py is modified."""
-        config = {"github-prefix": "lab1", "files": ["test_main.py"]}
-        mock_github.get_latest_commit.return_value = CommitInfo(
-            sha="abc123",
-            files=[{"filename": "test_main.py", "status": "modified"}]
-        )
+        """Test warning when test_main.py is modified."""
+        config = {"github-prefix": "lab1", "forbidden-files": ["test_main.py"]}
+        mock_github.get_all_modified_files.return_value = ["main.cpp", "test_main.py"]
 
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
         assert result is not None
-        assert result.status == GradeStatus.ERROR
         assert "test_main.py" in result.message
+        assert result.violations == ["test_main.py"]
 
     def test_tests_folder_modified(self, grader, mock_github):
-        """Test error when tests/ folder is modified."""
-        config = {"github-prefix": "lab1", "files": ["test_main.py"]}
-        mock_github.get_latest_commit.return_value = CommitInfo(
-            sha="abc123",
-            files=[{"filename": "tests/test_unit.py", "status": "removed"}]
-        )
+        """Test warning when tests/ folder is modified."""
+        config = {"github-prefix": "lab1", "forbidden-files": ["tests/"]}
+        mock_github.get_all_modified_files.return_value = ["main.cpp", "tests/test_unit.py"]
 
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
         assert result is not None
-        assert result.status == GradeStatus.ERROR
-        assert "tests/" in result.message
+        assert "tests/test_unit.py" in result.violations
+
+    def test_multiple_violations(self, grader, mock_github):
+        """Test warning with multiple forbidden files."""
+        config = {"github-prefix": "lab1", "forbidden-files": ["test_main.py", "tests/"]}
+        mock_github.get_all_modified_files.return_value = [
+            "main.cpp", "test_main.py", "tests/helper.py"
+        ]
+
+        result = grader.check_forbidden_files("org", "lab1-user", config)
+
+        assert result is not None
+        assert len(result.violations) == 2
+        assert "test_main.py" in result.violations
+        assert "tests/helper.py" in result.violations
 
 
 class TestLabGraderEvaluateCI:
