@@ -231,10 +231,10 @@ class LabGrader:
         for run in successful_runs:
             logger.info(f"Checking job: {run.name} (conclusion: {run.conclusion})")
 
-            # Extract job ID from html_url (format: .../jobs/12345)
-            if "/jobs/" in run.html_url:
+            # Extract job ID from html_url (format: .../job/12345)
+            if "/job/" in run.html_url:
                 try:
-                    job_id = int(run.html_url.split("/jobs/")[-1].split("?")[0])
+                    job_id = int(run.html_url.split("/job/")[-1].split("?")[0])
                     logger.info(f"  Job ID: {job_id}, URL: {run.html_url}")
                 except (ValueError, IndexError):
                     logger.warning(f"  Could not extract job_id from URL: {run.html_url}")
@@ -259,7 +259,7 @@ class LabGrader:
                 else:
                     logger.warning(f"  Could not fetch logs for job {job_id}")
             else:
-                logger.warning(f"  Job URL doesn't contain /jobs/: {run.html_url}")
+                logger.warning(f"  Job URL doesn't contain /job/: {run.html_url}")
 
         if taskid_error:
             return GradeResult(
