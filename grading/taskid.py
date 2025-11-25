@@ -39,6 +39,9 @@ def extract_taskid_from_logs(logs: str) -> TaskIdResult:
         >>> result.error is None
         True
     """
+    import logging
+    logger = logging.getLogger(__name__)
+
     if not logs:
         return TaskIdResult(found=None, error="Логи пусты")
 
@@ -51,16 +54,22 @@ def extract_taskid_from_logs(logs: str) -> TaskIdResult:
     matches = re.findall(pattern, logs, re.MULTILINE | re.IGNORECASE)
 
     if len(matches) == 0:
+        # Check if there are any lines with "TASKID" (for debugging)
+        taskid_mentions = len([line for line in logs.split('\n') if 'TASKID' in line.upper()])
+        if taskid_mentions > 0:
+            logger.debug(f"Found {taskid_mentions} line(s) mentioning TASKID, but none match the required pattern")
         return TaskIdResult(found=None, error="TASKID не найден в логах")
 
     # Check all matches are the same (multiple outputs of same TASKID is OK)
     unique_ids = set(int(m) for m in matches)
     if len(unique_ids) > 1:
+        logger.warning(f"Multiple different TASKIDs found: {sorted(unique_ids)}")
         return TaskIdResult(
             found=None,
             error=f"Найдено несколько разных TASKID в логах: {sorted(unique_ids)}. Обратитесь к преподавателю."
         )
 
+    logger.debug(f"TASKID extracted from logs: {int(matches[0])} (found {len(matches)} occurrence(s))")
     return TaskIdResult(found=int(matches[0]))
 
 

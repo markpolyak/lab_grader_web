@@ -224,7 +224,8 @@ def prepare_grade_update(
 def get_deadline_from_sheet(
     worksheet,
     lab_col: int,
-    deadline_row: int = 1
+    deadline_row: int = 1,
+    timezone_str: str | None = None,
 ) -> datetime | None:
     """
     Get deadline datetime from spreadsheet.
@@ -235,16 +236,21 @@ def get_deadline_from_sheet(
         worksheet: gspread Worksheet object
         lab_col: 1-based column number of the lab
         deadline_row: Row number containing deadline (default 1)
+        timezone_str: Timezone string (e.g., "UTC+3", "UTC-5") to apply if date is naive
 
     Returns:
-        datetime object or None if not found/parseable
+        datetime object with timezone or None if not found/parseable
 
     Supported formats:
         - "DD.MM.YYYY" (e.g., "15.03.2025")
         - "DD.MM.YYYY HH:MM" (e.g., "15.03.2025 23:59")
         - "YYYY-MM-DD" (e.g., "2025-03-15")
         - "YYYY-MM-DDTHH:MM:SS" (ISO format)
+        - Dates with timezone info (e.g., "2025-03-15T23:59:59+03:00")
     """
+    from datetime import timezone, timedelta
+    import re
+
     try:
         cell_value = worksheet.cell(deadline_row, lab_col).value
         if not cell_value:
@@ -262,14 +268,36 @@ def get_deadline_from_sheet(
             "%Y-%m-%dT%H:%M:%S",    # ISO format
         ]
 
+        parsed_dt = None
         for fmt in formats:
             try:
-                return datetime.strptime(cell_value, fmt)
+                parsed_dt = datetime.strptime(cell_value, fmt)
+                break
             except ValueError:
                 continue
 
-        logger.warning(f"Could not parse deadline '{cell_value}' at row {deadline_row}, col {lab_col}")
-        return None
+        if parsed_dt is None:
+            logger.warning(f"Could not parse deadline '{cell_value}' at row {deadline_row}, col {lab_col}")
+            return None
+
+        # If datetime already has timezone info, return as-is
+        if parsed_dt.tzinfo is not None:
+            logger.debug(f"Deadline already has timezone: {parsed_dt}")
+            return parsed_dt
+
+        # If no timezone and timezone_str provided, apply it
+        if timezone_str:
+            # Parse timezone string like "UTC+3" or "UTC-5"
+            match = re.match(r'UTC([+-]\d+)', timezone_str)
+            if match:
+                offset_hours = int(match.group(1))
+                tz = timezone(timedelta(hours=offset_hours))
+                parsed_dt = parsed_dt.replace(tzinfo=tz)
+                logger.debug(f"Applied timezone {timezone_str} to deadline: {parsed_dt}")
+            else:
+                logger.warning(f"Could not parse timezone string '{timezone_str}', using naive datetime")
+
+        return parsed_dt
     except Exception as e:
         logger.error(f"Error reading deadline: {e}")
         return None

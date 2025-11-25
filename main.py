@@ -717,7 +717,9 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
                         raise HTTPException(status_code=400, detail=taskid_error.message)
 
             # Calculate penalty if deadline configured
-            deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1)
+            # Get timezone from course config to apply to deadline from sheet
+            timezone_str = course_info.get("timezone")
+            deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1, timezone_str=timezone_str)
             if deadline and ci_evaluation.latest_success_time:
                 from grading.penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
                 penalty_max = lab_config_dict.get("penalty-max", 0)
