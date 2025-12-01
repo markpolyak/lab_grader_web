@@ -27,16 +27,46 @@ function formatValidationError(err) {
 
 export const fetchCourses = async () => {
   const response = await fetch(`${API_BASE_URL}/courses`);
+  if (response.status === 429) {
+    let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
+    try {
+      const data = await response.json();
+      errorMessage = data.detail || data.message || errorMessage;
+    } catch (e) {
+      // Если не удалось распарсить JSON, используем сообщение по умолчанию
+    }
+    throw new Error(errorMessage);
+  }
   return response.json();
 };
 
 export const fetchCourseDetails = async (courseId) => {
   const response = await fetch(`${API_BASE_URL}/courses/${courseId}`);
+  if (response.status === 429) {
+    let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
+    try {
+      const data = await response.json();
+      errorMessage = data.detail || data.message || errorMessage;
+    } catch (e) {
+      // Если не удалось распарсить JSON, используем сообщение по умолчанию
+    }
+    throw new Error(errorMessage);
+  }
   return response.json();
 };
 
 export const fetchGroups = async (courseId) => {
   const response = await fetch(`${API_BASE_URL}/courses/${courseId}/groups`);
+  if (response.status === 429) {
+    let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
+    try {
+      const data = await response.json();
+      errorMessage = data.detail || data.message || errorMessage;
+    } catch (e) {
+      // Если не удалось распарсить JSON, используем сообщение по умолчанию
+    }
+    throw new Error(errorMessage);
+  }
   return response.json();
 };
 
@@ -44,6 +74,16 @@ export const fetchLabs = async (courseId, groupId) => {
   const response = await fetch(
     `${API_BASE_URL}/courses/${courseId}/groups/${groupId}/labs`
   );
+  if (response.status === 429) {
+    let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
+    try {
+      const data = await response.json();
+      errorMessage = data.detail || data.message || errorMessage;
+    } catch (e) {
+      // Если не удалось распарсить JSON, используем сообщение по умолчанию
+    }
+    throw new Error(errorMessage);
+  }
   return response.json();
 };
 
@@ -58,6 +98,18 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
       body: JSON.stringify(formData),
     }
   );
+
+  // Обрабатываем 429 Rate Limit как специальный случай (до парсинга JSON)
+  if (response.status === 429) {
+    let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
+    try {
+      const data = await response.json();
+      errorMessage = data.detail || data.message || errorMessage;
+    } catch (e) {
+      // Если не удалось распарсить JSON, используем сообщение по умолчанию
+    }
+    throw new Error(errorMessage);
+  }
 
   const data = await response.json();
 
@@ -98,6 +150,18 @@ export async function gradeLab(courseId, groupId, labId, github) {
       body: JSON.stringify({ github }),
     }
   );
+
+  // Обрабатываем 429 Rate Limit как специальный случай (до парсинга JSON)
+  if (response.status === 429) {
+    let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
+    try {
+      const data = await response.json();
+      errorMessage = data.detail || data.message || errorMessage;
+    } catch (e) {
+      // Если не удалось распарсить JSON, используем сообщение по умолчанию
+    }
+    throw new Error(errorMessage);
+  }
 
   const data = await response.json();
 
