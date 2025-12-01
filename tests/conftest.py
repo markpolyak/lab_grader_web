@@ -20,19 +20,39 @@ def mock_env_vars(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def disable_rate_limiting():
-    """Disable rate limiting in tests by patching the limiter."""
+def disable_rate_limiting(request):
+    """Disable rate limiting in tests by patching the limiter.
+    
+    By default, rate limiting is disabled for all tests to avoid interference.
+    To test rate limiting functionality, mark your test with @pytest.mark.rate_limit.
+    """
+    # Check if test is marked to test rate limiting
+    if request.node.get_closest_marker("rate_limit"):
+        # Don't disable rate limiting for this test
+        yield
+        return
+    
     # Patch limiter after main module is imported
-    # Use patch which works even if the object doesn't exist yet
-    # Accept all arguments to match the original method signature
-    def noop_check(*args, **kwargs):
+    # We need to patch _check_request_limit to do nothing
+    # and also ensure view_rate_limit is set to avoid AttributeError
+    
+    def noop_check(self, request, func, sync):
         """No-op function to disable rate limiting in tests."""
-        pass
+        # Set view_rate_limit to avoid AttributeError in wrapper
+        if hasattr(request, 'state') and not hasattr(request.state, 'view_rate_limit'):
+            request.state.view_rate_limit = None
     
     patcher = patch('main.limiter._check_request_limit', noop_check)
     patcher.start()
     yield
     patcher.stop()
+
+
+def pytest_configure(config):
+    """Register custom pytest markers."""
+    config.addinivalue_line(
+        "markers", "rate_limit: mark test to enable rate limiting (for testing rate limit functionality)"
+    )
 
 
 @pytest.fixture
@@ -125,6 +145,12 @@ def mock_request():
     
     # Create a real Request instance
     request = Request(scope, receive)
+    
+    # Initialize state attribute that slowapi expects
+    # This is needed even when rate limiting is disabled
+    if not hasattr(request.state, 'view_rate_limit'):
+        request.state.view_rate_limit = None
+    
     return request
 
 
