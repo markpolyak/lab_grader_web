@@ -19,6 +19,17 @@ def mock_env_vars(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "test_secret_key")
 
 
+@pytest.fixture(autouse=True)
+def disable_rate_limiting():
+    """Disable rate limiting in tests by patching the limiter."""
+    # Patch limiter after main module is imported
+    # Use patch which works even if the object doesn't exist yet
+    patcher = patch('main.limiter._check_request_limit', lambda self, request, func, sync: None)
+    patcher.start()
+    yield
+    patcher.stop()
+
+
 @pytest.fixture
 def sample_course_config():
     """Sample course configuration for testing."""
