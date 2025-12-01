@@ -36,13 +36,17 @@ def disable_rate_limiting(request):
     # We need to patch _check_request_limit to do nothing
     # and also ensure view_rate_limit is set to avoid AttributeError
     
-    def noop_check(self, request, func, sync):
+    def noop_check(*args, **kwargs):
         """No-op function to disable rate limiting in tests."""
-        # Set view_rate_limit to avoid AttributeError in wrapper
-        if hasattr(request, 'state') and not hasattr(request.state, 'view_rate_limit'):
-            request.state.view_rate_limit = None
+        # Extract request from args (it's the second argument: self, request, func, sync)
+        if len(args) >= 2:
+            request = args[1]
+            # Set view_rate_limit to avoid AttributeError in wrapper
+            if hasattr(request, 'state') and not hasattr(request.state, 'view_rate_limit'):
+                request.state.view_rate_limit = None
     
-    patcher = patch('main.limiter._check_request_limit', noop_check)
+    # Patch using the full path to the method
+    patcher = patch('main.limiter._check_request_limit', noop_check, create=False)
     patcher.start()
     yield
     patcher.stop()
