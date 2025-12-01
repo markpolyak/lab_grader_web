@@ -37,7 +37,8 @@ class TestGradeLabCharacterization:
         mock_get_course_by_id,
         mock_gspread,
         mock_service_account_creds,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test successful grading when all CI checks pass."""
         org = sample_course_config["github"]["organization"]
@@ -85,8 +86,8 @@ class TestGradeLabCharacterization:
 
         # Import and call
         from main import grade_lab, GradeRequest
-        request = GradeRequest(github="testuser")
-        result = grade_lab("test-course", "group1", "ЛР1", request)
+        grade_request = GradeRequest(github="testuser")
+        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert result["status"] == "updated"
         assert result["result"] == "v"
@@ -99,7 +100,8 @@ class TestGradeLabCharacterization:
         mock_get_course_by_id,
         mock_gspread,
         mock_service_account_creds,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test grading when some CI checks fail."""
         org = sample_course_config["github"]["organization"]
@@ -147,8 +149,8 @@ class TestGradeLabCharacterization:
         mock_gspread['worksheet'].col_values.return_value = ["", "", "testuser"]
 
         from main import grade_lab, GradeRequest
-        request = GradeRequest(github="testuser")
-        result = grade_lab("test-course", "group1", "ЛР1", request)
+        grade_request = GradeRequest(github="testuser")
+        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert result["status"] == "updated"
         assert result["result"] == "x"
@@ -158,7 +160,8 @@ class TestGradeLabCharacterization:
     def test_missing_test_main_py(
         self,
         mock_get_course_by_id,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test error when test_main.py is missing."""
         org = sample_course_config["github"]["organization"]
@@ -174,9 +177,9 @@ class TestGradeLabCharacterization:
         from main import grade_lab, GradeRequest
         from fastapi import HTTPException
 
-        request = GradeRequest(github="testuser")
+        grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab("test-course", "group1", "ЛР1", request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert exc_info.value.status_code == 400
         assert "test_main.py" in exc_info.value.detail
@@ -185,7 +188,8 @@ class TestGradeLabCharacterization:
     def test_missing_workflows(
         self,
         mock_get_course_by_id,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test error when .github/workflows is missing."""
         org = sample_course_config["github"]["organization"]
@@ -207,9 +211,9 @@ class TestGradeLabCharacterization:
         from main import grade_lab, GradeRequest
         from fastapi import HTTPException
 
-        request = GradeRequest(github="testuser")
+        grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab("test-course", "group1", "ЛР1", request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert exc_info.value.status_code == 400
         assert "workflows" in exc_info.value.detail.lower()
@@ -218,7 +222,8 @@ class TestGradeLabCharacterization:
     def test_no_commits(
         self,
         mock_get_course_by_id,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test error when repository has no commits."""
         org = sample_course_config["github"]["organization"]
@@ -246,9 +251,9 @@ class TestGradeLabCharacterization:
         from main import grade_lab, GradeRequest
         from fastapi import HTTPException
 
-        request = GradeRequest(github="testuser")
+        grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab("test-course", "group1", "ЛР1", request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert exc_info.value.status_code == 404
         assert "коммит" in exc_info.value.detail.lower()
@@ -257,7 +262,8 @@ class TestGradeLabCharacterization:
     def test_forbidden_test_file_modification(
         self,
         mock_get_course_by_id,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test error when student modifies test_main.py."""
         org = sample_course_config["github"]["organization"]
@@ -294,9 +300,9 @@ class TestGradeLabCharacterization:
         from main import grade_lab, GradeRequest
         from fastapi import HTTPException
 
-        request = GradeRequest(github="testuser")
+        grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab("test-course", "group1", "ЛР1", request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert exc_info.value.status_code == 403
         assert "test_main.py" in exc_info.value.detail
@@ -305,7 +311,8 @@ class TestGradeLabCharacterization:
     def test_forbidden_tests_folder_modification(
         self,
         mock_get_course_by_id,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test error when student modifies tests/ folder."""
         org = sample_course_config["github"]["organization"]
@@ -342,9 +349,9 @@ class TestGradeLabCharacterization:
         from main import grade_lab, GradeRequest
         from fastapi import HTTPException
 
-        request = GradeRequest(github="testuser")
+        grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab("test-course", "group1", "ЛР1", request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert exc_info.value.status_code == 403
         assert "tests" in exc_info.value.detail.lower()
@@ -353,7 +360,8 @@ class TestGradeLabCharacterization:
     def test_no_ci_checks_pending(
         self,
         mock_get_course_by_id,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test that empty check_runs returns pending status."""
         org = sample_course_config["github"]["organization"]
@@ -391,8 +399,8 @@ class TestGradeLabCharacterization:
         )
 
         from main import grade_lab, GradeRequest
-        request = GradeRequest(github="testuser")
-        result = grade_lab("test-course", "group1", "ЛР1", request)
+        grade_request = GradeRequest(github="testuser")
+        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert result["status"] == "pending"
         assert "⏳" in result["message"]
@@ -403,7 +411,8 @@ class TestGradeLabCharacterization:
         mock_get_course_by_id,
         mock_gspread,
         mock_service_account_creds,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Test error when GitHub user not found in spreadsheet."""
         org = sample_course_config["github"]["organization"]
@@ -448,14 +457,14 @@ class TestGradeLabCharacterization:
         from main import grade_lab, GradeRequest
         from fastapi import HTTPException
 
-        request = GradeRequest(github="unknownuser")
+        grade_request = GradeRequest(github="unknownuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab("test-course", "group1", "ЛР1", request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
         assert exc_info.value.status_code == 404
         assert "не найден" in exc_info.value.detail.lower()
 
-    def test_missing_course_configuration(self):
+    def test_missing_course_configuration(self, mock_request):
         """Test error when course configuration is incomplete."""
         with patch('main.get_course_by_id') as mock:
             mock.return_value = {
@@ -468,9 +477,9 @@ class TestGradeLabCharacterization:
             from main import grade_lab, GradeRequest
             from fastapi import HTTPException
 
-            request = GradeRequest(github="testuser")
+            grade_request = GradeRequest(github="testuser")
             with pytest.raises(HTTPException) as exc_info:
-                grade_lab("test-course", "group1", "ЛР1", request)
+                grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
             assert exc_info.value.status_code == 400
 
@@ -487,7 +496,8 @@ class TestGradeLabResponseFormat:
         self,
         mock_gspread,
         mock_service_account_creds,
-        sample_course_config
+        sample_course_config,
+        mock_request
     ):
         """Verify success response has all expected fields."""
         with patch('main.get_course_by_id', return_value=sample_course_config):
@@ -506,8 +516,8 @@ class TestGradeLabResponseFormat:
             mock_gspread['worksheet'].col_values.return_value = ["", "", "testuser"]
 
             from main import grade_lab, GradeRequest
-            request = GradeRequest(github="testuser")
-            result = grade_lab("test-course", "group1", "ЛР1", request)
+            grade_request = GradeRequest(github="testuser")
+            result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
             # Verify response structure
             assert "status" in result

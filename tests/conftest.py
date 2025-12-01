@@ -91,6 +91,28 @@ def mock_service_account_creds():
 
 
 @pytest.fixture
+def mock_request():
+    """Mock FastAPI Request object for rate limiting."""
+    from starlette.requests import Request
+    
+    # Create a real Request object with minimal scope
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/test",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+    }
+    
+    async def receive():
+        return {"type": "http.request"}
+    
+    # Create a real Request instance
+    request = Request(scope, receive)
+    return request
+
+
+@pytest.fixture
 def github_api_success_responses():
     """Standard successful GitHub API responses."""
     return {
