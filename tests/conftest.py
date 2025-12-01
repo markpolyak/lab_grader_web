@@ -24,7 +24,12 @@ def disable_rate_limiting():
     """Disable rate limiting in tests by patching the limiter."""
     # Patch limiter after main module is imported
     # Use patch which works even if the object doesn't exist yet
-    patcher = patch('main.limiter._check_request_limit', lambda self, request, func, sync: None)
+    # Accept all arguments to match the original method signature
+    def noop_check(*args, **kwargs):
+        """No-op function to disable rate limiting in tests."""
+        pass
+    
+    patcher = patch('main.limiter._check_request_limit', noop_check)
     patcher.start()
     yield
     patcher.stop()
