@@ -24,6 +24,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY main.py .
 COPY requirements.txt .
 COPY courses/ courses/
+COPY grading/ grading/
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app

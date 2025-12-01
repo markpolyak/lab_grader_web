@@ -386,7 +386,7 @@ class TestLabGraderTaskId:
             {
                 "name": "test",
                 "conclusion": "success",
-                "html_url": f"https://github.com/org/repo/actions/runs/1/jobs/{job_id}",
+                "html_url": f"https://github.com/org/repo/actions/runs/1/job/{job_id}",
                 "completed_at": "2024-03-14T10:00:00Z"
             },
         ]
