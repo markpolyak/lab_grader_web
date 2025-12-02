@@ -84,7 +84,11 @@ class TestLabGraderCheckForbiddenFiles:
     def test_no_violations(self, grader, mock_github):
         """Test success when no forbidden files are modified."""
         config = {"github-prefix": "lab1", "forbidden-files": ["test_main.py"]}
-        mock_github.get_all_modified_files.return_value = ["main.cpp", "lib.cpp"]
+        # Mock commits with author info - student modified only allowed files
+        mock_github.get_commits_with_authors.return_value = [
+            {"sha": "abc123", "author_login": "student123", "files": ["main.cpp", "lib.cpp"]}
+        ]
+        mock_github.is_org_admin.return_value = False  # student is not admin
 
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
@@ -97,12 +101,16 @@ class TestLabGraderCheckForbiddenFiles:
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
         assert result is None
-        mock_github.get_all_modified_files.assert_not_called()
+        mock_github.get_commits_with_authors.assert_not_called()
 
     def test_test_main_modified(self, grader, mock_github):
-        """Test warning when test_main.py is modified."""
+        """Test warning when test_main.py is modified by student."""
         config = {"github-prefix": "lab1", "forbidden-files": ["test_main.py"]}
-        mock_github.get_all_modified_files.return_value = ["main.cpp", "test_main.py"]
+        # Student modified forbidden file
+        mock_github.get_commits_with_authors.return_value = [
+            {"sha": "abc123", "author_login": "student123", "files": ["main.cpp", "test_main.py"]}
+        ]
+        mock_github.is_org_admin.return_value = False  # student is not admin
 
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
@@ -111,9 +119,12 @@ class TestLabGraderCheckForbiddenFiles:
         assert result.violations == ["test_main.py"]
 
     def test_tests_folder_modified(self, grader, mock_github):
-        """Test warning when tests/ folder is modified."""
+        """Test warning when tests/ folder is modified by student."""
         config = {"github-prefix": "lab1", "forbidden-files": ["tests/"]}
-        mock_github.get_all_modified_files.return_value = ["main.cpp", "tests/test_unit.py"]
+        mock_github.get_commits_with_authors.return_value = [
+            {"sha": "abc123", "author_login": "student123", "files": ["main.cpp", "tests/test_unit.py"]}
+        ]
+        mock_github.is_org_admin.return_value = False
 
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
@@ -123,9 +134,10 @@ class TestLabGraderCheckForbiddenFiles:
     def test_multiple_violations(self, grader, mock_github):
         """Test warning with multiple forbidden files."""
         config = {"github-prefix": "lab1", "forbidden-files": ["test_main.py", "tests/"]}
-        mock_github.get_all_modified_files.return_value = [
-            "main.cpp", "test_main.py", "tests/helper.py"
+        mock_github.get_commits_with_authors.return_value = [
+            {"sha": "abc123", "author_login": "student123", "files": ["main.cpp", "test_main.py", "tests/helper.py"]}
         ]
+        mock_github.is_org_admin.return_value = False
 
         result = grader.check_forbidden_files("org", "lab1-user", config)
 
@@ -133,6 +145,42 @@ class TestLabGraderCheckForbiddenFiles:
         assert len(result.violations) == 2
         assert "test_main.py" in result.violations
         assert "tests/helper.py" in result.violations
+
+    def test_instructor_commits_ignored(self, grader, mock_github):
+        """Test that instructor commits are excluded from checks."""
+        config = {"github-prefix": "lab1", "forbidden-files": ["test_main.py"]}
+        # Two commits: one from instructor, one from student
+        mock_github.get_commits_with_authors.return_value = [
+            {"sha": "abc123", "author_login": "professor", "files": ["test_main.py"]},
+            {"sha": "def456", "author_login": "student123", "files": ["main.cpp"]}
+        ]
+        # Mock org admin check - professor is admin, student is not
+        def is_admin_side_effect(org, username):
+            return username == "professor"
+        mock_github.is_org_admin.side_effect = is_admin_side_effect
+
+        result = grader.check_forbidden_files("org", "lab1-user", config)
+
+        # No violations because only instructor modified test_main.py
+        assert result is None
+
+    def test_mixed_commits_only_student_violations(self, grader, mock_github):
+        """Test that only student violations are reported when instructor also modified files."""
+        config = {"github-prefix": "lab1", "forbidden-files": ["test_main.py", "tests/"]}
+        mock_github.get_commits_with_authors.return_value = [
+            {"sha": "abc123", "author_login": "professor", "files": ["test_main.py", "tests/test1.py"]},
+            {"sha": "def456", "author_login": "student123", "files": ["main.cpp", "tests/test2.py"]}
+        ]
+        def is_admin_side_effect(org, username):
+            return username == "professor"
+        mock_github.is_org_admin.side_effect = is_admin_side_effect
+
+        result = grader.check_forbidden_files("org", "lab1-user", config)
+
+        # Only student's modification of tests/ should be reported
+        assert result is not None
+        assert result.violations == ["tests/test2.py"]
+        assert "test_main.py" not in result.violations  # This was modified by instructor
 
 
 class TestLabGraderEvaluateCI:

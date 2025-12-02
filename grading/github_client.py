@@ -197,21 +197,69 @@ class GitHubClient:
 
         return resp.text
 
-    def get_all_modified_files(self, org: str, repo: str) -> list[str]:
+    def is_org_admin(self, org: str, username: str) -> bool:
         """
-        Get all files that were modified across all commits in the repository.
+        Check if a user is an admin of the organization.
 
-        This iterates through all commits and collects unique file paths
-        that were added, modified, or removed.
+        This is used to distinguish instructor commits from student commits.
+        Only commits from org admins are considered "instructor commits" and
+        are excluded from forbidden file checks.
+
+        Args:
+            org: Organization name
+            username: GitHub username to check
+
+        Returns:
+            True if user is an admin, False otherwise
+
+        Note:
+            Returns False if user is not a member, or if API call fails.
+            Students should NOT be org admins in GitHub Classroom setup.
+        """
+        if not username:
+            return False
+
+        # Check membership and role
+        url = f"{self.BASE_URL}/orgs/{org}/memberships/{username}"
+        resp = requests.get(url, headers=self.headers)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            role = data.get("role")
+            # Only admins are considered instructors
+            return role == "admin"
+
+        # Not a member or API error - assume student
+        return False
+
+    def get_commits_with_authors(self, org: str, repo: str) -> list[dict[str, Any]]:
+        """
+        Get all commits with author information and modified files.
+
+        This iterates through all commits and returns detailed information
+        including author GitHub login and modified files.
 
         Args:
             org: Organization or user name
             repo: Repository name
 
         Returns:
-            List of unique file paths that were modified in any commit
+            List of dicts with keys:
+                - sha: commit SHA
+                - author_login: GitHub username (or None if no GitHub author)
+                - files: list of modified file paths
+
+        Example:
+            [
+                {
+                    "sha": "abc123",
+                    "author_login": "student123",
+                    "files": ["main.cpp", "test.cpp"]
+                },
+                ...
+            ]
         """
-        modified_files: set[str] = set()
+        commits_info = []
 
         # Get all commits (paginated)
         page = 1
@@ -228,23 +276,56 @@ class GitHubClient:
             if not commits:
                 break
 
-            # Get details for each commit to see modified files
+            # Get details for each commit
             for commit_summary in commits:
                 commit_sha = commit_summary["sha"]
+
+                # Extract author login (GitHub user)
+                author_login = None
+                if commit_summary.get("author"):
+                    author_login = commit_summary["author"].get("login")
+
+                # Get commit details with files
                 commit_url = f"{self.BASE_URL}/repos/{org}/{repo}/commits/{commit_sha}"
                 commit_resp = requests.get(commit_url, headers=self.headers)
 
                 if commit_resp.status_code == 200:
                     commit_data = commit_resp.json()
-                    for file_info in commit_data.get("files", []):
-                        filename = file_info.get("filename", "")
-                        if filename:
-                            modified_files.add(filename)
+                    files = [f.get("filename") for f in commit_data.get("files", []) if f.get("filename")]
+
+                    commits_info.append({
+                        "sha": commit_sha,
+                        "author_login": author_login,
+                        "files": files,
+                    })
 
             # Check if there are more pages
             if len(commits) < per_page:
                 break
             page += 1
+
+        return commits_info
+
+    def get_all_modified_files(self, org: str, repo: str) -> list[str]:
+        """
+        Get all files that were modified across all commits in the repository.
+
+        This iterates through all commits and collects unique file paths
+        that were added, modified, or removed.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+
+        Returns:
+            List of unique file paths that were modified in any commit
+        """
+        commits = self.get_commits_with_authors(org, repo)
+        modified_files: set[str] = set()
+
+        for commit in commits:
+            for filename in commit["files"]:
+                modified_files.add(filename)
 
         return list(modified_files)
 
