@@ -32,3 +32,9 @@ courses:
     status: "active"
     priority: 90
     logo: "/courses/logos/mlb-2025_logo.png"
+
+  - id: "fs-2025-autumn"
+    file: "fundamental-statistics-2025.yaml"
+    status: "active"
+    priority: 90
+    logo: "/courses/logos/fs-2025_logo.png"
