@@ -142,7 +142,10 @@ course:
             taskid-max: 20
             penalty-max: 7
             ci:
-                - workflows
+                workflows:
+                    - run-autograding-tests
+                    - build (MINGW64, MinGW Makefiles)
+                    - build (MSVC, Visual Studio 17 2022)
             files:
                 - lab3.cpp
             moss:

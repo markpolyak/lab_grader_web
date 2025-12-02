@@ -10,19 +10,25 @@ import {
 import { CardTitle, MainContainer } from "../../../theme";
 import { ButtonBack } from "../course-list/styled";
 import { Breadcrumb } from "../breadcrumb";
+import { Snackbar, Alert } from "@mui/material";
 
 export const LabList = ({ courseId, groupId, onSelectLab, onBack }) => {
   const [labs, setLabs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     setLoading(true);
+    setError(null);
     fetchLabs(courseId, groupId)
       .then((data) => {
         setLabs(data);
         setLoading(false);
       })
-      .catch(() => setLoading(false));
+      .catch((err) => {
+        setLoading(false);
+        setError(err.message || "Ошибка при загрузке лабораторных работ");
+      });
   }, [courseId, groupId]);
 
   return (
@@ -42,6 +48,16 @@ export const LabList = ({ courseId, groupId, onSelectLab, onBack }) => {
           ))}
         </CardContainer>
       )}
+      <Snackbar
+        open={!!error}
+        autoHideDuration={6000}
+        onClose={() => setError(null)}
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+      >
+        <Alert onClose={() => setError(null)} severity="error" sx={{ width: "100%" }}>
+          {error}
+        </Alert>
+      </Snackbar>
     </MainContainer>
   );
 };

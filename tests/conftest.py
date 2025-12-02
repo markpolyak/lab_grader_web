@@ -19,6 +19,46 @@ def mock_env_vars(monkeypatch):
     monkeypatch.setenv("SECRET_KEY", "test_secret_key")
 
 
+@pytest.fixture(autouse=True)
+def disable_rate_limiting(request):
+    """Disable rate limiting in tests by patching the limiter.
+    
+    By default, rate limiting is disabled for all tests to avoid interference.
+    To test rate limiting functionality, mark your test with @pytest.mark.rate_limit.
+    """
+    # Check if test is marked to test rate limiting
+    if request.node.get_closest_marker("rate_limit"):
+        # Don't disable rate limiting for this test
+        yield
+        return
+    
+    # Patch limiter after main module is imported
+    # We need to patch _check_request_limit to do nothing
+    # and also ensure view_rate_limit is set to avoid AttributeError
+    
+    def noop_check(*args, **kwargs):
+        """No-op function to disable rate limiting in tests."""
+        # Extract request from args (it's the second argument: self, request, func, sync)
+        if len(args) >= 2:
+            request = args[1]
+            # Set view_rate_limit to avoid AttributeError in wrapper
+            if hasattr(request, 'state') and not hasattr(request.state, 'view_rate_limit'):
+                request.state.view_rate_limit = None
+    
+    # Patch using the full path to the method
+    patcher = patch('main.limiter._check_request_limit', noop_check, create=False)
+    patcher.start()
+    yield
+    patcher.stop()
+
+
+def pytest_configure(config):
+    """Register custom pytest markers."""
+    config.addinivalue_line(
+        "markers", "rate_limit: mark test to enable rate limiting (for testing rate limit functionality)"
+    )
+
+
 @pytest.fixture
 def sample_course_config():
     """Sample course configuration for testing."""
@@ -88,6 +128,34 @@ def mock_service_account_creds():
     with patch('main.ServiceAccountCredentials') as mock_creds:
         mock_creds.from_json_keyfile_name.return_value = MagicMock()
         yield mock_creds
+
+
+@pytest.fixture
+def mock_request():
+    """Mock FastAPI Request object for rate limiting."""
+    from starlette.requests import Request
+    
+    # Create a real Request object with minimal scope
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": "/test",
+        "headers": [],
+        "client": ("127.0.0.1", 12345),
+    }
+    
+    async def receive():
+        return {"type": "http.request"}
+    
+    # Create a real Request instance
+    request = Request(scope, receive)
+    
+    # Initialize state attribute that slowapi expects
+    # This is needed even when rate limiting is disabled
+    if not hasattr(request.state, 'view_rate_limit'):
+        request.state.view_rate_limit = None
+    
+    return request
 
 
 @pytest.fixture
