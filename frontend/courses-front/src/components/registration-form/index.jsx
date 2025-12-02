@@ -47,11 +47,12 @@ const handleSubmit = async () => {
 
       if (gradeResponse.status === "updated") {
         setCheckResult({
-          type: "success",
+          type: gradeResponse.warning ? "warning" : "success",
           message: gradeResponse.message,
           result: gradeResponse.result,
           passed: gradeResponse.passed,
           checks: gradeResponse.checks,
+          warning: gradeResponse.warning,
         });
       } else if (gradeResponse.status === "rejected") {
         setCheckResult({
@@ -206,6 +207,36 @@ const handleSubmit = async () => {
                   {check}
                 </div>
               ))}
+            </div>
+          )}
+
+          {checkResult.warning && (
+            <div style={{
+              marginTop: "12px",
+              padding: "12px",
+              borderRadius: "6px",
+              backgroundColor: "#fff8e1",
+              border: `1px solid ${colors.edit}`,
+            }}>
+              <div style={{
+                fontSize: "14px",
+                fontWeight: "500",
+                marginBottom: "8px",
+                color: "#e65100",
+              }}>
+                {checkResult.warning.message}
+              </div>
+              {checkResult.warning.files && checkResult.warning.files.length > 0 && (
+                <div style={{
+                  fontSize: "13px",
+                  color: colors.textSecondary,
+                  fontFamily: "monospace",
+                }}>
+                  {checkResult.warning.files.map((file, index) => (
+                    <div key={index}>• {file}</div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>

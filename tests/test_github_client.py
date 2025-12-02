@@ -14,6 +14,7 @@ from grading.github_client import (
     GitHubClient,
     CommitInfo,
     check_forbidden_modifications,
+    check_forbidden_files_in_list,
     get_default_forbidden_patterns,
 )
 
@@ -334,6 +335,173 @@ class TestGetDefaultForbiddenPatterns:
         """Empty required files means no patterns."""
         patterns = get_default_forbidden_patterns([])
         assert patterns == []
+
+
+class TestCheckForbiddenFilesInList:
+    """Tests for check_forbidden_files_in_list function."""
+
+    def test_no_violations(self):
+        """No violations when files don't match patterns."""
+        files = ["main.py", "utils.py", "lib/helper.py"]
+        violations = check_forbidden_files_in_list(files, ["test_main.py", "tests/"])
+        assert violations == []
+
+    def test_exact_match(self):
+        """Detect exact filename match."""
+        files = ["main.py", "test_main.py", "utils.py"]
+        violations = check_forbidden_files_in_list(files, ["test_main.py"])
+        assert violations == ["test_main.py"]
+
+    def test_prefix_match(self):
+        """Detect prefix match for directories."""
+        files = ["main.py", "tests/test_example.py", "tests/helper.py"]
+        violations = check_forbidden_files_in_list(files, ["tests/"])
+        assert len(violations) == 2
+        assert "tests/test_example.py" in violations
+        assert "tests/helper.py" in violations
+
+    def test_multiple_patterns(self):
+        """Multiple patterns detected."""
+        files = ["test_main.py", "tests/test.py", "main.py"]
+        violations = check_forbidden_files_in_list(files, ["test_main.py", "tests/"])
+        assert len(violations) == 2
+        assert "test_main.py" in violations
+        assert "tests/test.py" in violations
+
+    def test_empty_files_list(self):
+        """Empty files list returns no violations."""
+        violations = check_forbidden_files_in_list([], ["test_main.py"])
+        assert violations == []
+
+    def test_empty_patterns_list(self):
+        """Empty patterns list returns no violations."""
+        violations = check_forbidden_files_in_list(["test_main.py"], [])
+        assert violations == []
+
+
+class TestGitHubClientGetAllModifiedFiles:
+    """Tests for get_all_modified_files method."""
+
+    @responses.activate
+    def test_single_commit(self):
+        """Get modified files from single commit."""
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits",
+            json=[{"sha": "abc123"}],
+            status=200
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits/abc123",
+            json={
+                "sha": "abc123",
+                "files": [
+                    {"filename": "main.py"},
+                    {"filename": "test_main.py"}
+                ]
+            },
+            status=200
+        )
+        client = GitHubClient("test_token")
+        files = client.get_all_modified_files("org", "repo")
+
+        assert len(files) == 2
+        assert "main.py" in files
+        assert "test_main.py" in files
+
+    @responses.activate
+    def test_multiple_commits(self):
+        """Get modified files from multiple commits."""
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits",
+            json=[{"sha": "abc123"}, {"sha": "def456"}],
+            status=200
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits/abc123",
+            json={
+                "sha": "abc123",
+                "files": [{"filename": "main.py"}]
+            },
+            status=200
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits/def456",
+            json={
+                "sha": "def456",
+                "files": [{"filename": "test_main.py"}]
+            },
+            status=200
+        )
+        client = GitHubClient("test_token")
+        files = client.get_all_modified_files("org", "repo")
+
+        assert len(files) == 2
+        assert "main.py" in files
+        assert "test_main.py" in files
+
+    @responses.activate
+    def test_duplicate_files_across_commits(self):
+        """Duplicate files across commits are deduplicated."""
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits",
+            json=[{"sha": "abc123"}, {"sha": "def456"}],
+            status=200
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits/abc123",
+            json={
+                "sha": "abc123",
+                "files": [{"filename": "main.py"}]
+            },
+            status=200
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits/def456",
+            json={
+                "sha": "def456",
+                "files": [{"filename": "main.py"}]  # Same file
+            },
+            status=200
+        )
+        client = GitHubClient("test_token")
+        files = client.get_all_modified_files("org", "repo")
+
+        assert len(files) == 1
+        assert "main.py" in files
+
+    @responses.activate
+    def test_no_commits(self):
+        """No commits returns empty list."""
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits",
+            json=[],
+            status=200
+        )
+        client = GitHubClient("test_token")
+        files = client.get_all_modified_files("org", "repo")
+        assert files == []
+
+    @responses.activate
+    def test_api_error(self):
+        """API error returns empty list."""
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/commits",
+            json={"message": "Not Found"},
+            status=404
+        )
+        client = GitHubClient("test_token")
+        files = client.get_all_modified_files("org", "repo")
+        assert files == []
 
 
 if __name__ == "__main__":
