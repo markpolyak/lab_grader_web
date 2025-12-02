@@ -107,7 +107,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
       setExpandedCourse(courseId);
     } catch (error) {
       console.error(error);
-      showSnackbar(t("errorLoadingCourseDetails"), "error");
+      showSnackbar(error.message || t("errorLoadingCourseDetails"), "error");
     }
   };
 

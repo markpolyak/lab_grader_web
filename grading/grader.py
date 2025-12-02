@@ -218,28 +218,45 @@ class LabGrader:
         Returns:
             GradeResult with error if TASKID mismatch, None if OK
         """
+        logger.info(f"TASKID check for {repo_name}: checking {len(successful_runs)} successful job(s)")
+        logger.info(f"Expected TASKID: {expected_taskid}")
+
         taskid_found = None
         taskid_error = None
 
         # Try to get TASKID from any successful job's logs
         for run in successful_runs:
-            # Extract job ID from html_url (format: .../jobs/12345)
-            if "/jobs/" in run.html_url:
+            logger.info(f"Checking job: {run.name} (conclusion: {run.conclusion})")
+
+            # Extract job ID from html_url (format: .../job/12345)
+            if "/job/" in run.html_url:
                 try:
-                    job_id = int(run.html_url.split("/jobs/")[-1].split("?")[0])
+                    job_id = int(run.html_url.split("/job/")[-1].split("?")[0])
+                    logger.info(f"  Job ID: {job_id}, URL: {run.html_url}")
                 except (ValueError, IndexError):
+                    logger.warning(f"  Could not extract job_id from URL: {run.html_url}")
                     continue
 
                 logs = self.github.get_job_logs(org, repo_name, job_id)
                 if logs:
+                    logger.info(f"  Logs fetched, size: {len(logs)} chars")
                     result = extract_taskid_from_logs(logs)
                     if result.found is not None:
+                        logger.info(f"  ✓ TASKID found in logs: {result.found}")
                         taskid_found = result.found
                         break
-                    elif result.error and "несколько" in result.error:
-                        # Multiple different TASKIDs - this is an error
-                        taskid_error = result.error
-                        break
+                    elif result.error:
+                        if "несколько" in result.error:
+                            # Multiple different TASKIDs - this is an error
+                            logger.error(f"  ✗ {result.error}")
+                            taskid_error = result.error
+                            break
+                        else:
+                            logger.info(f"  ✗ TASKID not found in this job's logs: {result.error}")
+                else:
+                    logger.warning(f"  Could not fetch logs for job {job_id}")
+            else:
+                logger.warning(f"  Job URL doesn't contain /job/: {run.html_url}")
 
         if taskid_error:
             return GradeResult(
@@ -331,8 +348,20 @@ class LabGrader:
 
         # Parse and filter check runs
         check_runs = parse_check_runs(check_runs_data)
+        logger.info(f"Total check runs found: {len(check_runs)}")
+        for run in check_runs:
+            logger.debug(f"  Check run: {run.name} (conclusion: {run.conclusion})")
+
         ci_jobs = get_ci_config_jobs(lab_config)
+        if ci_jobs:
+            logger.info(f"CI jobs configured in lab config: {ci_jobs}")
+        else:
+            logger.info("No specific CI jobs configured - will use all relevant jobs")
+
         relevant_runs = filter_relevant_jobs(check_runs, ci_jobs)
+        logger.info(f"Relevant check runs after filtering: {len(relevant_runs)}")
+        for run in relevant_runs:
+            logger.info(f"  Relevant job: {run.name} (conclusion: {run.conclusion})")
 
         if not relevant_runs:
             return CIEvaluation(
@@ -362,6 +391,9 @@ class LabGrader:
 
         # Get successful runs for TASKID extraction
         successful_runs = [run for run in relevant_runs if run.conclusion == "success"]
+        logger.info(f"Successful runs for TASKID extraction: {len(successful_runs)}")
+        for run in successful_runs:
+            logger.info(f"  Success job: {run.name}")
 
         # Determine grade
         final_result = "v" if ci_result.passed else "x"

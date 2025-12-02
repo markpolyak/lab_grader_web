@@ -14,6 +14,9 @@ from itsdangerous import TimestampSigner, BadSignature
 import re
 import logging
 from datetime import datetime
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from grading import (
     LabGrader,
@@ -81,6 +84,11 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
+
+# Rate limiting configuration
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Проверка обязательных переменных окружения
 if not ADMIN_LOGIN or not ADMIN_PASSWORD:
@@ -231,11 +239,13 @@ class StudentRegistration(BaseModel):
 
 
 @app.get("/")
-async def read_index():
+@limiter.limit("100/minute")
+async def read_index(request: Request):
     return FileResponse("dist/index.html")
 
 @app.post("/admin/login")
-def admin_login(data: AuthRequest, response: Response):
+@limiter.limit("5/minute")
+def admin_login(request: Request, data: AuthRequest, response: Response):
     if data.login == ADMIN_LOGIN and data.password == ADMIN_PASSWORD:
         token = signer.sign(data.login.encode()).decode()
         response.set_cookie(
@@ -250,6 +260,7 @@ def admin_login(data: AuthRequest, response: Response):
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
 @app.get("/admin/check-auth")
+@limiter.limit("30/minute")
 def check_auth(request: Request):
     cookie = request.cookies.get("admin_session")
     if not cookie:
@@ -266,13 +277,15 @@ def check_auth(request: Request):
     return {"authenticated": True}
 
 @app.post("/admin/logout")
-def logout(response: Response):
+@limiter.limit("30/minute")
+def logout(request: Request, response: Response):
     response.delete_cookie("admin_session", path="/")
     return {"message": "Logged out"}
 
 
 @app.get("/courses")
-def get_courses(status: str = "active"):
+@limiter.limit("100/minute")
+def get_courses(request: Request, status: str = "active"):
     """
     Get courses filtered by status
 
@@ -332,7 +345,8 @@ def parse_lab_id(lab_id: str) -> int:
     return int(match.group(0))
 
 @app.get("/courses/{course_id}")
-def get_course(course_id: str):
+@limiter.limit("100/minute")
+def get_course(request: Request, course_id: str):
     course_info = get_course_by_id(course_id)
 
     return {
@@ -349,7 +363,8 @@ def get_course(course_id: str):
     }
 
 @app.delete("/courses/{course_id}")
-def delete_course(course_id: str):
+@limiter.limit("20/minute")
+def delete_course(request: Request, course_id: str):
     """
     Mark course as hidden in index (soft delete)
     The course file is preserved in repository
@@ -379,7 +394,8 @@ class EditCourseRequest(BaseModel):
 
 
 @app.get("/courses/{course_id}/edit")
-def edit_course_get(course_id: str):
+@limiter.limit("30/minute")
+def edit_course_get(request: Request, course_id: str):
     """Получить YAML содержимое курса для редактирования"""
     course_info = get_course_by_id(course_id)
     filename = course_info["_meta"]["filename"]
@@ -395,7 +411,8 @@ def edit_course_get(course_id: str):
 
 
 @app.put("/courses/{course_id}/edit")
-def edit_course_put(course_id: str, data: EditCourseRequest):
+@limiter.limit("20/minute")
+def edit_course_put(request: Request, course_id: str, data: EditCourseRequest):
     """Сохранить изменения в YAML файле курса"""
     course_info = get_course_by_id(course_id)
     filename = course_info["_meta"]["filename"]
@@ -414,7 +431,8 @@ def edit_course_put(course_id: str, data: EditCourseRequest):
 
 
 @app.get("/courses/{course_id}/groups")
-def get_course_groups(course_id: str):
+@limiter.limit("10/minute")
+def get_course_groups(request: Request, course_id: str):
     course_info = get_course_by_id(course_id)
     spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
     info_sheet = course_info.get("google", {}).get("info-sheet")
@@ -437,7 +455,8 @@ def get_course_groups(course_id: str):
 
 
 @app.get("/courses/{course_id}/groups/{group_id}/labs")
-def get_course_labs(course_id: str, group_id: str):
+@limiter.limit("10/minute")
+def get_course_labs(request: Request, course_id: str, group_id: str):
     course_info = get_course_by_id(course_id)
     spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
     labs = [lab["short-name"] for lab in course_info.get("labs", {}).values() if "short-name" in lab]
@@ -464,7 +483,8 @@ def get_course_labs(course_id: str, group_id: str):
 
 
 @app.post("/courses/{course_id}/groups/{group_id}/register")
-def register_student(course_id: str, group_id: str, student: StudentRegistration):
+@limiter.limit("10/minute")
+def register_student(request: Request, course_id: str, group_id: str, student: StudentRegistration):
     # Build full name first for consistent logging
     full_name = f"{student.surname} {student.name} {student.patronymic}".strip()
 
@@ -571,7 +591,8 @@ class GradeRequest(BaseModel):
     github: str = Field(..., min_length=1)
 
 @app.post("/courses/{course_id}/groups/{group_id}/labs/{lab_id}/grade")
-def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest):
+@limiter.limit("10/minute")
+def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grade_request: GradeRequest):
     """
     Grade a lab submission by checking GitHub repository and CI status.
 
@@ -584,7 +605,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
     3. Return early for errors/pending (no Sheets connection needed)
     4. Connect to Sheets only when we have a result to write
     """
-    logger.info(f"Grading attempt - Course: {course_id}, Group: {group_id}, Lab: {lab_id}, GitHub: {request.github}")
+    logger.info(f"Grading attempt - Course: {course_id}, Group: {group_id}, Lab: {lab_id}, GitHub: {grade_request.github}")
 
     try:
         # Load course and lab configuration
@@ -607,7 +628,7 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
         github_client = GitHubClient(GITHUB_TOKEN)
         grader = LabGrader(github_client)
 
-        username = request.github
+        username = grade_request.github
         repo_name = f"{repo_prefix}-{username}"
         logger.info(f"Checking repository: {org}/{repo_name}")
 
@@ -719,7 +740,9 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
                         raise HTTPException(status_code=400, detail=taskid_error.message)
 
             # Calculate penalty if deadline configured
-            deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1)
+            # Get timezone from course config to apply to deadline from sheet
+            timezone_str = course_info.get("timezone")
+            deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1, timezone_str=timezone_str)
             if deadline and ci_evaluation.latest_success_time:
                 from grading.penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
                 penalty_max = lab_config_dict.get("penalty-max", 0)
@@ -791,7 +814,8 @@ def grade_lab(course_id: str, group_id: str, lab_id: str, request: GradeRequest)
 
 
 @app.post("/courses/upload")
-async def upload_course(file: UploadFile = File(...)):
+@limiter.limit("10/minute")
+async def upload_course(request: Request, file: UploadFile = File(...)):
     """
     Upload a new course file and add it to index
 
