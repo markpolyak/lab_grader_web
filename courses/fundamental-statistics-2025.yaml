@@ -1,0 +1,76 @@
+---
+# Configuration file for lab-grader
+
+course:
+    name: Основы статистики
+    alt-names: 
+        - FS
+        - Fundamental statistics
+        - ОснСтат
+    semester: Осень 2025
+    university: ИТМО
+    email: k43guap@ya.ru
+    timezone: UTC+3
+    github:
+        organization: itmo-fs-2025
+        teachers:
+            - "Mark Polyak"
+            - markpolyak
+    google:
+        spreadsheet: 1Xc5Q5vjIUCDEsEk-4m2Uuc93OQ0WYcUuSzeVfU1blOI
+        info-sheet: График
+        task-id-column: 0
+        student-name-column: 1
+        lab-column-offset: 1
+    staff:
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лектор
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лабораторные работы
+    labs:
+        "0":
+            github-prefix: fs-lab0
+            short-name: ДЗ0
+            penalty-max: 5
+            ignore-task-id: True
+            ci:
+                - workflows
+            files:
+                - goals.md
+                - info.md
+                - report.pdf
+            moss:
+                language: c
+            report:
+                - Задание
+                - Результат
+            validation:
+                commits:
+                    -
+                        filter: console
+                        min-count: 1
+        "1":
+            github-prefix: fs-lab1
+            short-name: ДЗ1
+            # taskid-max: 25
+            ignore-task-id: True
+            penalty-max: 6
+            ci:
+                - workflows
+            files:
+                - lab1.sh
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab1
+            report:
+                - Цель работы
+                - Индивидуальное задание
+                - Описание входных данных
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+misc:
+    requests-timeout: 5
