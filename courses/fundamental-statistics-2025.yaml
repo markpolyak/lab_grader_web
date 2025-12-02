@@ -60,7 +60,7 @@ course:
             ci:
                 - workflows
             files:
-                - lab1.sh
+                - data_analysis.ipynb
             moss:
                 language: python
                 max-matches: 100
