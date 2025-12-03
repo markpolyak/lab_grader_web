@@ -104,108 +104,23 @@ def extract_score_from_logs(logs: str, patterns: list[str]) -> ScoreResult:
     if not patterns:
         return ScoreResult(found=None, error="Паттерны для поиска баллов не указаны")
 
-    # Debug: show sample of logs being searched
     logger.debug(f"Searching for score in logs (size: {len(logs)} chars, {len(logs.splitlines())} lines)")
-    logger.debug(f"First 500 chars: {repr(logs[:500])}")
-    # Show middle sample
-    mid_point = len(logs) // 2
-    logger.debug(f"Middle 500 chars (around pos {mid_point}): {repr(logs[mid_point-250:mid_point+250])}")
-    logger.debug(f"Last 500 chars: {repr(logs[-500:])}")
-
-    # Debug: Check for common report keywords to diagnose missing output
-    # Try both case-sensitive and case-insensitive
-    report_keywords = ['ИТОГОВЫЙ ОТЧЁТ', 'ИТОГО:', 'баллов', 'Студент', 'РЕЗУЛЬТАТЫ ПО БЛОКАМ',
-                       'ОЦЕНКА', 'ЖУРНАЛ', 'ПРЕДВАРИТЕЛЬНАЯ']
-    found_any_keyword = False
-
-    for keyword in report_keywords:
-        # Try exact match first
-        if keyword in logs:
-            logger.debug(f"✓ Found keyword '{keyword}' in logs (case-sensitive)")
-            idx = logs.find(keyword)
-            start = max(0, idx - 100)
-            end = min(len(logs), idx + 200)
-            logger.debug(f"  Position: {idx}, Context: {repr(logs[start:end])}")
-            found_any_keyword = True
-            break
-        # Try lowercase
-        elif keyword.lower() in logs.lower():
-            logger.debug(f"✓ Found keyword '{keyword}' in logs (case-insensitive)")
-            logs_lower = logs.lower()
-            idx = logs_lower.find(keyword.lower())
-            start = max(0, idx - 100)
-            end = min(len(logs), idx + 200)
-            logger.debug(f"  Position: {idx}, Context: {repr(logs[start:end])}")
-            found_any_keyword = True
-            break
-
-    if not found_any_keyword:
-        logger.warning("⚠️ None of the report keywords found in logs.")
-        logger.debug(f"Searched for keywords: {report_keywords}")
-        # Show more samples to help diagnose
-        logger.debug("Sample lines from different parts of logs:")
-        lines = logs.splitlines()
-        if len(lines) > 100:
-            # Show lines from 25%, 50%, 75% positions
-            for pct in [25, 50, 75]:
-                idx = len(lines) * pct // 100
-                logger.debug(f"  Line {idx} ({pct}%): {repr(lines[idx][:150])}")
-        # Check timestamp around expected score time
-        if '05:22:34' in logs or '05:22:33' in logs or '05:22:35' in logs:
-            logger.debug("✓ Found timestamps around 05:22:34 in logs")
-            # Show lines with this timestamp
-            matching_lines = [line for line in logs.splitlines() if '05:22:34' in line or '05:22:33' in line or '05:22:35' in line]
-            logger.debug(f"Found {len(matching_lines)} lines with timestamps 05:22:33-35. First 5:")
-            for line in matching_lines[:5]:
-                logger.debug(f"  {repr(line[:200])}")
-        else:
-            logger.debug("✗ No timestamps around 05:22:34 found")
 
     all_matches = []
     matched_pattern = None
 
-    # Debug: Test simple Cyrillic search to verify encoding works
-    if 'ПРЕДВАРИТЕЛЬНАЯ' in logs:
-        logger.debug("✓ Simple string search for 'ПРЕДВАРИТЕЛЬНАЯ' works")
-        # Show the actual line containing it
-        for line in logs.splitlines():
-            if 'ПРЕДВАРИТЕЛЬНАЯ' in line:
-                logger.debug(f"  Found in line: {repr(line[:150])}")
-                # Show bytes of this part of line
-                idx_start = line.find('ПРЕДВАРИТЕЛЬНАЯ')
-                sample = line[idx_start:idx_start+60]
-                logger.debug(f"  Sample bytes: {sample.encode('utf-8')}")
-                break
-    else:
-        logger.warning("✗ Simple string search for 'ПРЕДВАРИТЕЛЬНАЯ' failed - encoding issue?")
-
     # Try each pattern until we find matches
     for idx, pattern in enumerate(patterns, 1):
-        logger.debug(f"Trying pattern {idx}/{len(patterns)}: {repr(pattern)}")
-        # Debug: show pattern bytes to check encoding
-        logger.debug(f"  Pattern bytes (first 100): {pattern.encode('utf-8')[:100]}")
+        logger.debug(f"Trying pattern {idx}/{len(patterns)}: {pattern}")
         try:
             # Search across all lines
             matches = re.findall(pattern, logs, re.MULTILINE | re.IGNORECASE)
-            logger.debug(f"  Found {len(matches)} matches")
 
             if matches:
-                logger.info(f"✓ Pattern {idx} matched {len(matches)} time(s): {pattern}")
-                logger.debug(f"Matched values: {matches}")
+                logger.info(f"✓ Pattern {idx} matched {len(matches)} time(s)")
                 all_matches = matches
                 matched_pattern = pattern
                 break
-            else:
-                logger.debug(f"✗ Pattern {idx} had no matches")
-                # Debug: show lines containing keywords for troubleshooting
-                if 'ОЦЕНКА' in pattern or 'ЖУРНАЛ' in pattern or 'ПРЕДВАРИТЕЛЬНАЯ' in pattern:
-                    lines_with_keyword = [line for line in logs.split('\n') if 'ОЦЕНКА' in line or 'ЖУРНАЛ' in line]
-                    if lines_with_keyword:
-                        logger.debug(f"Found {len(lines_with_keyword)} lines containing ОЦЕНКА or ЖУРНАЛ. First 3:")
-                        for line in lines_with_keyword[:3]:
-                            logger.debug(f"  {repr(line[:200])}")  # repr to show invisible chars
-                    else:
-                        logger.debug("No lines found containing ОЦЕНКА or ЖУРНАЛ keywords")
         except re.error as e:
             logger.warning(f"Invalid regex pattern '{pattern}': {e}")
             continue
