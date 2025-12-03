@@ -59,16 +59,16 @@ course:
         "1":
             github-prefix: fs-lab1
             short-name: ДЗ1
-            # taskid-max: 25
-            ignore-task-id: True
-            penalty-max: 6
+            taskid-max: 10
+            # ignore-task-id: True
+            # penalty-max: 6
             score:
               patterns:
                 - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
-                - 'ИТОГО:\s*(\d+(?:[.,]\d+)?)\s*баллов'                     # "ИТОГО: 100 баллов" -> 100
-                - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'              # "##[notice]Points 10/10" -> 10
-                - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'                          # "Score is 10.5" -> 10.5
-                - 'Total:\s+(\d+(?:[.,]\d+)?)'                              # "Total: 10" -> 10
+                # - 'ИТОГО:\s*(\d+(?:[.,]\d+)?)\s*баллов'                     # "ИТОГО: 100 баллов" -> 100
+                # - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'              # "##[notice]Points 10/10" -> 10
+                # - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'                          # "Score is 10.5" -> 10.5
+                # - 'Total:\s+(\d+(?:[.,]\d+)?)'                              # "Total: 10" -> 10
             ci:
                 - workflows
             files:
