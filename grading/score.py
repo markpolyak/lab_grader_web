@@ -109,6 +109,29 @@ def extract_score_from_logs(logs: str, patterns: list[str]) -> ScoreResult:
     logger.debug(f"First 500 chars of logs: {repr(logs[:500])}")
     logger.debug(f"Last 500 chars of logs: {repr(logs[-500:])}")
 
+    # Debug: Check for common report keywords to diagnose missing output
+    report_keywords = ['ИТОГОВЫЙ ОТЧЁТ', 'ИТОГО:', 'баллов', 'Студент', 'РЕЗУЛЬТАТЫ ПО БЛОКАМ']
+    found_any_keyword = False
+    for keyword in report_keywords:
+        if keyword in logs:
+            logger.debug(f"✓ Found keyword '{keyword}' in logs")
+            # Show context around first occurrence
+            idx = logs.find(keyword)
+            start = max(0, idx - 100)
+            end = min(len(logs), idx + 200)
+            logger.debug(f"  Context: {repr(logs[start:end])}")
+            found_any_keyword = True
+            break
+
+    if not found_any_keyword:
+        logger.warning("⚠️ None of the report keywords found in logs. The Python script output may not be included in the fetched logs.")
+        logger.debug(f"Searched for keywords: {report_keywords}")
+        # Check if logs contain timestamps around expected time (05:22:34)
+        if '05:22:34' in logs or '05:22:33' in logs or '05:22:35' in logs:
+            logger.debug("✓ Found timestamps around 05:22:34 in logs")
+        else:
+            logger.debug("✗ No timestamps around 05:22:34 found (expected time for score output)")
+
     all_matches = []
     matched_pattern = None
 
