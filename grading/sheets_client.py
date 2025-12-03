@@ -280,6 +280,12 @@ def get_deadline_from_sheet(
             logger.warning(f"Could not parse deadline '{cell_value}' at row {deadline_row}, col {lab_col}")
             return None
 
+        # If date was parsed without time (midnight), set to end of day (23:59:59)
+        # This ensures deadlines like "19.11.2025" mean "until the end of that day"
+        if parsed_dt.hour == 0 and parsed_dt.minute == 0 and parsed_dt.second == 0:
+            parsed_dt = parsed_dt.replace(hour=23, minute=59, second=59)
+            logger.debug(f"Deadline parsed without time, set to end of day: {parsed_dt}")
+
         # If datetime already has timezone info, return as-is
         if parsed_dt.tzinfo is not None:
             logger.debug(f"Deadline already has timezone: {parsed_dt}")
