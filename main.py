@@ -29,6 +29,9 @@ from grading import (
     get_deadline_from_sheet,
     get_student_order,
     calculate_expected_taskid,
+    get_decimal_separator,
+    format_grade_with_score,
+    format_score,
 )
 
 # Configure logging to both file and console
@@ -668,11 +671,16 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         sheets_client = gspread.authorize(creds)
 
         try:
-            sheet = sheets_client.open_by_key(spreadsheet_id).worksheet(group_id)
+            spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+            sheet = spreadsheet.worksheet(group_id)
             logger.info(f"Successfully opened worksheet '{group_id}'")
         except Exception as e:
             logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
             raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
+
+        # Get decimal separator from spreadsheet locale
+        decimal_separator = get_decimal_separator(spreadsheet)
+        logger.info(f"Using decimal separator: '{decimal_separator}'")
 
         # Find GitHub column and student row
         header_row = sheet.row_values(1)
@@ -711,6 +719,7 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         # Determine final grade
         final_result = ci_evaluation.grade_result.result  # "v" or "x"
         final_message = ci_evaluation.grade_result.message
+        score_value = ci_evaluation.score  # Extracted score from logs (if any)
 
         # Additional checks only if CI passed
         if ci_evaluation.ci_passed:
@@ -741,6 +750,7 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
             # Get timezone from course config to apply to deadline from sheet
             timezone_str = course_info.get("timezone")
             deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1, timezone_str=timezone_str)
+            penalty = 0
             if deadline and ci_evaluation.latest_success_time:
                 from grading.penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
                 penalty_max = lab_config_dict.get("penalty-max", 0)
@@ -758,14 +768,31 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
                 )
 
                 if penalty > 0:
-                    final_result = format_grade_with_penalty("v", penalty)
-                    final_message = f"Результат CI: ✅ Все проверки пройдены (штраф: -{penalty})"
-                    logger.info(f"Applied penalty {penalty} for late submission: {final_result}")
+                    logger.info(f"Calculated penalty: {penalty}")
+
+            # Format final result with score and penalty
+            if score_value is not None:
+                # Format grade with score (and penalty if present)
+                final_result = format_grade_with_score("v", score_value, penalty, decimal_separator)
+                logger.info(f"Formatted grade with score: {final_result}")
+
+                # Build message
+                formatted_score = format_score(score_value, decimal_separator)
+                if penalty > 0:
+                    final_message = f"Результат CI: ✅ Все проверки пройдены (Баллы: {formatted_score}, штраф: -{penalty})"
+                else:
+                    final_message = f"Результат CI: ✅ Все проверки пройдены (Баллы: {formatted_score})"
+            elif penalty > 0:
+                # No score, but penalty exists
+                from grading.penalty import format_grade_with_penalty
+                final_result = format_grade_with_penalty("v", penalty)
+                final_message = f"Результат CI: ✅ Все проверки пройдены (штраф: -{penalty})"
+                logger.info(f"Applied penalty {penalty} for late submission: {final_result}")
 
         # Check cell protection
         if not can_overwrite_cell(current_value):
             logger.warning(f"Update rejected: cell already contains '{current_value}'")
-            return {
+            response = {
                 "status": "rejected",
                 "result": current_value,
                 "message": "⚠️ Работа уже была проверена ранее. Обратитесь к преподавателю для пересдачи.",
@@ -773,19 +800,25 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
                 "checks": ci_evaluation.grade_result.checks,
                 "current_grade": current_value
             }
+            if score_value is not None:
+                response["score"] = format_score(score_value, decimal_separator)
+            return response
 
         # Update Google Sheets with new grade
         logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{final_result}'")
         sheet.update_cell(row_idx, lab_col, final_result)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
 
-        return {
+        response = {
             "status": "updated",
             "result": final_result,
             "message": final_message,
             "passed": ci_evaluation.grade_result.passed,
             "checks": ci_evaluation.grade_result.checks
         }
+        if score_value is not None:
+            response["score"] = format_score(score_value, decimal_separator)
+        return response
     except HTTPException:
         raise
     except Exception as e:

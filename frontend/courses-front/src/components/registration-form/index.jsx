@@ -52,6 +52,7 @@ const handleSubmit = async () => {
           result: gradeResponse.result,
           passed: gradeResponse.passed,
           checks: gradeResponse.checks,
+          score: gradeResponse.score,
         });
       } else if (gradeResponse.status === "rejected") {
         setCheckResult({
@@ -60,6 +61,7 @@ const handleSubmit = async () => {
           currentGrade: gradeResponse.current_grade,
           passed: gradeResponse.passed,
           checks: gradeResponse.checks,
+          score: gradeResponse.score,
         });
       } else if (gradeResponse.status === "pending") {
         setCheckResult({
@@ -173,6 +175,16 @@ const handleSubmit = async () => {
               color: colors.textSecondary,
             }}>
               Результат: <strong>{checkResult.result}</strong>
+            </div>
+          )}
+
+          {checkResult.score && (
+            <div style={{
+              fontSize: "14px",
+              marginBottom: "8px",
+              color: colors.textSecondary,
+            }}>
+              Баллы: <strong>{checkResult.score}</strong>
             </div>
           )}
 

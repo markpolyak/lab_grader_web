@@ -335,3 +335,42 @@ def get_student_order(
     except Exception as e:
         logger.error(f"Error reading task ID: {e}")
         return None
+
+
+def get_decimal_separator(spreadsheet) -> str:
+    """
+    Get decimal separator used by the spreadsheet based on its locale.
+
+    Args:
+        spreadsheet: gspread Spreadsheet object
+
+    Returns:
+        Decimal separator: '.' or ','
+
+    Note:
+        - Locales like en_US, en_GB use '.'
+        - Locales like ru_RU, de_DE, fr_FR use ','
+        - Defaults to '.' if locale cannot be determined
+    """
+    try:
+        # Get spreadsheet metadata to access locale
+        metadata = spreadsheet.fetch_sheet_metadata()
+        locale = metadata.get('properties', {}).get('locale', 'en_US')
+
+        logger.debug(f"Spreadsheet locale: {locale}")
+
+        # Locales that use comma as decimal separator
+        comma_locales = {
+            'ru_RU', 'ru', 'de_DE', 'de', 'fr_FR', 'fr', 'es_ES', 'es',
+            'it_IT', 'it', 'pt_BR', 'pt', 'nl_NL', 'nl', 'pl_PL', 'pl',
+            'cs_CZ', 'cs', 'sv_SE', 'sv', 'da_DK', 'da', 'fi_FI', 'fi',
+            'no_NO', 'no', 'tr_TR', 'tr', 'el_GR', 'el', 'hu_HU', 'hu',
+        }
+
+        separator = ',' if locale in comma_locales else '.'
+        logger.info(f"Using decimal separator '{separator}' for locale {locale}")
+        return separator
+
+    except Exception as e:
+        logger.warning(f"Could not determine spreadsheet locale: {e}. Using default separator '.'")
+        return '.'
