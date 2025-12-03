@@ -164,12 +164,30 @@ def extract_score_from_logs(logs: str, patterns: list[str]) -> ScoreResult:
     all_matches = []
     matched_pattern = None
 
+    # Debug: Test simple Cyrillic search to verify encoding works
+    if 'ПРЕДВАРИТЕЛЬНАЯ' in logs:
+        logger.debug("✓ Simple string search for 'ПРЕДВАРИТЕЛЬНАЯ' works")
+        # Show the actual line containing it
+        for line in logs.splitlines():
+            if 'ПРЕДВАРИТЕЛЬНАЯ' in line:
+                logger.debug(f"  Found in line: {repr(line[:150])}")
+                # Show bytes of this part of line
+                idx_start = line.find('ПРЕДВАРИТЕЛЬНАЯ')
+                sample = line[idx_start:idx_start+60]
+                logger.debug(f"  Sample bytes: {sample.encode('utf-8')}")
+                break
+    else:
+        logger.warning("✗ Simple string search for 'ПРЕДВАРИТЕЛЬНАЯ' failed - encoding issue?")
+
     # Try each pattern until we find matches
     for idx, pattern in enumerate(patterns, 1):
         logger.debug(f"Trying pattern {idx}/{len(patterns)}: {repr(pattern)}")
+        # Debug: show pattern bytes to check encoding
+        logger.debug(f"  Pattern bytes (first 100): {pattern.encode('utf-8')[:100]}")
         try:
             # Search across all lines
             matches = re.findall(pattern, logs, re.MULTILINE | re.IGNORECASE)
+            logger.debug(f"  Found {len(matches)} matches")
 
             if matches:
                 logger.info(f"✓ Pattern {idx} matched {len(matches)} time(s): {pattern}")
