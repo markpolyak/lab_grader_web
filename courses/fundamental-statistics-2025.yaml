@@ -35,11 +35,11 @@ course:
             short-name: ДЗ0
             penalty-max: 5
             ignore-task-id: True
-            score:
-              patterns:
-                - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'  # "##[notice]Points 10/10" -> 10
-                - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'              # "Score is 10.5" -> 10.5
-                - 'Total:\s+(\d+(?:[.,]\d+)?)'                  # "Total: 10" -> 10
+            # score:
+            #   patterns:
+            #     - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'  # "##[notice]Points 10/10" -> 10
+            #     - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'              # "Score is 10.5" -> 10.5
+            #     - 'Total:\s+(\d+(?:[.,]\d+)?)'                  # "Total: 10" -> 10
             ci:
                 - workflows
             files:
@@ -64,6 +64,7 @@ course:
             penalty-max: 6
             score:
               patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ\s+ОЦЕНКА\s+В\s+ЖУРНАЛ:\s+(\d+(?:[.,]\d+)?)'
                 - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'  # "##[notice]Points 10/10" -> 10
                 - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'              # "Score is 10.5" -> 10.5
                 - 'Total:\s+(\d+(?:[.,]\d+)?)'                  # "Total: 10" -> 10
