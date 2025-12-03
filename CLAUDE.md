@@ -6,7 +6,7 @@ See `docs/PROJECT_DESCRIPTION.md` for full project documentation.
 
 - **Backend**: Single file `main.py` (FastAPI monolith, ~750 LOC)
 - **Frontend**: `frontend/courses-front/` (React 19 + Vite)
-- **Courses**: `courses/index.yaml` + individual YAML files
+- **Courses**: `courses/index.yaml` + individual YAML files (see `docs/COURSE_CONFIG.md` for all options)
 - **Tests**: `tests/` (pytest)
 
 ### Development Commands
