@@ -325,14 +325,16 @@ class LabGrader:
             Score must be consistent across all successful jobs.
         """
         logger.info(f"Score check for {repo_name}: checking {len(successful_runs)} successful job(s)")
-        logger.info(f"Score patterns: {score_patterns}")
+        logger.info(f"Score patterns configured: {len(score_patterns)} pattern(s)")
+        for idx, pattern in enumerate(score_patterns, 1):
+            logger.debug(f"  Pattern {idx}: {repr(pattern)}")
 
         score_found = None
         score_error = None
 
         # Try to get score from any successful job's logs
-        for run in successful_runs:
-            logger.info(f"Checking job: {run.name} (conclusion: {run.conclusion})")
+        for idx, run in enumerate(successful_runs, 1):
+            logger.info(f"Checking job {idx}/{len(successful_runs)}: {run.name} (conclusion: {run.conclusion})")
 
             # Extract job ID from html_url (format: .../job/12345)
             if "/job/" in run.html_url:

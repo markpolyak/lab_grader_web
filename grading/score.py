@@ -104,20 +104,38 @@ def extract_score_from_logs(logs: str, patterns: list[str]) -> ScoreResult:
     if not patterns:
         return ScoreResult(found=None, error="Паттерны для поиска баллов не указаны")
 
+    # Debug: show sample of logs being searched
+    logger.debug(f"Searching for score in logs (size: {len(logs)} chars)")
+    logger.debug(f"First 500 chars of logs: {repr(logs[:500])}")
+    logger.debug(f"Last 500 chars of logs: {repr(logs[-500:])}")
+
     all_matches = []
     matched_pattern = None
 
     # Try each pattern until we find matches
-    for pattern in patterns:
+    for idx, pattern in enumerate(patterns, 1):
+        logger.debug(f"Trying pattern {idx}/{len(patterns)}: {repr(pattern)}")
         try:
             # Search across all lines
             matches = re.findall(pattern, logs, re.MULTILINE | re.IGNORECASE)
 
             if matches:
-                logger.debug(f"Pattern '{pattern}' matched {len(matches)} time(s)")
+                logger.info(f"✓ Pattern {idx} matched {len(matches)} time(s): {pattern}")
+                logger.debug(f"Matched values: {matches}")
                 all_matches = matches
                 matched_pattern = pattern
                 break
+            else:
+                logger.debug(f"✗ Pattern {idx} had no matches")
+                # Debug: show lines containing keywords for troubleshooting
+                if 'ОЦЕНКА' in pattern or 'ЖУРНАЛ' in pattern or 'ПРЕДВАРИТЕЛЬНАЯ' in pattern:
+                    lines_with_keyword = [line for line in logs.split('\n') if 'ОЦЕНКА' in line or 'ЖУРНАЛ' in line]
+                    if lines_with_keyword:
+                        logger.debug(f"Found {len(lines_with_keyword)} lines containing ОЦЕНКА or ЖУРНАЛ. First 3:")
+                        for line in lines_with_keyword[:3]:
+                            logger.debug(f"  {repr(line[:200])}")  # repr to show invisible chars
+                    else:
+                        logger.debug("No lines found containing ОЦЕНКА or ЖУРНАЛ keywords")
         except re.error as e:
             logger.warning(f"Invalid regex pattern '{pattern}': {e}")
             continue
