@@ -105,32 +105,61 @@ def extract_score_from_logs(logs: str, patterns: list[str]) -> ScoreResult:
         return ScoreResult(found=None, error="Паттерны для поиска баллов не указаны")
 
     # Debug: show sample of logs being searched
-    logger.debug(f"Searching for score in logs (size: {len(logs)} chars)")
-    logger.debug(f"First 500 chars of logs: {repr(logs[:500])}")
-    logger.debug(f"Last 500 chars of logs: {repr(logs[-500:])}")
+    logger.debug(f"Searching for score in logs (size: {len(logs)} chars, {len(logs.splitlines())} lines)")
+    logger.debug(f"First 500 chars: {repr(logs[:500])}")
+    # Show middle sample
+    mid_point = len(logs) // 2
+    logger.debug(f"Middle 500 chars (around pos {mid_point}): {repr(logs[mid_point-250:mid_point+250])}")
+    logger.debug(f"Last 500 chars: {repr(logs[-500:])}")
 
     # Debug: Check for common report keywords to diagnose missing output
-    report_keywords = ['ИТОГОВЫЙ ОТЧЁТ', 'ИТОГО:', 'баллов', 'Студент', 'РЕЗУЛЬТАТЫ ПО БЛОКАМ']
+    # Try both case-sensitive and case-insensitive
+    report_keywords = ['ИТОГОВЫЙ ОТЧЁТ', 'ИТОГО:', 'баллов', 'Студент', 'РЕЗУЛЬТАТЫ ПО БЛОКАМ',
+                       'ОЦЕНКА', 'ЖУРНАЛ', 'ПРЕДВАРИТЕЛЬНАЯ']
     found_any_keyword = False
+
     for keyword in report_keywords:
+        # Try exact match first
         if keyword in logs:
-            logger.debug(f"✓ Found keyword '{keyword}' in logs")
-            # Show context around first occurrence
+            logger.debug(f"✓ Found keyword '{keyword}' in logs (case-sensitive)")
             idx = logs.find(keyword)
             start = max(0, idx - 100)
             end = min(len(logs), idx + 200)
-            logger.debug(f"  Context: {repr(logs[start:end])}")
+            logger.debug(f"  Position: {idx}, Context: {repr(logs[start:end])}")
+            found_any_keyword = True
+            break
+        # Try lowercase
+        elif keyword.lower() in logs.lower():
+            logger.debug(f"✓ Found keyword '{keyword}' in logs (case-insensitive)")
+            logs_lower = logs.lower()
+            idx = logs_lower.find(keyword.lower())
+            start = max(0, idx - 100)
+            end = min(len(logs), idx + 200)
+            logger.debug(f"  Position: {idx}, Context: {repr(logs[start:end])}")
             found_any_keyword = True
             break
 
     if not found_any_keyword:
-        logger.warning("⚠️ None of the report keywords found in logs. The Python script output may not be included in the fetched logs.")
+        logger.warning("⚠️ None of the report keywords found in logs.")
         logger.debug(f"Searched for keywords: {report_keywords}")
-        # Check if logs contain timestamps around expected time (05:22:34)
+        # Show more samples to help diagnose
+        logger.debug("Sample lines from different parts of logs:")
+        lines = logs.splitlines()
+        if len(lines) > 100:
+            # Show lines from 25%, 50%, 75% positions
+            for pct in [25, 50, 75]:
+                idx = len(lines) * pct // 100
+                logger.debug(f"  Line {idx} ({pct}%): {repr(lines[idx][:150])}")
+        # Check timestamp around expected score time
         if '05:22:34' in logs or '05:22:33' in logs or '05:22:35' in logs:
             logger.debug("✓ Found timestamps around 05:22:34 in logs")
+            # Show lines with this timestamp
+            matching_lines = [line for line in logs.splitlines() if '05:22:34' in line or '05:22:33' in line or '05:22:35' in line]
+            logger.debug(f"Found {len(matching_lines)} lines with timestamps 05:22:33-35. First 5:")
+            for line in matching_lines[:5]:
+                logger.debug(f"  {repr(line[:200])}")
         else:
-            logger.debug("✗ No timestamps around 05:22:34 found (expected time for score output)")
+            logger.debug("✗ No timestamps around 05:22:34 found")
 
     all_matches = []
     matched_pattern = None
