@@ -17,6 +17,7 @@ from grading.sheets_client import (
     can_overwrite_cell,
     format_cell_protection_message,
     prepare_grade_update,
+    format_forbidden_files_note,
     StudentLocation,
     LabColumn,
     GradeUpdate,
@@ -213,6 +214,34 @@ class TestPrepareGradeUpdate:
         """Update from 'v-N' is blocked."""
         result = prepare_grade_update("v-3", "v")
         assert result.success is False
+
+
+class TestFormatForbiddenFilesNote:
+    """Tests for format_forbidden_files_note function."""
+
+    def test_single_file(self):
+        """Format note with single file."""
+        note = format_forbidden_files_note(["test_main.py"])
+        assert "test_main.py" in note
+        assert "⚠️" in note
+        assert "запрещённые" in note.lower()
+
+    def test_multiple_files(self):
+        """Format note with multiple files."""
+        note = format_forbidden_files_note(["test_main.py", "tests/test.py"])
+        assert "test_main.py" in note
+        assert "tests/test.py" in note
+
+    def test_empty_list(self):
+        """Format note with empty list."""
+        note = format_forbidden_files_note([])
+        assert "⚠️" in note
+
+    def test_contains_bullet_points(self):
+        """Note contains bullet points for each file."""
+        note = format_forbidden_files_note(["file1.py", "file2.py"])
+        assert "- file1.py" in note
+        assert "- file2.py" in note
 
 
 if __name__ == "__main__":

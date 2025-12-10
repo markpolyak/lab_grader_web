@@ -79,7 +79,27 @@ labs:
         - cpplint
     files:                        # Required files in repo
       - lab2.cpp
+    forbidden-files:              # Files students can't modify (warning, not blocking)
+      - test_main.py              # Exact file match
+      - tests/                    # Directory prefix match
 ```
+
+### Forbidden Files Detection
+
+When `forbidden-files` is configured, the system checks commits from students only:
+- Commits by organization admins (instructors) are automatically excluded
+- Uses GitHub Organization Membership API to determine instructor status
+- Only modifications by non-admin users are checked against forbidden files
+- If violations found: grade is still written, but cell is highlighted yellow with a comment
+- Warning is shown to student on frontend
+- This helps detect students who modify test files to cheat
+
+**How it works:**
+1. System fetches all commits from student repository
+2. For each commit, checks if author is an org admin via GitHub API
+3. Instructor commits are skipped (they can update tests/templates)
+4. Student commits are checked for forbidden file modifications
+5. Works with GitHub Classroom - students are not org admins by default
 
 ## CI/CD
 

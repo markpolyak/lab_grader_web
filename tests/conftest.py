@@ -22,7 +22,7 @@ def mock_env_vars(monkeypatch):
 @pytest.fixture(autouse=True)
 def disable_rate_limiting(request):
     """Disable rate limiting in tests by patching the limiter.
-    
+
     By default, rate limiting is disabled for all tests to avoid interference.
     To test rate limiting functionality, mark your test with @pytest.mark.rate_limit.
     """
@@ -31,11 +31,19 @@ def disable_rate_limiting(request):
         # Don't disable rate limiting for this test
         yield
         return
-    
+
+    # Only patch if main module is actually imported
+    # This avoids importing main (and its dependencies like gspread)
+    # for tests that don't need it
+    if 'main' not in sys.modules:
+        # main not imported yet - no need to patch
+        yield
+        return
+
     # Patch limiter after main module is imported
     # We need to patch _check_request_limit to do nothing
     # and also ensure view_rate_limit is set to avoid AttributeError
-    
+
     def noop_check(*args, **kwargs):
         """No-op function to disable rate limiting in tests."""
         # Extract request from args (it's the second argument: self, request, func, sync)
@@ -44,7 +52,7 @@ def disable_rate_limiting(request):
             # Set view_rate_limit to avoid AttributeError in wrapper
             if hasattr(request, 'state') and not hasattr(request.state, 'view_rate_limit'):
                 request.state.view_rate_limit = None
-    
+
     # Patch using the full path to the method
     patcher = patch('main.limiter._check_request_limit', noop_check, create=False)
     patcher.start()
