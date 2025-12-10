@@ -35,6 +35,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   const { t, i18n } = useTranslation();
 
   const [courses, setCourses] = useState([]);
+  const [courseStatus, setCourseStatus] = useState("active"); // "active", "archived", "all"
   const [expandedCourse, setExpandedCourse] = useState(null);
   const [editingCourseId, setEditingCourseId] = useState(null);
   const [editContent, setEditContent] = useState("");
@@ -59,10 +60,10 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   };
 
   useEffect(() => {
-    fetchCourses()
+    fetchCourses(courseStatus)
       .then(setCourses)
       .catch(() => showSnackbar(t("errorLoadingCourses"), "error"));
-  }, [t]);
+  }, [t, courseStatus]);
 
   const handleDeleteConfirmation = (courseId) => {
     setSelectedCourseId(courseId);
@@ -78,7 +79,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
       if (response.ok) {
         showSnackbar(t("courseDeleted"), "success");
-        fetchCourses().then(setCourses);
+        fetchCourses(courseStatus).then(setCourses);
       } else {
         const data = await response.json();
         showSnackbar(data.detail || t("errorDeletingCourse"), "error");
@@ -146,7 +147,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         showSnackbar(t("changesSaved"), "success");
         setEditingCourseId(null);
         setIsFullscreen(false);
-        fetchCourses().then(setCourses);
+        fetchCourses(courseStatus).then(setCourses);
       } else {
         const data = await response.json();
         showSnackbar(data.detail || t("errorSavingCourse"), "error");
@@ -183,7 +184,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
       if (response.ok) {
         showSnackbar(t("courseUploaded"), "success");
-        fetchCourses().then(setCourses);
+        fetchCourses(courseStatus).then(setCourses);
       } else {
         const data = await response.json();
         showSnackbar(data.detail || t("errorUploadingCourse"), "error");
@@ -203,6 +204,49 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
   return (
     <MainContainer style={{ position: "relative" }}>
+      {/* Переключатель статусов курсов */}
+      <ButtonGroup
+        style={{
+          marginBottom: "20px",
+          display: "flex",
+          justifyContent: "center",
+          gap: "8px",
+        }}
+      >
+        <Button
+          onClick={() => setCourseStatus("active")}
+          style={{
+            backgroundColor: courseStatus === "active" ? colors.selected : "#555",
+            color: "#fff",
+            minWidth: "120px",
+          }}
+        >
+          {t("activeCourses")}
+        </Button>
+        <Button
+          onClick={() => setCourseStatus("archived")}
+          style={{
+            backgroundColor: courseStatus === "archived" ? colors.selected : "#555",
+            color: "#fff",
+            minWidth: "120px",
+          }}
+        >
+          {t("archivedCourses")}
+        </Button>
+        {isAdmin && (
+          <Button
+            onClick={() => setCourseStatus("all")}
+            style={{
+              backgroundColor: courseStatus === "all" ? colors.selected : "#555",
+              color: "#fff",
+              minWidth: "120px",
+            }}
+          >
+            {t("allCourses")}
+          </Button>
+        )}
+      </ButtonGroup>
+
       {/* Выпадающий список выбора языка */}
       <Select
         value={i18n.language}
