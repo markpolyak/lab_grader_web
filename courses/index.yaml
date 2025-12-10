@@ -27,7 +27,7 @@ courses:
     featured: true
     logo: "/courses/logos/os-2025_logo.png"
 
-  - id: "ml-2025-spring"
+  - id: "mlb-2025-spring"
     file: "machine-learning-basics-2025.yaml"
     status: "archived"
     priority: 90
