@@ -122,7 +122,7 @@ course:
             ci:
                 - workflows
             files:
-                - exercises.ipynb
+                - models_train.ipynb
             moss:
                 language: python
                 max-matches: 1000
@@ -141,7 +141,7 @@ course:
             ci:
                 - workflows
             files:
-                - exercises.ipynb
+                - models_train.ipynb
             moss:
                 language: python
                 max-matches: 1000
