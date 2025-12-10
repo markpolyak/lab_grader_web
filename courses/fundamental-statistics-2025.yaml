@@ -84,5 +84,20 @@ course:
                 - Результат выполнения работы
                 - Исходный код программы с комментариями
                 - Выводы
+        "2":
+            github-prefix: fs-lab2
+            short-name: ДЗ2
+            taskid-max: 10
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - lab2_distributions.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab2
 misc:
     requests-timeout: 5
