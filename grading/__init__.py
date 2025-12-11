@@ -49,6 +49,7 @@ from .sheets_client import (
     prepare_grade_update,
     get_deadline_from_sheet,
     get_student_order,
+    get_decimal_separator,
     StudentLocation,
     LabColumn,
     GradeUpdate,
@@ -58,6 +59,13 @@ from .grader import (
     LabGrader,
     GradeResult,
     GradeStatus,
+)
+
+from .score import (
+    extract_score_from_logs,
+    format_score,
+    format_grade_with_score,
+    ScoreResult,
 )
 
 __all__ = [
@@ -92,6 +100,7 @@ __all__ = [
     "prepare_grade_update",
     "get_deadline_from_sheet",
     "get_student_order",
+    "get_decimal_separator",
     "StudentLocation",
     "LabColumn",
     "GradeUpdate",
@@ -99,4 +108,9 @@ __all__ = [
     "LabGrader",
     "GradeResult",
     "GradeStatus",
+    # score
+    "extract_score_from_logs",
+    "format_score",
+    "format_grade_with_score",
+    "ScoreResult",
 ]

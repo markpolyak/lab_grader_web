@@ -35,6 +35,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   const { t, i18n } = useTranslation();
 
   const [courses, setCourses] = useState([]);
+  const [courseStatus, setCourseStatus] = useState("active"); // "active", "archived", "all"
   const [expandedCourse, setExpandedCourse] = useState(null);
   const [editingCourseId, setEditingCourseId] = useState(null);
   const [editContent, setEditContent] = useState("");
@@ -59,10 +60,10 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   };
 
   useEffect(() => {
-    fetchCourses()
+    fetchCourses(courseStatus)
       .then(setCourses)
       .catch(() => showSnackbar(t("errorLoadingCourses"), "error"));
-  }, [t]);
+  }, [t, courseStatus]);
 
   const handleDeleteConfirmation = (courseId) => {
     setSelectedCourseId(courseId);
@@ -78,7 +79,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
       if (response.ok) {
         showSnackbar(t("courseDeleted"), "success");
-        fetchCourses().then(setCourses);
+        fetchCourses(courseStatus).then(setCourses);
       } else {
         const data = await response.json();
         showSnackbar(data.detail || t("errorDeletingCourse"), "error");
@@ -146,7 +147,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         showSnackbar(t("changesSaved"), "success");
         setEditingCourseId(null);
         setIsFullscreen(false);
-        fetchCourses().then(setCourses);
+        fetchCourses(courseStatus).then(setCourses);
       } else {
         const data = await response.json();
         showSnackbar(data.detail || t("errorSavingCourse"), "error");
@@ -183,7 +184,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
       if (response.ok) {
         showSnackbar(t("courseUploaded"), "success");
-        fetchCourses().then(setCourses);
+        fetchCourses(courseStatus).then(setCourses);
       } else {
         const data = await response.json();
         showSnackbar(data.detail || t("errorUploadingCourse"), "error");
@@ -211,7 +212,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
           position: "fixed",
           top: 16,
           right: 16,
-          zIndex: 3000,
+          zIndex: 3200,
           minWidth: 120,
           backgroundColor: "#555",
           color: "#fff",
@@ -225,6 +226,17 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
           },
           ".MuiSvgIcon-root": { color: "#fff" },
         }}
+        MenuProps={{
+          disablePortal: true,
+          sx: {
+            zIndex: 3200,
+          },
+          PaperProps: {
+            sx: {
+              zIndex: 3200,
+            },
+          },
+        }}
       >
         {languages.map(({ code, label }) => (
           <MenuItem key={code} value={code}>
@@ -232,6 +244,66 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
           </MenuItem>
         ))}
       </Select>
+
+      {/* Переключатель статусов курсов - компактный, в углу */}
+      <ButtonGroup
+        style={{
+          position: "fixed",
+          top: 110,
+          right: 16,
+          zIndex: 2999,
+          marginBottom: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+          width: "120px",
+        }}
+      >
+        <Button
+          onClick={() => setCourseStatus("active")}
+          style={{
+            backgroundColor: courseStatus === "active" ? "#3c3c43" : "#f5f5f5",
+            color: courseStatus === "active" ? "#fff" : "#666",
+            border: `1px solid ${courseStatus === "active" ? "#3c3c43" : "#ddd"}`,
+            padding: "6px 10px",
+            fontSize: "12px",
+            minWidth: "auto",
+            width: "100%",
+          }}
+        >
+          {t("activeCourses")}
+        </Button>
+        <Button
+          onClick={() => setCourseStatus("archived")}
+          style={{
+            backgroundColor: courseStatus === "archived" ? "#3c3c43" : "#f5f5f5",
+            color: courseStatus === "archived" ? "#fff" : "#666",
+            border: `1px solid ${courseStatus === "archived" ? "#3c3c43" : "#ddd"}`,
+            padding: "6px 10px",
+            fontSize: "12px",
+            minWidth: "auto",
+            width: "100%",
+          }}
+        >
+          {t("archivedCourses")}
+        </Button>
+        {isAdmin && (
+          <Button
+            onClick={() => setCourseStatus("all")}
+            style={{
+              backgroundColor: courseStatus === "all" ? "#3c3c43" : "#f5f5f5",
+              color: courseStatus === "all" ? "#fff" : "#666",
+              border: `1px solid ${courseStatus === "all" ? "#3c3c43" : "#ddd"}`,
+              padding: "6px 10px",
+              fontSize: "12px",
+              minWidth: "auto",
+              width: "100%",
+            }}
+          >
+            {t("allCourses")}
+          </Button>
+        )}
+      </ButtonGroup>
 
       {isAdmin && (
         <>

@@ -25,8 +25,8 @@ function formatValidationError(err) {
   return fieldLabel ? `${fieldLabel}: ${err.msg}` : err.msg;
 }
 
-export const fetchCourses = async () => {
-  const response = await fetch(`${API_BASE_URL}/courses`);
+export const fetchCourses = async (status = "active") => {
+  const response = await fetch(`${API_BASE_URL}/courses?status=${status}`);
   if (response.status === 429) {
     let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
     try {

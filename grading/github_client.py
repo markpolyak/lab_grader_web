@@ -194,6 +194,9 @@ class GitHubClient:
         if resp.status_code != 200:
             return None
 
+        # GitHub API returns logs in UTF-8, but without proper charset in headers.
+        # Force UTF-8 decoding to correctly handle Cyrillic and other non-ASCII characters.
+        resp.encoding = 'utf-8'
         return resp.text
 
 
