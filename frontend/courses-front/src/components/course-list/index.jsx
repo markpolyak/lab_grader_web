@@ -238,7 +238,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
       <ButtonGroup
         style={{
           position: "fixed",
-          top: 60,
+          top: 110,
           right: 16,
           zIndex: 2999,
           marginBottom: 0,
