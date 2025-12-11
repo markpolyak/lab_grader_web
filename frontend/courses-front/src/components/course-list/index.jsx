@@ -212,7 +212,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
           position: "fixed",
           top: 16,
           right: 16,
-          zIndex: 3000,
+          zIndex: 3200,
           minWidth: 120,
           backgroundColor: "#555",
           color: "#fff",
@@ -225,6 +225,13 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
             borderColor: "#888",
           },
           ".MuiSvgIcon-root": { color: "#fff" },
+        }}
+        MenuProps={{
+          PaperProps: {
+            sx: {
+              zIndex: 3200,
+            },
+          },
         }}
       >
         {languages.map(({ code, label }) => (
