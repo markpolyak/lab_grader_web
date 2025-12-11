@@ -204,49 +204,6 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
   return (
     <MainContainer style={{ position: "relative" }}>
-      {/* Переключатель статусов курсов */}
-      <ButtonGroup
-        style={{
-          marginBottom: "20px",
-          display: "flex",
-          justifyContent: "center",
-          gap: "8px",
-        }}
-      >
-        <Button
-          onClick={() => setCourseStatus("active")}
-          style={{
-            backgroundColor: courseStatus === "active" ? colors.selected : "#555",
-            color: "#fff",
-            minWidth: "120px",
-          }}
-        >
-          {t("activeCourses")}
-        </Button>
-        <Button
-          onClick={() => setCourseStatus("archived")}
-          style={{
-            backgroundColor: courseStatus === "archived" ? colors.selected : "#555",
-            color: "#fff",
-            minWidth: "120px",
-          }}
-        >
-          {t("archivedCourses")}
-        </Button>
-        {isAdmin && (
-          <Button
-            onClick={() => setCourseStatus("all")}
-            style={{
-              backgroundColor: courseStatus === "all" ? colors.selected : "#555",
-              color: "#fff",
-              minWidth: "120px",
-            }}
-          >
-            {t("allCourses")}
-          </Button>
-        )}
-      </ButtonGroup>
-
       {/* Выпадающий список выбора языка */}
       <Select
         value={i18n.language}
@@ -276,6 +233,66 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
           </MenuItem>
         ))}
       </Select>
+
+      {/* Переключатель статусов курсов - компактный, в углу */}
+      <ButtonGroup
+        style={{
+          position: "fixed",
+          top: 60,
+          right: 16,
+          zIndex: 2999,
+          marginBottom: 0,
+          display: "flex",
+          flexDirection: "column",
+          gap: "4px",
+          width: "120px",
+        }}
+      >
+        <Button
+          onClick={() => setCourseStatus("active")}
+          style={{
+            backgroundColor: courseStatus === "active" ? "#3c3c43" : "#f5f5f5",
+            color: courseStatus === "active" ? "#fff" : "#666",
+            border: `1px solid ${courseStatus === "active" ? "#3c3c43" : "#ddd"}`,
+            padding: "6px 10px",
+            fontSize: "12px",
+            minWidth: "auto",
+            width: "100%",
+          }}
+        >
+          {t("activeCourses")}
+        </Button>
+        <Button
+          onClick={() => setCourseStatus("archived")}
+          style={{
+            backgroundColor: courseStatus === "archived" ? "#3c3c43" : "#f5f5f5",
+            color: courseStatus === "archived" ? "#fff" : "#666",
+            border: `1px solid ${courseStatus === "archived" ? "#3c3c43" : "#ddd"}`,
+            padding: "6px 10px",
+            fontSize: "12px",
+            minWidth: "auto",
+            width: "100%",
+          }}
+        >
+          {t("archivedCourses")}
+        </Button>
+        {isAdmin && (
+          <Button
+            onClick={() => setCourseStatus("all")}
+            style={{
+              backgroundColor: courseStatus === "all" ? "#3c3c43" : "#f5f5f5",
+              color: courseStatus === "all" ? "#fff" : "#666",
+              border: `1px solid ${courseStatus === "all" ? "#3c3c43" : "#ddd"}`,
+              padding: "6px 10px",
+              fontSize: "12px",
+              minWidth: "auto",
+              width: "100%",
+            }}
+          >
+            {t("allCourses")}
+          </Button>
+        )}
+      </ButtonGroup>
 
       {isAdmin && (
         <>
