@@ -227,6 +227,10 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
           ".MuiSvgIcon-root": { color: "#fff" },
         }}
         MenuProps={{
+          disablePortal: true,
+          sx: {
+            zIndex: 3200,
+          },
           PaperProps: {
             sx: {
               zIndex: 3200,
