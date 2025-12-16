@@ -100,5 +100,21 @@ course:
                 language: python
                 max-matches: 100
                 local-path: lab2
+        "3":
+            github-prefix: fs-lab3
+            short-name: ДЗ3
+            taskid-max: 10
+            penalty-max: 6
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab3
 misc:
     requests-timeout: 5
