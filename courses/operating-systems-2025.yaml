@@ -106,7 +106,7 @@ course:
             short-name: ЛР2
             taskid-max: 20
             taskid-shift: 4
-            penalty-max: 9
+            penalty-max: 8
             ci:
                 - workflows
             files:
@@ -174,7 +174,7 @@ course:
             github-prefix: os-task4
             short-name: ЛР4
             taskid-max: 30
-            penalty-max: 8
+            penalty-max: 7
             ci:
                 - workflows
             files:
@@ -204,7 +204,7 @@ course:
             github-prefix: os-task5
             short-name: ЛР5
             taskid-max: 30
-            penalty-max: 10
+            penalty-max: 8
             # ignore-completion-date: True
             ci:
               workflows:
