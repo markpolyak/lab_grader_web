@@ -61,7 +61,7 @@ course:
             short-name: ДЗ1
             taskid-max: 10
             # ignore-task-id: True
-            penalty-max: 6
+            penalty-max: 5
             score:
               patterns:
                 - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
@@ -88,7 +88,7 @@ course:
             github-prefix: fs-lab2
             short-name: ДЗ2
             taskid-max: 10
-            penalty-max: 6
+            penalty-max: 5
             score:
               patterns:
                 - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
@@ -104,7 +104,7 @@ course:
             github-prefix: fs-lab3
             short-name: ДЗ3
             taskid-max: 10
-            penalty-max: 6
+            penalty-max: 5
             score:
               patterns:
                 - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
@@ -116,5 +116,21 @@ course:
                 language: python
                 max-matches: 100
                 local-path: lab3
+        "4":
+            github-prefix: fs-lab4
+            short-name: ДЗ4
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab4
 misc:
     requests-timeout: 5
