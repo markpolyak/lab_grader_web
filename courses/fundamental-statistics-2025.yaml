@@ -9,7 +9,7 @@ course:
         - ОснСтат
     semester: Осень 2025
     university: ИТМО
-    email: k43guap@ya.ru
+    email: mdpoliak@itmo.ru
     timezone: UTC+3
     github:
         organization: itmo-fs-2025
@@ -35,6 +35,11 @@ course:
             short-name: ДЗ0
             penalty-max: 5
             ignore-task-id: True
+            # score:
+            #   patterns:
+            #     - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'  # "##[notice]Points 10/10" -> 10
+            #     - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'              # "Score is 10.5" -> 10.5
+            #     - 'Total:\s+(\d+(?:[.,]\d+)?)'                  # "Total: 10" -> 10
             ci:
                 - workflows
             files:
@@ -54,9 +59,16 @@ course:
         "1":
             github-prefix: fs-lab1
             short-name: ДЗ1
-            # taskid-max: 25
-            ignore-task-id: True
-            penalty-max: 6
+            taskid-max: 10
+            # ignore-task-id: True
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+                # - 'ИТОГО:\s*(\d+(?:[.,]\d+)?)\s*баллов'                     # "ИТОГО: 100 баллов" -> 100
+                # - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'              # "##[notice]Points 10/10" -> 10
+                # - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'                          # "Score is 10.5" -> 10.5
+                # - 'Total:\s+(\d+(?:[.,]\d+)?)'                              # "Total: 10" -> 10
             ci:
                 - workflows
             files:
@@ -72,5 +84,53 @@ course:
                 - Результат выполнения работы
                 - Исходный код программы с комментариями
                 - Выводы
+        "2":
+            github-prefix: fs-lab2
+            short-name: ДЗ2
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - lab2_distributions.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab2
+        "3":
+            github-prefix: fs-lab3
+            short-name: ДЗ3
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab3
+        "4":
+            github-prefix: fs-lab4
+            short-name: ДЗ4
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab4
 misc:
     requests-timeout: 5

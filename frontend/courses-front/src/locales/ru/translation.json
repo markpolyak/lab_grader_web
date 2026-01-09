@@ -20,5 +20,8 @@
   "yes": "Да",
   "no": "Нет",
   "expand": "Развернуть",
-  "information": "Информация"
+  "information": "Информация",
+  "activeCourses": "Активные курсы",
+  "archivedCourses": "Архив курсов",
+  "allCourses": "Все курсы"
 }

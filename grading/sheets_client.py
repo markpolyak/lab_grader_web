@@ -280,6 +280,12 @@ def get_deadline_from_sheet(
             logger.warning(f"Could not parse deadline '{cell_value}' at row {deadline_row}, col {lab_col}")
             return None
 
+        # If date was parsed without time (midnight), set to end of day (23:59:59)
+        # This ensures deadlines like "19.11.2025" mean "until the end of that day"
+        if parsed_dt.hour == 0 and parsed_dt.minute == 0 and parsed_dt.second == 0:
+            parsed_dt = parsed_dt.replace(hour=23, minute=59, second=59)
+            logger.debug(f"Deadline parsed without time, set to end of day: {parsed_dt}")
+
         # If datetime already has timezone info, return as-is
         if parsed_dt.tzinfo is not None:
             logger.debug(f"Deadline already has timezone: {parsed_dt}")
@@ -335,3 +341,42 @@ def get_student_order(
     except Exception as e:
         logger.error(f"Error reading task ID: {e}")
         return None
+
+
+def get_decimal_separator(spreadsheet) -> str:
+    """
+    Get decimal separator used by the spreadsheet based on its locale.
+
+    Args:
+        spreadsheet: gspread Spreadsheet object
+
+    Returns:
+        Decimal separator: '.' or ','
+
+    Note:
+        - Locales like en_US, en_GB use '.'
+        - Locales like ru_RU, de_DE, fr_FR use ','
+        - Defaults to '.' if locale cannot be determined
+    """
+    try:
+        # Get spreadsheet metadata to access locale
+        metadata = spreadsheet.fetch_sheet_metadata()
+        locale = metadata.get('properties', {}).get('locale', 'en_US')
+
+        logger.debug(f"Spreadsheet locale: {locale}")
+
+        # Locales that use comma as decimal separator
+        comma_locales = {
+            'ru_RU', 'ru', 'de_DE', 'de', 'fr_FR', 'fr', 'es_ES', 'es',
+            'it_IT', 'it', 'pt_BR', 'pt', 'nl_NL', 'nl', 'pl_PL', 'pl',
+            'cs_CZ', 'cs', 'sv_SE', 'sv', 'da_DK', 'da', 'fi_FI', 'fi',
+            'no_NO', 'no', 'tr_TR', 'tr', 'el_GR', 'el', 'hu_HU', 'hu',
+        }
+
+        separator = ',' if locale in comma_locales else '.'
+        logger.info(f"Using decimal separator '{separator}' for locale {locale}")
+        return separator
+
+    except Exception as e:
+        logger.warning(f"Could not determine spreadsheet locale: {e}. Using default separator '.'")
+        return '.'

@@ -6,7 +6,7 @@ See `docs/PROJECT_DESCRIPTION.md` for full project documentation.
 
 - **Backend**: Single file `main.py` (FastAPI monolith, ~750 LOC)
 - **Frontend**: `frontend/courses-front/` (React 19 + Vite)
-- **Courses**: `courses/index.yaml` + individual YAML files
+- **Courses**: `courses/index.yaml` + individual YAML files (see `docs/COURSE_CONFIG.md` for all options)
 - **Tests**: `tests/` (pytest)
 
 ### Development Commands
@@ -60,7 +60,10 @@ LOG_LEVEL=INFO            # Logging level (optional)
 - **Success**: `v` written to Google Sheets
 - **Failure**: `x` written to Google Sheets
 - **With penalty**: `v-{n}` where n = penalty points
+- **With score**: `v@{score}` where score = points earned (e.g., `v@10.5` or `v@10,5`)
+- **With score and penalty**: `v@{score}-{n}` (e.g., `v@10.5-3` or `v@10,5-3`)
 - **Protection**: Can only overwrite empty cells, `x`, or cells starting with `?`
+- **Decimal separator**: Automatically detected from Google Sheets locale settings
 
 ### Lab Config Structure (course YAML)
 
@@ -79,7 +82,19 @@ labs:
         - cpplint
     files:                        # Required files in repo
       - lab2.cpp
+    score:                        # Optional: Extract score from logs
+      patterns:                   # List of regex patterns (tried in order)
+        - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'  # e.g., "##[notice]Points 10/10" -> 10
+        - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'              # e.g., "Score is 10.5" -> 10.5
+        - 'Total:\s+(\d+(?:[.,]\d+)?)'                  # e.g., "Total: 10" -> 10
 ```
+
+**Score extraction notes:**
+- Patterns are regex with first capturing group = score value
+- Accepts both `.` and `,` as decimal separator in logs
+- Output format matches Google Sheets locale (e.g., `10.5` for en_US, `10,5` for ru_RU)
+- If score patterns configured but not found in logs → error
+- If score patterns not configured → no score extraction (backward compatible)
 
 ## CI/CD
 

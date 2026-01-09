@@ -26,6 +26,7 @@ from .ci_checker import (
 from .sheets_client import can_overwrite_cell
 from .penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
 from .taskid import extract_taskid_from_logs, calculate_expected_taskid, validate_taskid
+from .score import extract_score_from_logs
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +43,13 @@ class GradeStatus(Enum):
 class GradeResult:
     """Result of a grading operation."""
     status: GradeStatus
-    result: str | None  # Grade value: "v", "x", "v-3", etc.
+    result: str | None  # Grade value: "v", "x", "v-3", "v@10.5", etc.
     message: str  # User-facing message
     passed: str | None  # "3/4 тестов пройдено"
     checks: list[str] = field(default_factory=list)  # CI check summaries
     current_grade: str | None = None  # Existing grade if rejected
     error_code: str | None = None  # For programmatic error handling
+    score: str | None = None  # Score extracted from logs (e.g., "10.5")
 
 
 @dataclass
@@ -55,8 +57,9 @@ class CIEvaluation:
     """Internal result of CI evaluation with full details."""
     grade_result: GradeResult  # The GradeResult to return
     ci_passed: bool  # Whether all CI checks passed
-    successful_runs: list[CheckRun] = field(default_factory=list)  # For TASKID extraction
+    successful_runs: list[CheckRun] = field(default_factory=list)  # For TASKID/score extraction
     latest_success_time: datetime | None = None  # For penalty calculation
+    score: str | None = None  # Extracted score from logs
 
 
 class LabGrader:
@@ -293,6 +296,95 @@ class LabGrader:
         logger.info(f"TASKID validated: {taskid_found} matches expected {expected_taskid}")
         return None
 
+    def check_score(
+        self,
+        org: str,
+        repo_name: str,
+        successful_runs: list[CheckRun],
+        score_patterns: list[str],
+    ) -> tuple[str | None, GradeResult | None]:
+        """
+        Extract score from job logs using configured patterns.
+
+        Reads logs from successful CI jobs and extracts score using pattern list.
+        If multiple occurrences found, they must all match (same value).
+
+        Args:
+            org: GitHub organization
+            repo_name: Repository name
+            successful_runs: List of successful CheckRun objects
+            score_patterns: List of regex patterns to try
+
+        Returns:
+            Tuple of (score_string, error_result)
+            - If successful: (score, None)
+            - If error: (None, GradeResult with error)
+
+        Note:
+            Score patterns are tried in order. First matching pattern is used.
+            Score must be consistent across all successful jobs.
+        """
+        logger.info(f"Score check for {repo_name}: checking {len(successful_runs)} successful job(s)")
+        logger.debug(f"Score patterns configured: {len(score_patterns)} pattern(s)")
+
+        score_found = None
+        score_error = None
+
+        # Try to get score from any successful job's logs
+        for idx, run in enumerate(successful_runs, 1):
+            logger.info(f"Checking job {idx}/{len(successful_runs)}: {run.name} (conclusion: {run.conclusion})")
+
+            # Extract job ID from html_url (format: .../job/12345)
+            if "/job/" in run.html_url:
+                try:
+                    job_id = int(run.html_url.split("/job/")[-1].split("?")[0])
+                    logger.info(f"  Job ID: {job_id}, URL: {run.html_url}")
+                except (ValueError, IndexError):
+                    logger.warning(f"  Could not extract job_id from URL: {run.html_url}")
+                    continue
+
+                logs = self.github.get_job_logs(org, repo_name, job_id)
+                if logs:
+                    logger.info(f"  Logs fetched, size: {len(logs)} chars")
+                    result = extract_score_from_logs(logs, score_patterns)
+                    if result.found is not None:
+                        logger.info(f"  ✓ Score found in logs: {result.found}")
+                        score_found = result.found
+                        break
+                    elif result.error:
+                        if "несколько" in result.error:
+                            # Multiple different scores - this is an error
+                            logger.error(f"  ✗ {result.error}")
+                            score_error = result.error
+                            break
+                        else:
+                            logger.info(f"  ✗ Score not found in this job's logs: {result.error}")
+                else:
+                    logger.warning(f"  Could not fetch logs for job {job_id}")
+            else:
+                logger.warning(f"  Job URL doesn't contain /job/: {run.html_url}")
+
+        if score_error:
+            return None, GradeResult(
+                status=GradeStatus.ERROR,
+                result=None,
+                message=f"⚠️ {score_error}",
+                passed=None,
+                error_code="MULTIPLE_SCORES",
+            )
+
+        if score_found is None:
+            return None, GradeResult(
+                status=GradeStatus.ERROR,
+                result=None,
+                message="⚠️ Баллы не найдены в логах. Убедитесь, что программа выводит набранный балл.",
+                passed=None,
+                error_code="SCORE_NOT_FOUND",
+            )
+
+        logger.info(f"Score extracted successfully: {score_found}")
+        return score_found, None
+
     def _evaluate_ci_internal(
         self,
         org: str,
@@ -407,6 +499,26 @@ class LabGrader:
         else:
             message = "Результат CI: ❌ Обнаружены ошибки"
 
+        # Extract score if patterns are configured (only for passed CI)
+        score_value = None
+        if ci_result.passed:
+            score_patterns = lab_config.get("score", {}).get("patterns", [])
+            if score_patterns:
+                logger.info(f"Score patterns configured, attempting to extract score")
+                score_value, score_error = self.check_score(
+                    org, repo_name,
+                    successful_runs,
+                    score_patterns,
+                )
+                if score_error:
+                    logger.warning(f"Score extraction failed: {score_error.message}")
+                    # If score is required but not found, return error
+                    return CIEvaluation(
+                        grade_result=score_error,
+                        ci_passed=False,
+                    )
+                logger.info(f"Score extracted: {score_value}")
+
         return CIEvaluation(
             grade_result=GradeResult(
                 status=GradeStatus.UPDATED,
@@ -414,10 +526,12 @@ class LabGrader:
                 message=message,
                 passed=result_string,
                 checks=ci_result.summary,
+                score=score_value,
             ),
             ci_passed=ci_result.passed,
             successful_runs=successful_runs,
             latest_success_time=ci_result.latest_success_time,
+            score=score_value,
         )
 
     def evaluate_ci(
@@ -448,6 +562,7 @@ class LabGrader:
         current_cell_value: str | None = None,
         deadline: datetime | None = None,
         expected_taskid: int | None = None,
+        decimal_separator: str = '.',
     ) -> GradeResult:
         """
         Perform full grading workflow.
@@ -456,9 +571,11 @@ class LabGrader:
         1. Check repository (files, workflows, commits)
         2. Check for forbidden modifications
         3. Evaluate CI results
-        4. Validate TASKID (if required)
-        5. Calculate penalty (if deadline provided)
-        6. Check if grade can be updated (cell protection)
+        4. Extract score from logs (if configured)
+        5. Validate TASKID (if required)
+        6. Calculate penalty (if deadline provided)
+        7. Format grade with score and penalty
+        8. Check if grade can be updated (cell protection)
 
         Args:
             org: GitHub organization
@@ -467,6 +584,7 @@ class LabGrader:
             current_cell_value: Current value in grade cell (for protection check)
             deadline: Deadline datetime for penalty calculation (None = no penalty)
             expected_taskid: Expected TASKID for validation (None = skip validation)
+            decimal_separator: Decimal separator for score formatting ('.' or ',')
 
         Returns:
             GradeResult with final status and grade
@@ -508,7 +626,6 @@ class LabGrader:
                 return taskid_error
 
         # Step 5: Calculate penalty (if deadline provided)
-        final_result = "v"  # CI passed
         penalty = 0
         penalty_max = lab_config.get("penalty-max", 0)
 
@@ -528,10 +645,24 @@ class LabGrader:
             )
 
             if penalty > 0:
-                final_result = format_grade_with_penalty("v", penalty)
-                logger.info(f"Applied penalty {penalty} for late submission: {final_result}")
+                logger.info(f"Calculated penalty: {penalty}")
 
-        # Step 6: Check cell protection (if current value provided)
+        # Step 6: Format grade with score and penalty
+        from .score import format_grade_with_score, format_score
+
+        score_value = ci_evaluation.score
+        final_result = "v"
+
+        if score_value is not None:
+            # Format score with correct separator and add penalty if present
+            final_result = format_grade_with_score("v", score_value, penalty, decimal_separator)
+            logger.info(f"Formatted grade with score: {final_result}")
+        elif penalty > 0:
+            # No score, but penalty exists
+            final_result = format_grade_with_penalty("v", penalty)
+            logger.info(f"Formatted grade with penalty: {final_result}")
+
+        # Step 7: Check cell protection (if current value provided)
         if current_cell_value is not None:
             if not can_overwrite_cell(current_cell_value):
                 return GradeResult(
@@ -541,11 +672,19 @@ class LabGrader:
                     passed=ci_evaluation.grade_result.passed,
                     checks=ci_evaluation.grade_result.checks,
                     current_grade=current_cell_value,
+                    score=score_value,
                 )
 
         # Build final message
+        message_parts = []
+        if score_value is not None:
+            formatted_score = format_score(score_value, decimal_separator)
+            message_parts.append(f"Баллы: {formatted_score}")
         if penalty > 0:
-            message = f"Результат CI: ✅ Все проверки пройдены (штраф: -{penalty})"
+            message_parts.append(f"штраф: -{penalty}")
+
+        if message_parts:
+            message = f"Результат CI: ✅ Все проверки пройдены ({', '.join(message_parts)})"
         else:
             message = ci_evaluation.grade_result.message
 
@@ -555,4 +694,5 @@ class LabGrader:
             message=message,
             passed=ci_evaluation.grade_result.passed,
             checks=ci_evaluation.grade_result.checks,
+            score=score_value,
         )

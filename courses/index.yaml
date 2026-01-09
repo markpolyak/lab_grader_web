@@ -27,11 +27,17 @@ courses:
     featured: true
     logo: "/courses/logos/os-2025_logo.png"
 
-  - id: "ml-2025-spring"
+  - id: "mlb-2025-spring"
     file: "machine-learning-basics-2025.yaml"
-    status: "active"
+    status: "archived"
     priority: 90
     logo: "/courses/logos/mlb-2025_logo.png"
+
+  - id: "ml-2025-autumn"
+    file: "machine-learning-2025.yaml"
+    status: "active"
+    priority: 90
+    logo: "/courses/logos/ml-2025_logo.png"
 
   - id: "fs-2025-autumn"
     file: "fundamental-statistics-2025.yaml"

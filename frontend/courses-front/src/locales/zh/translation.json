@@ -24,5 +24,7 @@
   "confirmDelete": "确认删除",
   "confirmDeleteMessage": "您确定要删除此课程吗？",
   "expand": "展开",
-  "loadCourse": "加载课程"
+  "activeCourses": "活跃课程",
+  "archivedCourses": "归档课程",
+  "allCourses": "所有课程"
 }
