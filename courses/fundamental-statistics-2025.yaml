@@ -166,8 +166,7 @@ course:
                 local-path: lab6
         "7":
             github-prefix: r
-            short-name: 
-              - "Тест / КР"
+            short-name: "Тест / КР"
             taskid-max: 15
             penalty-max: 5
             score:
