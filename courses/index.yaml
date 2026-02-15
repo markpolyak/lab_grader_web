@@ -20,10 +20,29 @@
 version: "1.0"
 
 courses:
-  - id: "os-2025-spring"
-    file: "operating-systems-2025.yaml"
+  - id: "os-2026-spring"
+    file: "operating-systems-2026.yaml"
     status: "active"
     priority: 100
+    featured: true
+    logo: "/courses/logos/os-2026_logo.png"
+
+  - id: "mlb-2026-spring"
+    file: "machine-learning-basics-2026.yaml"
+    status: "active"
+    priority: 90
+    logo: "/courses/logos/mlb-2026_logo.png"
+
+  - id: "nn-2026-spring"
+    file: "neural-networks-2026.yaml"
+    status: "active"
+    priority: 90
+    logo: "/courses/logos/nn-2026_logo.png"
+
+  - id: "os-2025-spring"
+    file: "operating-systems-2025.yaml"
+    status: "archived"
+    priority: 80
     featured: true
     logo: "/courses/logos/os-2025_logo.png"
 
