@@ -1,0 +1,161 @@
+---
+# Configuration file for lab-grader
+
+course:
+    name: Архитектура нейросетевых технологий
+    alt-names: 
+        - NN
+        - Neural Networks
+        - АРХНТ
+    semester: Весна 2026
+    university: ИТМО
+    email: mdpoliak@itmo.ru
+    timezone: UTC+3
+    github:
+        organization: itmo-nn-2026
+        teachers:
+            - "Mark Polyak"
+            - markpolyak
+    google:
+        spreadsheet: 1QnazBU9v_mSlSMhfNTpY1xJxFr5caaZkUaK0XWMTRx8
+        info-sheet: График
+        task-id-column: 0
+        student-name-column: 1
+        lab-column-offset: 1
+    staff:
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лектор
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лабораторные работы
+    labs:
+        "0":
+            github-prefix: 0
+            short-name: ДЗ0
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            # ignore-task-id: True
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+        "1":
+            github-prefix: 1
+            short-name: ДЗ1
+            taskid-max: 10
+            # ignore-task-id: True
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab1
+#        "2":
+#            github-prefix: 2
+#            short-name: ДЗ2
+#            taskid-max: 10
+#            penalty-max: 5
+#            score:
+#              patterns:
+#                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+#            ci:
+#                - workflows
+#            files:
+#                - exercises.ipynb
+#            moss:
+#                language: python
+#                max-matches: 100
+#                local-path: lab2
+#        "3":
+#            github-prefix: 3
+#            short-name: ДЗ3
+#            taskid-max: 10
+#            penalty-max: 5
+#            score:
+#              patterns:
+#                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+#            ci:
+#                - workflows
+#            files:
+#                - exercises.ipynb
+#            moss:
+#                language: python
+#                max-matches: 100
+#                local-path: lab3
+#        "4":
+#            github-prefix: 4
+#            short-name: ДЗ4
+#            taskid-max: 10
+#            penalty-max: 5
+#            score:
+#              patterns:
+#                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+#            ci:
+#                - workflows
+#            files:
+#                - exercises.ipynb
+#            moss:
+#                language: python
+#                max-matches: 100
+#                local-path: lab4
+#        "5":
+#            github-prefix: 5
+#            short-name: ДЗ5
+#            taskid-max: 10
+#            penalty-max: 5
+#            score:
+#              patterns:
+#                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+#            ci:
+#                - workflows
+#            files:
+#                - exercises.ipynb
+#            moss:
+#                language: python
+#                max-matches: 100
+#                local-path: lab5
+#        "6":
+#            github-prefix: 6
+#            short-name: ДЗ6
+#            taskid-max: 10
+#            penalty-max: 5
+#            score:
+#              patterns:
+#                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+#            ci:
+#                - workflows
+#            files:
+#                - exercises.ipynb
+#            moss:
+#                language: python
+#                max-matches: 100
+#                local-path: lab6
+#        "7":
+#            github-prefix: r
+#            short-name: "Тест / КР"
+#            taskid-max: 15
+#            penalty-max: 5
+#            score:
+#              patterns:
+#                - 'Итоговая оценка:\s*(\d+(?:[.,]\d+)?)'
+#            ci:
+#                - workflows
+#            files:
+#                - control_work.ipynb
+#            moss:
+#                language: python
+#                max-matches: 100
+#                local-path: test
+misc:
+    requests-timeout: 5

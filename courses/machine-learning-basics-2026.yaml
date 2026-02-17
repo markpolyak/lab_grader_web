@@ -1,0 +1,115 @@
+---
+# Configuration file for lab-grader
+
+course:
+    name: Основы машинного обучения
+    alt-names: 
+        - Основы машинного обучения
+        - ОМО
+        - Machine learning basics
+        - MLB
+        - Machine Learning
+        - ML
+    semester: Весна 2026
+    university: ГУАП
+    email: k43guap@ya.ru
+    timezone: UTC+3
+    github:
+        organization: suai-mlb-2026
+        teachers:
+            - "Mark Polyak"
+            - markpolyak
+    google:
+        spreadsheet: 1hDCAFbzJw0ljcHn8D8w50jYflJA2EoE8wc4nBPAPd60
+        info-sheet: График
+        task-id-column: 0
+        student-name-column: 1
+        lab-column-offset: 1
+    staff:
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лектор
+        - name: Поляк Марк Дмитриевич
+          title: ст. преп.
+          status: лабораторные работы
+    labs:
+        "1":
+            github-prefix: 1
+            short-name: ЛР1
+            taskid-max: 40
+            penalty-max: 7
+#            ignore-task-id: True
+            ci:
+                workflows:
+                    - run-autograding-tests
+                    - Test python scripts
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 1000
+                local-path: lab1
+#                additional:
+#                  - hse-mlwp-2022
+#                  - suai-mlb-2024
+#                  - suai-mlb-2025
+#                basefiles:
+#                    - 
+#                        repo: k43guap/os-course-task1
+#                        filename: lab1.sh
+            report:
+                - Цель работы
+                - Индивидуальное задание
+                - Описание входных данных
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+        "2":
+            github-prefix: mlb-task2
+            short-name: ЛР2
+            taskid-max: 20
+            penalty-max: 9
+            ignore-task-id: True
+            ci:
+                - workflows
+            files:
+                - regression_assignment.ipynb
+            moss:
+                language: python
+                max-matches: 1000
+                local-path: lab2
+                additional:
+                  - hse-mlwp-2022
+                  - suai-mlb-2024
+                  - suai-mlb-2025
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Результат выполнения работы
+                - Выводы
+        "3":
+            github-prefix: mlb-task3
+            short-name: ЛР3
+            taskid-max: 20
+            penalty-max: 7
+            ignore-task-id: True
+            ci:
+                - workflows
+            files:
+                - classification_assignment.ipynb
+            moss:
+                language: python
+                max-matches: 1000
+                local-path: lab3
+                additional:
+                  - suai-mlb-2024
+                  - suai-mlb-2025
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Результат выполнения работы
+                - Выводы
+misc:
+    requests-timeout: 5
+    
+    
