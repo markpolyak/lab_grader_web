@@ -39,6 +39,9 @@ course:
             taskid-max: 8
             penalty-max: 7
 #            ignore-task-id: True
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
             ci:
                 workflows:
                     - run-autograding-tests
