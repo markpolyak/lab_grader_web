@@ -36,7 +36,7 @@ course:
         "1":
             github-prefix: 1
             short-name: ЛР1
-            taskid-max: 40
+            taskid-max: 8
             penalty-max: 7
 #            ignore-task-id: True
             ci:
