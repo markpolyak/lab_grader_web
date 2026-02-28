@@ -31,7 +31,7 @@ course:
           status: лабораторные работы
     labs:
         "0":
-            github-prefix: 0
+            github-prefix: "0"
             short-name: ДЗ0
             penalty-max: 5
             score:
