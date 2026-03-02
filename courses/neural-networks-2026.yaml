@@ -47,7 +47,7 @@ course:
         "1":
             github-prefix: 1
             short-name: ДЗ1
-            taskid-max: 10
+            taskid-max: 5
             # ignore-task-id: True
             penalty-max: 5
             score:
