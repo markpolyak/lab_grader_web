@@ -61,22 +61,22 @@ course:
                 language: python
                 max-matches: 100
                 local-path: lab1
-#        "2":
-#            github-prefix: 2
-#            short-name: ДЗ2
-#            taskid-max: 10
-#            penalty-max: 5
-#            score:
-#              patterns:
-#                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
-#            ci:
-#                - workflows
-#            files:
-#                - exercises.ipynb
-#            moss:
-#                language: python
-#                max-matches: 100
-#                local-path: lab2
+       "2":
+           github-prefix: 2
+           short-name: ДЗ2
+           taskid-max: 5
+           penalty-max: 5
+           score:
+             patterns:
+               - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+           ci:
+               - workflows
+           files:
+               - exercises.ipynb
+           moss:
+               language: python
+               max-matches: 100
+               local-path: lab2
 #        "3":
 #            github-prefix: 3
 #            short-name: ДЗ3
