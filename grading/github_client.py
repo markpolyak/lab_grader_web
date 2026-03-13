@@ -34,6 +34,7 @@ class GitHubClient:
     """Client for GitHub API operations."""
 
     BASE_URL = "https://api.github.com"
+    DEFAULT_TIMEOUT = 30
 
     def __init__(self, token: str):
         """
@@ -59,7 +60,7 @@ class GitHubClient:
             True if user exists, False otherwise
         """
         url = f"{self.BASE_URL}/users/{username}"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 200
 
     def file_exists(self, org: str, repo: str, path: str) -> bool:
@@ -75,7 +76,7 @@ class GitHubClient:
             True if file exists, False otherwise
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/contents/{path}"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 200
 
     def check_required_files(
@@ -127,7 +128,7 @@ class GitHubClient:
         """
         # Get commits list
         commits_url = f"{self.BASE_URL}/repos/{org}/{repo}/commits"
-        commits_resp = requests.get(commits_url, headers=self.headers)
+        commits_resp = requests.get(commits_url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if commits_resp.status_code != 200:
             return None
@@ -140,7 +141,7 @@ class GitHubClient:
 
         # Get commit details with files
         commit_url = f"{self.BASE_URL}/repos/{org}/{repo}/commits/{latest_sha}"
-        commit_resp = requests.get(commit_url, headers=self.headers)
+        commit_resp = requests.get(commit_url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if commit_resp.status_code != 200:
             return CommitInfo(sha=latest_sha, files=[])
@@ -169,7 +170,7 @@ class GitHubClient:
             List of check run dicts from GitHub API, or None on error
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/commits/{commit_sha}/check-runs"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if resp.status_code != 200:
             return None
@@ -189,7 +190,10 @@ class GitHubClient:
             Log text or None if not available
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/actions/jobs/{job_id}/logs"
-        resp = requests.get(url, headers=self.headers)
+        try:
+            resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        except requests.exceptions.RequestException:
+            return None
 
         if resp.status_code != 200:
             return None
