@@ -80,7 +80,7 @@ course:
         "3":
             github-prefix: 3
             short-name: ДЗ3
-            taskid-max: 10
+            taskid-max: 5
             penalty-max: 5
             score:
               patterns:
@@ -96,7 +96,7 @@ course:
         "4":
             github-prefix: 4
             short-name: ДЗ4
-            taskid-max: 10
+            taskid-max: 5
             penalty-max: 5
             score:
               patterns:
