@@ -77,38 +77,38 @@ course:
                 language: python
                 max-matches: 100
                 local-path: lab2
-#        "3":
-#            github-prefix: 3
-#            short-name: ДЗ3
-#            taskid-max: 10
-#            penalty-max: 5
-#            score:
-#              patterns:
-#                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
-#            ci:
-#                - workflows
-#            files:
-#                - exercises.ipynb
-#            moss:
-#                language: python
-#                max-matches: 100
-#                local-path: lab3
-#        "4":
-#            github-prefix: 4
-#            short-name: ДЗ4
-#            taskid-max: 10
-#            penalty-max: 5
-#            score:
-#              patterns:
-#                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
-#            ci:
-#                - workflows
-#            files:
-#                - exercises.ipynb
-#            moss:
-#                language: python
-#                max-matches: 100
-#                local-path: lab4
+       "3":
+           github-prefix: 3
+           short-name: ДЗ3
+           taskid-max: 10
+           penalty-max: 5
+           score:
+             patterns:
+               - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+           ci:
+               - workflows
+           files:
+               - exercises.ipynb
+           moss:
+               language: python
+               max-matches: 100
+               local-path: lab3
+       "4":
+           github-prefix: 4
+           short-name: ДЗ4
+           taskid-max: 10
+           penalty-max: 5
+           score:
+             patterns:
+               - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+           ci:
+               - workflows
+           files:
+               - exercises.ipynb
+           moss:
+               language: python
+               max-matches: 100
+               local-path: lab4
 #        "5":
 #            github-prefix: 5
 #            short-name: ДЗ5
