@@ -68,38 +68,39 @@ course:
                 - Исходный код программы с комментариями
                 - Выводы
         "2":
-            github-prefix: mlb-task2
+            github-prefix: 2
             short-name: ЛР2
-            taskid-max: 20
-            penalty-max: 9
-            ignore-task-id: True
+            taskid-max: 7
+            penalty-max: 8
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
             ci:
-                - workflows
+                workflows:
+                    - run-autograding-tests
+                    - Test python scripts
             files:
-                - regression_assignment.ipynb
+                - exercises.ipynb
             moss:
                 language: python
                 max-matches: 1000
                 local-path: lab2
-                additional:
-                  - hse-mlwp-2022
-                  - suai-mlb-2024
-                  - suai-mlb-2025
             report:
                 - Цель работы
                 - Задание на лабораторную работу
                 - Результат выполнения работы
                 - Выводы
         "3":
-            github-prefix: mlb-task3
+            github-prefix: 3
             short-name: ЛР3
-            taskid-max: 20
-            penalty-max: 7
-            ignore-task-id: True
+            taskid-max: 10
+            penalty-max: 10
             ci:
-                - workflows
+                workflows:
+                    - run-autograding-tests
+                    - Test python scripts
             files:
-                - classification_assignment.ipynb
+                - exercises.ipynb
             moss:
                 language: python
                 max-matches: 1000
