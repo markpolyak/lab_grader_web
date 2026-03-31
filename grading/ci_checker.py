@@ -147,7 +147,7 @@ def evaluate_ci_results(check_runs: list[CheckRun]) -> CIResult:
             if run.completed_at:
                 if latest_success is None or run.completed_at > latest_success:
                     latest_success = run.completed_at
-        elif run.conclusion == "failure":
+        elif run.conclusion in ("failure", "skipped"):
             emoji = "❌"
         else:
             emoji = "⏳"
