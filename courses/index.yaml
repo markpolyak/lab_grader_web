@@ -33,10 +33,16 @@ courses:
     priority: 90
     logo: "/courses/logos/mlb-2026_logo.png"
 
+  - id: "rts-2026-spring"
+    file: "random-processes-and-time-series-2026.yaml"
+    status: "active"
+    priority: 90
+    logo: "/courses/logos/rts-2026_logo.png"
+
   - id: "nn-2026-spring"
     file: "neural-networks-2026.yaml"
     status: "active"
-    priority: 90
+    priority: 80
     logo: "/courses/logos/nn-2026_logo.png"
 
   - id: "os-2025-spring"
@@ -60,6 +66,6 @@ courses:
 
   - id: "fs-2025-autumn"
     file: "fundamental-statistics-2025.yaml"
-    status: "active"
+    status: "archived"
     priority: 90
     logo: "/courses/logos/fs-2025_logo.png"
