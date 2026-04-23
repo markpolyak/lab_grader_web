@@ -93,8 +93,8 @@ course:
         "3":
             github-prefix: 3
             short-name: ЛР3
-            taskid-max: 10
-            penalty-max: 10
+            taskid-max: 5
+            penalty-max: 8
             ci:
                 workflows:
                     - run-autograding-tests

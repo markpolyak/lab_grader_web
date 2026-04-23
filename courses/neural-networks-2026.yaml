@@ -24,10 +24,10 @@ course:
         lab-column-offset: 1
     staff:
         - name: Поляк Марк Дмитриевич
-          title: ст. преп.
+          title: преподаватель практики
           status: лектор
         - name: Поляк Марк Дмитриевич
-          title: ст. преп.
+          title: преподаватель практики
           status: лабораторные работы
     labs:
         "0":
