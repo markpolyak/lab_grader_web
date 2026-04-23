@@ -95,7 +95,7 @@ course:
                 language: python
                 max-matches: 100
                 local-path: lab4
-       "5":
+        "5":
            github-prefix: 5
            short-name: ДЗ5
            taskid-max: 10
