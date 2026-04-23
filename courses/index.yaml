@@ -37,7 +37,7 @@ courses:
     file: "random-processes-and-time-series-2026.yaml"
     status: "active"
     priority: 90
-    logo: "/courses/logos/rts-2026_logo.png"
+    logo: "/courses/logos/itmo_random_processes_time_series.png"
 
   - id: "nn-2026-spring"
     file: "neural-networks-2026.yaml"
