@@ -180,6 +180,38 @@ class TestEvaluateCIResults:
         assert result.total_count == 0
         assert result.has_pending is True
 
+    def test_skipped_with_failure(self):
+        """Skipped job + failed job should result in failure, not pending."""
+        runs = [
+            CheckRun("run-autograding-tests", "skipped", "url1"),
+            CheckRun("Test python scripts", "failure", "url2"),
+        ]
+        result = evaluate_ci_results(runs)
+        assert result.passed is False
+        assert result.has_pending is False
+        assert "❌" in result.summary[0]
+        assert "❌" in result.summary[1]
+
+    def test_skipped_alone_is_failure(self):
+        """Skipped job alone should result in failure, not pending."""
+        runs = [
+            CheckRun("run-autograding-tests", "skipped", "url1"),
+        ]
+        result = evaluate_ci_results(runs)
+        assert result.passed is False
+        assert result.has_pending is False
+        assert result.passed_count == 0
+
+    def test_skipped_with_success_is_failure(self):
+        """Skipped + success should not pass."""
+        runs = [
+            CheckRun("lint", "skipped", "url1"),
+            CheckRun("test", "success", "url2"),
+        ]
+        result = evaluate_ci_results(runs)
+        assert result.passed is False
+        assert result.has_pending is False
+
     def test_latest_success_time(self):
         """Track latest success time."""
         runs = [
