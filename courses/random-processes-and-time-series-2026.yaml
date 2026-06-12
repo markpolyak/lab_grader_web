@@ -66,7 +66,7 @@ course:
         "3":
             github-prefix: 3
             short-name: ЛР3
-            taskid-max: 10
+            taskid-max: 8
             penalty-max: 10
             score:
               patterns:
@@ -82,7 +82,7 @@ course:
         "4":
             github-prefix: 4
             short-name: ЛР4
-            taskid-max: 10
+            taskid-max: 9
             penalty-max: 10
             score:
               patterns:
