@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+gspread
+oauth2client
+pyyaml
+requests
+python-multipart
+python-dotenv
+itsdangerous
+httpx
+python-telegram-bot>=20.0
