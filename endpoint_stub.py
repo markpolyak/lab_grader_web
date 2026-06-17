@@ -1,0 +1,98 @@
+﻿# TODO: еализовать эндпоинт для загрузки результатов тестов Moodle
+
+from flask import Flask, request, jsonify
+import pandas as pd
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import os
+import time
+
+app = Flask(name)
+
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_name('credentials.json', scope)
+client = gspread.authorize(creds)
+
+def parse_file(file_path):
+if file_path.endswith('.csv'):
+return pd.read_csv(file_path)
+elif file_path.endswith('.xlsx'):
+return pd.read_excel(file_path)
+else:
+raise ValueError("Неподдерживаемый формат файла")
+
+def normalize_fio(fio):
+return " ".join(str(fio).replace('\xa0', ' ').replace('\n', ' ').strip().lower().split())
+
+def get_all_students(sheet):
+students = {}
+for worksheet in sheet.worksheets():
+data = worksheet.get_all_values()
+for real_row_idx, row in enumerate(data, start=1):
+if len(row) >= 2:
+if 'ф.и.о' in row[1].strip().lower():
+continue
+fio = row[1].strip()
+fio_norm = normalize_fio(fio)
+students[fio_norm] = (worksheet.title, real_row_idx)
+return students
+
+@app.route('/<sheet_id>', methods=['POST'])
+def sync(sheet_id):
+column_name = request.args.get('column')
+grade_column = request.args.get('grade_column', column_name)
+
+file = request.files['file']
+os.makedirs('uploads', exist_ok=True)
+file_path = os.path.join('uploads', file.filename)
+file.save(file_path)
+
+df = parse_file(file_path)
+sheet = client.open_by_key(sheet_id)
+students_dict = get_all_students(sheet)
+
+print("\n--- ВСЕ СТУДЕНТЫ ИЗ GOOGLE-ТАБЛИЦЫ (нормализованные ФИО): ---")
+for key in students_dict:
+    print(f"  {key}")
+print("--- КОНЕЦ СПИСКА ---\n")
+
+not_found = []
+
+for _, row in df.iterrows():
+    otch = row.get('Отчество или второе имя', "")
+    if pd.isna(otch) or str(otch).strip().lower() == 'nan':
+        fio = f"{row['Фамилия']} {row['Имя']}".strip()
+    else:
+        fio = f"{row['Фамилия']} {row['Имя']} {otch}".strip()
+
+    fio_norm = normalize_fio(fio)
+    print(f"🔍 Ищу студента: '{fio_norm}'")
+
+    try:
+        grade = row[grade_column]
+    except KeyError:
+        grade = None
+
+    student_info = students_dict.get(fio_norm)
+    if student_info and grade is not None:
+        sheet_name, student_row = student_info
+        ws = sheet.worksheet(sheet_name)
+        try:
+            cell = ws.find(column_name)
+            if cell is None:
+                raise ValueError(f"Столбец '{column_name}' не найден на листе '{sheet_name}'")
+            col = cell.col
+            ws.update_cell(student_row, col, grade)
+
+            time.sleep(1)  
+
+        except Exception as e:
+            print(f"Ошибка при обновлении {fio}: {e}")
+            not_found.append(fio)
+    else:
+        not_found.append(fio)
+
+os.remove(file_path)
+return jsonify({'not_found': not_found})
+if name == 'main':
+app.run(debug=True)
