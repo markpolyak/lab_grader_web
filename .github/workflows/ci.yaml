@@ -4,6 +4,7 @@ on:
       - main
       - 'claude/**'  # Auto-build for all Claude branches
       - 'feature/**' # Auto-build for all feature branches
+      - 'fix/**'     # Auto-build for all fix branches
   workflow_dispatch:
 
 env:
