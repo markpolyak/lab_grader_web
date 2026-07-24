@@ -12,12 +12,20 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from main import app
+from main import app, limiter
 
 
 @pytest.mark.rate_limit
 class TestRateLimiting:
     """Tests for rate limiting functionality."""
+
+    @pytest.fixture(autouse=True)
+    def reset_limiter(self):
+        """Очищать in-memory счётчики, чтобы тесты не зависели от порядка запуска."""
+
+        limiter.reset()
+        yield
+        limiter.reset()
 
     @pytest.fixture
     def client(self):
@@ -78,16 +86,30 @@ class TestRateLimiting:
         assert response.status_code == 429
 
     def test_rate_limit_resets_after_time_window(self, client):
-        """Test that rate limit resets after time window."""
-        # This test would require waiting for the time window to expire
-        # For now, we just verify the limit exists
-        # In a real scenario, you might use time mocking
-        pass
+        """Проверить сброс минутного окна без реального ожидания."""
 
-    def test_different_ips_have_separate_limits(self, client):
-        """Test that different IP addresses have separate rate limits."""
-        # This would require simulating different client IPs
-        # TestClient doesn't easily support this, but in production
-        # different IPs would have separate limits
-        pass
+        payload = {"login": "wrong", "password": "wrong"}
+        for _ in range(5):
+            assert client.post("/admin/login", json=payload).status_code == 401
+        assert client.post("/admin/login", json=payload).status_code == 429
 
+        # MemoryStorage удаляет счётчик при истёкшем timestamp. Переводим только
+        # созданные этим тестом записи в истёкшее состояние, не запуская sleep.
+        for key in list(limiter._storage.expirations):
+            limiter._storage.expirations[key] = 0
+
+        assert client.post("/admin/login", json=payload).status_code == 401
+
+    def test_different_ips_have_separate_limits(self):
+        """Проверить независимые счётчики для двух адресов клиента."""
+
+        payload = {"login": "wrong", "password": "wrong"}
+        with (
+            TestClient(app, client=("203.0.113.21", 50000)) as first_client,
+            TestClient(app, client=("203.0.113.22", 50000)) as second_client,
+        ):
+            for _ in range(5):
+                assert first_client.post("/admin/login", json=payload).status_code == 401
+
+            assert first_client.post("/admin/login", json=payload).status_code == 429
+            assert second_client.post("/admin/login", json=payload).status_code == 401

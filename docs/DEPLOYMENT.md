@@ -66,6 +66,10 @@ services:
     environment:
       CREDENTIALS_FILE: /app/google-credentials/credentials.json
       GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET}
+      GITHUB_OAUTH_CALLBACK_URL: ${GITHUB_OAUTH_CALLBACK_URL}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL}
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
@@ -86,10 +90,39 @@ networks:
 ```bash
 # /opt/labgrader/.env
 GITHUB_TOKEN=your_github_token
+GITHUB_OAUTH_CLIENT_ID=your_oauth_client_id
+GITHUB_OAUTH_CLIENT_SECRET=your_oauth_client_secret
+# Caddy из примера удаляет /api/v1 перед передачей запроса в /join/callback.
+GITHUB_OAUTH_CALLBACK_URL=https://labgrader.markpolyak.ru/api/v1/join/callback
+FRONTEND_BASE_URL=https://labgrader.markpolyak.ru
 ADMIN_LOGIN=your_admin_login
 ADMIN_PASSWORD=your_secure_password
 SECRET_KEY=your_secret_key
 ```
+
+### GitHub setup for automatic repository creation
+
+1. Under the **teacher's** GitHub account, create an OAuth App in
+   `Settings → Developer settings → OAuth Apps`. Set its callback URL exactly to
+   `GITHUB_OAUTH_CALLBACK_URL`. With the Caddy `/api/v1` rule above the public
+   callback is `https://<host>/api/v1/join/callback`, while FastAPI receives it
+   as the internal `/join/callback` route.
+2. Store the issued Client ID and Client Secret only in the server `.env` file.
+   The secret must never use a `VITE_` prefix because Vite embeds such values in
+   the browser bundle.
+   Set a unique random `SECRET_KEY` as well: the `/join` flow rejects the public
+   development default because this key signs OAuth `state` values.
+3. Create one GitHub template repository per lab and enable
+   **Settings → Template repository**. Add its `owner/repo` value to the lab's
+   `template-repo` field described in `docs/COURSE_CONFIG.md`.
+4. Ensure `GITHUB_TOKEN` can read the template, create private repositories in
+   the target course organization, and manage repository collaborators. A
+   classic PAT normally needs `repo` and organization access. A fine-grained
+   token needs repository **Administration: write** and **Contents: read**, plus
+   access to the template and target organization.
+5. Open `/join/{course_id}/{lab_id}` with a test student account and verify the
+   complete flow: OAuth approval, private repository creation, invitation, and
+   a repeated visit that does not recreate or modify the repository.
 
 ## Switching Between Branches
 

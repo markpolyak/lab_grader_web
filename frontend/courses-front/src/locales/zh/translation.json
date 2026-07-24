@@ -26,5 +26,38 @@
   "expand": "展开",
   "activeCourses": "活跃课程",
   "archivedCourses": "归档课程",
-  "allCourses": "所有课程"
+  "allCourses": "所有课程",
+  "join": {
+    "title": "获取实验仓库",
+    "loading": "正在加载实验设置…",
+    "course": "课程",
+    "lab": "实验",
+    "description": "使用 GitHub 登录。系统会从模板创建私有仓库，或恢复对现有仓库的访问权限。",
+    "signIn": "使用 GitHub 登录",
+    "redirecting": "正在跳转到 GitHub…",
+    "successTitle": "仓库已准备就绪",
+    "successDescription": "请打开仓库。如果邀请尚未接受，GitHub 会在仓库页面提示您接受。",
+    "openRepository": "打开仓库",
+    "errorTitle": "无法准备仓库",
+    "errors": {
+      "oauthDenied": "您取消了 GitHub 授权，可以重新尝试。",
+      "oauthFailed": "GitHub 无法确认登录，请重新开始授权。",
+      "oauthUnavailable": "GitHub 暂时不可用，请稍后重试。",
+      "oauthNotConfigured": "教师尚未为此服务配置 GitHub 登录。",
+      "oauthStateMissing": "GitHub 返回时缺少原始登录数据。请返回实验链接后重试。",
+      "oauthStateInvalid": "登录数据已损坏或被更改。请返回实验链接并重新开始。",
+      "oauthStateExpired": "GitHub 登录已过期。请返回实验链接后重试。",
+      "oauthStateMismatch": "此 GitHub 响应属于其他或已完成的登录。请返回实验链接并重新开始。",
+      "notFound": "未找到课程或实验，请检查链接。",
+      "notConfigured": "此实验尚未配置模板仓库。",
+      "templateUnavailable": "服务器无法访问模板仓库，请联系教师。",
+      "repositoryFailed": "无法创建或检查仓库，请重试。",
+      "accessFailed": "仓库已准备好，但无法检查当前邀请，请重试。",
+      "invitationFailed": "无法发送仓库邀请，请稍后重试或联系教师。",
+      "rateLimit": "GitHub 暂时限制了请求或邀请数量，请稍后重试。",
+      "githubUnavailable": "无法连接 GitHub，请检查网络后重试。",
+      "invalidRepositoryLink": "服务器返回了无效的仓库链接，请重新开始。",
+      "unknown": "发生未知错误，请重试或联系教师。"
+    }
+  }
 }

@@ -6,6 +6,7 @@ import { CourseListWrapper } from "./components/course-list/courseListWrapper";
 import { GroupListWrapper } from "./components/group-list/groupListWrapper";
 import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
+import { JoinLab } from "./components/JoinLab";
 
 function App() {
   return (
@@ -21,6 +22,8 @@ function App() {
           }
         />
         <Route path="/" element={<CourseListWrapper />} />
+        <Route path="/join/error" element={<JoinLab />} />
+        <Route path="/join/:courseId/:labId" element={<JoinLab />} />
         <Route path="/course/:courseId" element={<GroupListWrapper />} />
         <Route
           path="/course/:courseId/group/:groupId"
