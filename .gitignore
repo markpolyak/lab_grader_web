@@ -136,6 +136,17 @@ ENV/
 env.bak/
 venv.bak/
 
+# Plagiarism detection cache and DB
+plagiarism_cache/
+plagiarism.db
+
+# Interactive CLI last-used course/group
+.labgrader_cli.json
+
+# Local JPlag jar (download separately; see scripts/compare_engines_jplag_compare50.py)
+tools/jplag.jar
+tools/*.jar
+
 # Docker deployment files (only for server, not in git)
 docker-compose.yaml
 docker-compose.yml

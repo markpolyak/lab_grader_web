@@ -8,3 +8,4 @@ python-multipart
 python-dotenv
 itsdangerous
 slowapi
+compare50>=1.2.0

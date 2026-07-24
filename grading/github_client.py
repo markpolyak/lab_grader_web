@@ -4,9 +4,13 @@ GitHub API client for lab grading.
 This module provides a client for interacting with GitHub API
 to check repositories, commits, and CI status.
 """
+import base64
+import logging
 import requests
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -77,6 +81,52 @@ class GitHubClient:
         url = f"{self.BASE_URL}/repos/{org}/{repo}/contents/{path}"
         resp = requests.get(url, headers=self.headers)
         return resp.status_code == 200
+
+    def get_file_content(self, org: str, repo: str, path: str) -> bytes | None:
+        """
+        Download raw file content from a repository.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            path: File path within repository
+
+        Returns:
+            File content as bytes, or None if the file is missing / not a file
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/contents/{path}"
+        resp = requests.get(url, headers=self.headers)
+
+        if resp.status_code != 200:
+            logger.debug(
+                "Failed to get %s/%s/%s: HTTP %s",
+                org, repo, path, resp.status_code,
+            )
+            return None
+
+        data = resp.json()
+        if isinstance(data, list):
+            # Path points to a directory, not a file
+            logger.debug("%s/%s/%s is a directory, not a file", org, repo, path)
+            return None
+
+        encoding = data.get("encoding")
+        content = data.get("content")
+        if encoding == "base64" and content:
+            return base64.b64decode(content)
+
+        # Large files may omit inline content; fall back to download_url
+        download_url = data.get("download_url")
+        if download_url:
+            download_resp = requests.get(download_url, headers=self.headers)
+            if download_resp.status_code == 200:
+                return download_resp.content
+
+        logger.warning(
+            "Could not decode content for %s/%s/%s (encoding=%s)",
+            org, repo, path, encoding,
+        )
+        return None
 
     def check_required_files(
         self,
@@ -198,6 +248,41 @@ class GitHubClient:
         # Force UTF-8 decoding to correctly handle Cyrillic and other non-ASCII characters.
         resp.encoding = 'utf-8'
         return resp.text
+
+    def list_repos_with_prefix(self, org: str, prefix: str) -> list[str]:
+        """
+        List repository names in an organization that start with ``prefix-``
+        or exactly ``prefix`` (for cross-semester plagiarism cache prefill).
+
+        Returns bare repo names (without org/), paginating through GitHub API.
+        """
+        repos: list[str] = []
+        page = 1
+        expected = f"{prefix}-"
+        while True:
+            url = f"{self.BASE_URL}/orgs/{org}/repos"
+            resp = requests.get(
+                url,
+                headers=self.headers,
+                params={"per_page": 100, "page": page, "type": "all"},
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "Failed to list repos for org %s: HTTP %s",
+                    org, resp.status_code,
+                )
+                break
+            batch = resp.json()
+            if not batch:
+                break
+            for item in batch:
+                name = item.get("name", "")
+                if name.startswith(expected) or name == prefix:
+                    repos.append(name)
+            if len(batch) < 100:
+                break
+            page += 1
+        return repos
 
 
 def check_forbidden_modifications(

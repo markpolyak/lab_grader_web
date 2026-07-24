@@ -2,6 +2,32 @@
 
 This directory contains scripts for managing production deployments.
 
+## plagiarism_batch_course.py
+
+Прогон антиплагиата по **всем лабам курса** (скачать репо орг → compare50 → SQLite).
+Таблицу и `v` не трогает.
+
+```bash
+python scripts/plagiarism_batch_course.py --course os-2025-spring --skip-additional
+python scripts/plagiarism_batch_course.py --course os-2025-spring --labs 2 5 --max-repos 20
+```
+
+## plagiarism_local_demo.py
+
+Local smoke-test for plagiarism detection **without** Google Sheets and
+without an organization admin token.
+
+```bash
+# 1) Pure offline demo (synthetic identical / different code)
+python scripts/plagiarism_local_demo.py
+
+# 2) Your readable GitHub repos (personal GITHUB_TOKEN is enough)
+set GITHUB_TOKEN=ghp_...
+python scripts/plagiarism_local_demo.py repos --repos you/lab-alice you/lab-bob --files main.py --prefix lab
+```
+
+Creates `./plagiarism_cache/` and `plagiarism.db`. Does not write to Google.
+
 ## switch-branch.sh
 
 Utility script for switching between Git branches in production.
