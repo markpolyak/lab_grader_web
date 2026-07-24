@@ -6,14 +6,22 @@ import gspread
 import requests
 from oauth2client.service_account import ServiceAccountCredentials
 from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File
 from dotenv import load_dotenv
-from itsdangerous import TimestampSigner, BadSignature
+from itsdangerous import (
+    BadSignature,
+    SignatureExpired,
+    TimestampSigner,
+    URLSafeTimedSerializer,
+)
 import re
 import logging
+import secrets
 from datetime import datetime
+from dataclasses import dataclass
+from urllib.parse import quote, urlencode, urlsplit
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -33,6 +41,49 @@ from grading import (
     format_grade_with_score,
     format_score,
 )
+from grading.github_oauth import (
+    GitHubOAuthClient,
+    GitHubOAuthConfig,
+    GitHubOAuthError,
+)
+from grading.repository_provisioner import (
+    GitHubRepositoryClient,
+    RepositoryProvisionError,
+    RepositoryProvisioner,
+)
+
+
+SENSITIVE_CALLBACK_QUERY_PATTERN = re.compile(
+    r"(?i)(?P<prefix>[?&](?:code|state|access_token|client_secret|"
+    r"authorization|token|nonce)=)[^&\s\"]*"
+)
+
+
+def redact_oauth_callback_query(value: object) -> object:
+    """Скрыть чувствительные параметры callback, сохранив путь и структуру запроса."""
+
+    if not isinstance(value, str) or "/join/callback?" not in value:
+        return value
+    return SENSITIVE_CALLBACK_QUERY_PATTERN.sub(
+        lambda match: f"{match.group('prefix')}[REDACTED]",
+        value,
+    )
+
+
+class OAuthCallbackAccessLogFilter(logging.Filter):
+    """Удалять OAuth-секреты из access log сервера и тестового HTTP-клиента."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # Uvicorn передаёт URL строкой, а httpx в тестах — объектом URL внутри
+        # аргументов шаблона. Очистка уже сформированного сообщения закрывает оба
+        # варианта и не зависит от позиции request target в конкретной версии.
+        rendered_message = record.getMessage()
+        redacted_message = redact_oauth_callback_query(rendered_message)
+        if redacted_message != rendered_message:
+            record.msg = redacted_message
+            record.args = ()
+        return True
+
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -55,12 +106,14 @@ root_logger.setLevel(log_level)
 # Console handler (for docker logs)
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(log_formatter)
+console_handler.addFilter(OAuthCallbackAccessLogFilter())
 root_logger.addHandler(console_handler)
 
 # File handler (persistent logs)
 log_file = os.path.join(LOG_DIR, "labgrader.log")
 file_handler = logging.FileHandler(log_file, encoding='utf-8')
 file_handler.setFormatter(log_formatter)
+file_handler.addFilter(OAuthCallbackAccessLogFilter())
 root_logger.addHandler(file_handler)
 
 # Configure uvicorn loggers to use the same format
@@ -81,9 +134,14 @@ app = FastAPI()
 COURSES_DIR = "courses"
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_OAUTH_CLIENT_ID = os.getenv("GITHUB_OAUTH_CLIENT_ID")
+GITHUB_OAUTH_CLIENT_SECRET = os.getenv("GITHUB_OAUTH_CLIENT_SECRET")
+GITHUB_OAUTH_CALLBACK_URL = os.getenv("GITHUB_OAUTH_CALLBACK_URL")
+FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
-SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
+DEFAULT_SECRET_KEY = "super-secret-key"
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # Rate limiting configuration
 limiter = Limiter(key_func=get_remote_address)
@@ -102,6 +160,12 @@ if not GITHUB_TOKEN:
         "GITHUB_TOKEN должен быть установлен в переменных окружения. "
         "Приложение требует доступ к GitHub API."
     )
+
+if not SECRET_KEY or SECRET_KEY == DEFAULT_SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY должен быть задан собственным безопасным значением в переменных "
+        "окружения. Приложение не запускается с отсутствующим или известным ключом."
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # Разрешить запросы с любых источников
@@ -110,6 +174,14 @@ app.add_middleware(
     allow_headers=["*"],  # Разрешить все заголовки
 )
 signer = TimestampSigner(SECRET_KEY)
+# Отдельная соль не позволяет использовать подпись административной сессии как
+# OAuth state (и наоборот), хотя оба механизма используют общий SECRET_KEY.
+oauth_state_serializer = URLSafeTimedSerializer(
+    SECRET_KEY,
+    salt="github-oauth-state-v1",
+)
+OAUTH_STATE_MAX_AGE_SECONDS = 600
+OAUTH_NONCE_COOKIE_NAME = "join_oauth_nonce"
 
 # Course index management
 INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
@@ -213,6 +285,166 @@ def get_course_by_id(course_id: str):
 
     return course_info
 
+
+@dataclass(frozen=True)
+class JoinLabConfig:
+    """Проверенная часть конфигурации курса, необходимая сценарию `/join`."""
+
+    course_id: str
+    course_name: str
+    lab_id: str
+    lab_name: str
+    organization: str
+    github_prefix: str
+    template_owner: str
+    template_repository: str
+
+
+class OAuthStateError(Exception):
+    """Ошибка проверки OAuth state с безопасным кодом для frontend."""
+
+    def __init__(self, code: str):
+        super().__init__(code)
+        self.code = code
+
+
+def _parse_template_repository(value: object) -> tuple[str, str]:
+    """Разобрать формат ``owner/repo``, не пытаясь исправить ошибочный ввод."""
+
+    if not isinstance(value, str):
+        raise HTTPException(
+            status_code=409,
+            detail="Для этой лабораторной не настроен репозиторий-шаблон",
+        )
+
+    parts = value.strip().split("/")
+    if (
+        len(parts) != 2
+        or not parts[0]
+        or not parts[1]
+        or parts[1].endswith(".git")
+        or any(part != part.strip() or any(char.isspace() for char in part) for part in parts)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Поле template-repo должно иметь формат owner/repo без .git",
+        )
+
+    return parts[0], parts[1]
+
+
+def get_join_lab_config(course_id: str, lab_id: str) -> JoinLabConfig:
+    """Загрузить лабораторную по точному YAML-ключу и проверить поля для `/join`.
+
+    Существующий helper ``parse_lab_id`` здесь намеренно не используется: в
+    конфигурациях есть самостоятельные идентификаторы наподобие ``01``. Их
+    преобразование в целое число могло бы незаметно выбрать другую лабораторную.
+    """
+
+    course_info = get_course_by_id(course_id)
+    labs = course_info.get("labs", {})
+    lab_config = labs.get(lab_id) if isinstance(labs, dict) else None
+    if not isinstance(lab_config, dict):
+        raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+
+    github_config = course_info.get("github", {})
+    organization = github_config.get("organization") if isinstance(github_config, dict) else None
+    github_prefix_value = lab_config.get("github-prefix")
+    template_owner, template_repository = _parse_template_repository(
+        lab_config.get("template-repo")
+    )
+
+    if not isinstance(organization, str) or not organization.strip():
+        raise HTTPException(
+            status_code=409,
+            detail="В конфигурации курса не задана GitHub-организация",
+        )
+    # В старых конфигурациях часть числовых префиксов записана без кавычек и
+    # загружается PyYAML как int. Поддерживаем этот существующий формат, но не
+    # принимаем bool и произвольные типы, которые скрыли бы ошибку настройки.
+    if isinstance(github_prefix_value, str):
+        github_prefix = github_prefix_value.strip()
+    elif isinstance(github_prefix_value, int) and not isinstance(
+        github_prefix_value, bool
+    ):
+        github_prefix = str(github_prefix_value)
+    else:
+        github_prefix = ""
+
+    if not github_prefix:
+        raise HTTPException(
+            status_code=409,
+            detail="В конфигурации лабораторной не задан github-prefix",
+        )
+
+    return JoinLabConfig(
+        course_id=course_id,
+        course_name=str(course_info.get("name", "Курс")),
+        lab_id=lab_id,
+        lab_name=str(lab_config.get("short-name", f"Лабораторная {lab_id}")),
+        organization=organization.strip(),
+        github_prefix=github_prefix,
+        template_owner=template_owner,
+        template_repository=template_repository,
+    )
+
+
+def _validated_absolute_url(value: str | None, setting_name: str) -> str | None:
+    """Проверить URL развёртывания, используемый как адрес OAuth-перенаправления."""
+
+    # Docker Compose заменяет необъявленную необязательную переменную пустой
+    # строкой. Считаем её отсутствующей, чтобы значения по умолчанию работали
+    # локально и при размещении frontend/backend на одном host.
+    if value is None or not value.strip():
+        return None
+    normalized = value.strip().rstrip("/")
+    parsed = urlsplit(normalized)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Переменная {setting_name} содержит некорректный URL",
+        )
+    return normalized
+
+
+def get_oauth_callback_url(request: Request) -> str:
+    """Вернуть точный публичный callback из настроек OAuth App преподавателя."""
+
+    configured = _validated_absolute_url(
+        GITHUB_OAUTH_CALLBACK_URL,
+        "GITHUB_OAUTH_CALLBACK_URL",
+    )
+    if configured:
+        return configured
+    return str(request.url_for("github_oauth_callback"))
+
+
+def get_frontend_base_url(request: Request) -> str:
+    """Определить публичный адрес frontend для итогового перенаправления браузера."""
+
+    configured = _validated_absolute_url(FRONTEND_BASE_URL, "FRONTEND_BASE_URL")
+    if configured:
+        return configured
+
+    # В production frontend и API обычно находятся на одном origin. Получение
+    # origin из настроенного callback сохраняет правильный публичный host, даже
+    # если backend скрыт за префиксом обратного прокси `/api/v1`.
+    callback_parts = urlsplit(get_oauth_callback_url(request))
+    return f"{callback_parts.scheme}://{callback_parts.netloc}"
+
+
+def build_join_result_url(
+    request: Request,
+    course_id: str,
+    lab_id: str,
+    **query: str,
+) -> str:
+    """Собрать URL результата из проверенных route-id и безопасных кодов состояния."""
+
+    base_url = get_frontend_base_url(request)
+    path = f"/join/{quote(course_id, safe='')}/{quote(lab_id, safe='')}"
+    return f"{base_url}{path}?{urlencode(query)}"
+
 # Validate index on startup
 print("Validating course index...")
 if not validate_course_index():
@@ -242,6 +474,275 @@ class StudentRegistration(BaseModel):
 @limiter.limit("100/minute")
 async def read_index(request: Request):
     return FileResponse("dist/index.html")
+
+
+def _get_github_oauth_client(request: Request) -> GitHubOAuthClient:
+    """Создать OAuth-клиент только при фактическом использовании `/join`.
+
+    Приложение исторически запускается без OAuth-настроек. Отложенная проверка
+    сохраняет работу существующих endpoint проверки лабораторных, а новая
+    функция вместо падения всего приложения возвращает понятную ошибку настройки.
+    """
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        raise HTTPException(
+            status_code=503,
+            detail="Вход через GitHub OAuth пока не настроен преподавателем",
+        )
+    return GitHubOAuthClient(
+        GitHubOAuthConfig(
+            client_id=GITHUB_OAUTH_CLIENT_ID,
+            client_secret=GITHUB_OAUTH_CLIENT_SECRET,
+            callback_url=get_oauth_callback_url(request),
+        )
+    )
+
+
+def _load_oauth_state(
+    state: str | None,
+    expected_nonce: str | None,
+) -> tuple[str, str]:
+    """Проверить подпись, возраст, структуру и привязку OAuth state к браузеру."""
+
+    if not state:
+        raise OAuthStateError("oauth_state_missing")
+    try:
+        payload = oauth_state_serializer.loads(
+            state,
+            max_age=OAUTH_STATE_MAX_AGE_SECONDS,
+        )
+    except SignatureExpired as exc:
+        raise OAuthStateError("oauth_state_expired") from exc
+    except BadSignature as exc:
+        raise OAuthStateError("oauth_state_invalid") from exc
+
+    if not isinstance(payload, dict):
+        raise OAuthStateError("oauth_state_invalid")
+    course_id = payload.get("course_id")
+    lab_id = payload.get("lab_id")
+    nonce = payload.get("nonce")
+    if (
+        not isinstance(course_id, str)
+        or not course_id
+        or not isinstance(lab_id, str)
+        or not lab_id
+    ):
+        raise OAuthStateError("oauth_state_invalid")
+    if (
+        not isinstance(nonce, str)
+        or not nonce
+        or not isinstance(expected_nonce, str)
+        or not secrets.compare_digest(nonce, expected_nonce)
+    ):
+        raise OAuthStateError("oauth_state_mismatch")
+    return course_id, lab_id
+
+
+def _redirect_to_join_result(
+    request: Request,
+    course_id: str,
+    lab_id: str,
+    **query: str,
+) -> RedirectResponse:
+    """Перенаправить на frontend и удалить одноразовую OAuth-cookie."""
+
+    response = RedirectResponse(
+        build_join_result_url(request, course_id, lab_id, **query),
+        status_code=303,
+    )
+    response.delete_cookie(OAUTH_NONCE_COOKIE_NAME, path="/")
+    return response
+
+
+def _redirect_to_oauth_state_error(
+    request: Request,
+    error_code: str,
+) -> RedirectResponse:
+    """Вернуть браузер на общий экран ошибки, не доверяя данным из state."""
+
+    target = (
+        f"{get_frontend_base_url(request)}/join/error?"
+        f"{urlencode({'status': 'error', 'error': error_code})}"
+    )
+    response = RedirectResponse(target, status_code=303)
+    response.delete_cookie(OAUTH_NONCE_COOKIE_NAME, path="/")
+    return response
+
+
+@app.get("/join/{course_id}/{lab_id}")
+@limiter.limit("60/minute")
+def get_join_lab(request: Request, course_id: str, lab_id: str):
+    """Вернуть только публичные поля курса и лабораторной для landing page."""
+
+    config = get_join_lab_config(course_id, lab_id)
+    return {
+        "course_id": config.course_id,
+        "course_name": config.course_name,
+        "lab_id": config.lab_id,
+        "lab_name": config.lab_name,
+    }
+
+
+@app.get("/join/{course_id}/{lab_id}/start")
+@limiter.limit("10/minute")
+def start_github_oauth(request: Request, course_id: str, lab_id: str):
+    """Запустить OAuth после проверки настройки автоматического создания репозитория."""
+
+    get_join_lab_config(course_id, lab_id)
+    try:
+        oauth_client = _get_github_oauth_client(request)
+    except HTTPException:
+        # Браузер переходит на этот endpoint напрямую, поэтому возвращаем его на
+        # frontend с понятной ошибкой вместо показа необработанного JSON-ответа.
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error="oauth_not_configured",
+        )
+    nonce = secrets.token_urlsafe(24)
+    state = oauth_state_serializer.dumps(
+        {
+            "course_id": course_id,
+            "lab_id": lab_id,
+            # Подпись не позволяет изменить контекст лабораторной, а случайный
+            # nonce делает state непредсказуемым и связывает его с этим браузером.
+            "nonce": nonce,
+        }
+    )
+    response = RedirectResponse(
+        oauth_client.build_authorization_url(state),
+        status_code=302,
+    )
+    response.set_cookie(
+        OAUTH_NONCE_COOKIE_NAME,
+        nonce,
+        max_age=OAUTH_STATE_MAX_AGE_SECONDS,
+        httponly=True,
+        secure=urlsplit(oauth_client.config.callback_url).scheme == "https",
+        samesite="lax",
+        path="/",
+    )
+    return response
+
+
+@app.get("/join/callback", name="github_oauth_callback")
+@limiter.limit("20/minute")
+def github_oauth_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    """Завершить OAuth, подготовить репозиторий и перенаправить на frontend."""
+
+    # State проверяется для любого результата, включая access_denied. Иначе
+    # злоумышленник мог бы подделать callback для произвольного курса или лабы.
+    try:
+        course_id, lab_id = _load_oauth_state(
+            state,
+            request.cookies.get(OAUTH_NONCE_COOKIE_NAME),
+        )
+    except OAuthStateError as exc:
+        # В лог попадает только фиксированный код причины. Сам state, code и
+        # nonce-cookie здесь не нужны ни для диагностики, ни для ответа браузеру.
+        logger.warning("OAuth state rejected: %s", exc.code)
+        return _redirect_to_oauth_state_error(request, exc.code)
+
+    if error:
+        error_code = "oauth_denied" if error == "access_denied" else "oauth_failed"
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error=error_code,
+        )
+
+    if not code:
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error="oauth_failed",
+        )
+
+    try:
+        config = get_join_lab_config(course_id, lab_id)
+    except HTTPException as exc:
+        config_error = "join_not_found" if exc.status_code == 404 else "join_not_configured"
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error=config_error,
+        )
+
+    try:
+        oauth_client = _get_github_oauth_client(request)
+    except HTTPException:
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error="oauth_not_configured",
+        )
+
+    try:
+        username = oauth_client.get_verified_username(code)
+    except GitHubOAuthError as exc:
+        logger.warning("GitHub OAuth failed: %s", exc.log_message)
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error=exc.code,
+        )
+
+    try:
+        provisioner = RepositoryProvisioner(GitHubRepositoryClient(GITHUB_TOKEN))
+        result = provisioner.provision(
+            organization=config.organization,
+            github_prefix=config.github_prefix,
+            template_owner=config.template_owner,
+            template_repository=config.template_repository,
+            join_key=username,
+        )
+    except RepositoryProvisionError as exc:
+        logger.warning(
+            "Repository provisioning failed for %s/%s-%s: %s",
+            config.organization,
+            config.github_prefix,
+            username,
+            exc.log_message,
+        )
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error=exc.code,
+        )
+
+    logger.info(
+        "Repository provisioning completed for %s/%s (created=%s, access=%s)",
+        result.organization,
+        result.repository,
+        result.created,
+        result.access_action,
+    )
+    return _redirect_to_join_result(
+        request,
+        course_id,
+        lab_id,
+        status="success",
+        repository=result.repository_url,
+    )
 
 @app.post("/admin/login")
 @limiter.limit("5/minute")

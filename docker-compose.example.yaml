@@ -29,6 +29,13 @@ services:
       # Credentials and secrets
       CREDENTIALS_FILE: /app/google-credentials/credentials.json
       GITHUB_TOKEN: ${GITHUB_TOKEN}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET}
+      GITHUB_OAUTH_CALLBACK_URL: ${GITHUB_OAUTH_CALLBACK_URL}
+      FRONTEND_BASE_URL: ${FRONTEND_BASE_URL}
+      # Обязательное доверие только к реальному Caddy позволяет Slowapi видеть
+      # адрес студента и не даёт произвольному X-Forwarded-For обходить лимит.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?Set trusted Caddy IP or CIDR}
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
@@ -38,6 +45,10 @@ services:
     labels:
       caddy: labgrader.markpolyak.ru
       # API endpoints
+      # Внешний Caddy в этом файле не включает access log. Если он включён в
+      # глобальной конфигурации proxy, параметры code/state callback необходимо
+      # редактировать там отдельно: приложение не может изменить уже сделанную
+      # reverse proxy запись.
       caddy.handle_path: /api/v1*
       caddy.handle_path.0_reverse_proxy: "{{upstreams 8000}}"
       # Course logos (served by backend)

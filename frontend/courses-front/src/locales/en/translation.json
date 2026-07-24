@@ -23,5 +23,38 @@
   "information": "Information",
   "activeCourses": "Active Courses",
   "archivedCourses": "Archived Courses",
-  "allCourses": "All Courses"
+  "allCourses": "All Courses",
+  "join": {
+    "title": "Get your lab repository",
+    "loading": "Loading lab settings…",
+    "course": "Course",
+    "lab": "Lab",
+    "description": "Sign in with GitHub. The service will create a private repository from the template or restore access to an existing repository.",
+    "signIn": "Sign in with GitHub",
+    "redirecting": "Redirecting to GitHub…",
+    "successTitle": "Your repository is ready",
+    "successDescription": "Open the repository. If the invitation is still pending, GitHub will offer to accept it on that page.",
+    "openRepository": "Open repository",
+    "errorTitle": "Could not prepare the repository",
+    "errors": {
+      "oauthDenied": "You cancelled GitHub authorization. You can try again.",
+      "oauthFailed": "GitHub could not confirm the sign-in. Start authorization again.",
+      "oauthUnavailable": "GitHub is temporarily unavailable. Please try again later.",
+      "oauthNotConfigured": "The teacher has not configured GitHub sign-in for this service yet.",
+      "oauthStateMissing": "GitHub returned without the original sign-in data. Return to the lab link and try again.",
+      "oauthStateInvalid": "The sign-in data is damaged or was changed. Return to the lab link and start again.",
+      "oauthStateExpired": "The GitHub sign-in has expired. Return to the lab link and try again.",
+      "oauthStateMismatch": "This GitHub response belongs to another or completed sign-in. Return to the lab link and start again.",
+      "notFound": "The course or lab was not found. Check the link.",
+      "notConfigured": "A template repository has not been configured for this lab.",
+      "templateUnavailable": "The template repository is not accessible to the server. Contact the teacher.",
+      "repositoryFailed": "The repository could not be created or checked. Please try again.",
+      "accessFailed": "The repository is ready, but its current invitation could not be checked. Please try again.",
+      "invitationFailed": "The repository invitation could not be sent. Try later or contact the teacher.",
+      "rateLimit": "GitHub temporarily limited requests or invitations. Please try again later.",
+      "githubUnavailable": "GitHub could not be reached. Check the connection and try again.",
+      "invalidRepositoryLink": "The server returned an invalid repository link. Start again.",
+      "unknown": "An unexpected error occurred. Try again or contact the teacher."
+    }
+  }
 }
