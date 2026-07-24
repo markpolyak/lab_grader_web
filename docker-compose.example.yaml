@@ -25,6 +25,7 @@ services:
       - ./google-credentials:/app/google-credentials/
       - ./courses:/app/courses  # Mount courses directory for easy editing
       - ./logs:/app/logs  # Persistent logs (survive container restarts)
+      - ./plagiarism_cache:/app/plagiarism_cache  # Source cache + plagiarism.db
     environment:
       # Credentials and secrets
       CREDENTIALS_FILE: /app/google-credentials/credentials.json
@@ -35,6 +36,9 @@ services:
       # Logging configuration
       LOG_DIR: /app/logs  # Directory for persistent log files
       LOG_LEVEL: INFO  # Options: DEBUG, INFO, WARNING, ERROR (use DEBUG for detailed troubleshooting)
+      # Plagiarism detection
+      PLAGIARISM_CACHE_DIR: /app/plagiarism_cache
+      # PLAGIARISM_SHADOW_MODE: "true"  # Pilot: store matches, skip teacher notifications
     labels:
       caddy: labgrader.markpolyak.ru
       # API endpoints

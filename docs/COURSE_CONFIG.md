@@ -342,60 +342,112 @@ forbidden-modifications:
 
 ---
 
-## MOSS (Проверка плагиата)
+## MOSS / Plagiarism (Проверка плагиата)
 
-### `moss.language` (обязательно)
+Секция `plagiarism:` задаёт автоматическую проверку на плагиат при успешной сдаче (`v...`).
+Устаревший алиас `moss:` поддерживается для обратной совместимости (те же поля).
+
+Движок по умолчанию — локальный **compare50** (без внешней зависимости от Stanford MOSS).
+Проверка запускается в фоне после записи оценки и не блокирует ответ студенту.
+
+### `plagiarism.engine`
 **Тип:** `string`
-**Описание:** Язык программирования для проверки MOSS
-**Возможные значения:** `c`, `cc`, `python`, `java`, и др.
+**По умолчанию:** `compare50`
+**Описание:** Движок сравнения. Сейчас реализован `compare50`; `moss` — алиас к нему.
 **Пример:**
 ```yaml
-moss:
-  language: cc
+plagiarism:
+  engine: compare50
 ```
 
-### `moss.max-matches`
+### `plagiarism.language`
+**Тип:** `string`
+**Описание:** Язык (информативно / для legacy MOSS). compare50 определяет язык по расширению файла.
+**Пример:**
+```yaml
+plagiarism:
+  language: python
+```
+
+### `plagiarism.threshold`
+**Тип:** `float` (0..1)
+**По умолчанию:** `0.6`
+**Описание:** Порог сходства для флага преподавателю. Оценка в таблице не меняется.
+**Пример:**
+```yaml
+plagiarism:
+  threshold: 0.7
+```
+
+### `plagiarism.max-matches` / `moss.max-matches`
 **Тип:** `integer`
-**По умолчанию:** `250`
-**Описание:** Максимальное количество совпадений для отображения
+**По умолчанию:** `50`
+**Описание:** Максимальное число пар в отчёте движка
 **Пример:**
 ```yaml
-moss:
-  max-matches: 1000
+plagiarism:
+  max-matches: 100
 ```
 
-### `moss.local-path`
+### `plagiarism.local-path` / `moss.local-path`
 **Тип:** `string`
-**Описание:** Путь к директории с файлами в репозитории (если файлы не в корне)
+**Описание:** Поддиректория в репозитории, если файлы не в корне (при скачивании в кэш)
 **Пример:**
 ```yaml
-moss:
+plagiarism:
   local-path: lab3
 ```
 
-### `moss.additional`
+### `plagiarism.additional` / `moss.additional`
 **Тип:** `list[string]`
-**Описание:** Список дополнительных GitHub организаций для проверки (старые годы обучения)
+**Описание:** Дополнительные GitHub-организации для сравнения (прошлые годы). Репозитории
+должны быть предварительно закэшированы в `plagiarism_cache/`.
 **Пример:**
 ```yaml
-moss:
+plagiarism:
   additional:
     - suai-os-2023
     - suai-os-2024
 ```
 
-### `moss.basefiles`
+### `plagiarism.basefiles` / `moss.basefiles`
 **Тип:** `list[dict]`
-**Описание:** Базовые файлы (шаблоны), которые исключаются из проверки на плагиат
+**Описание:** Базовые/шаблонные файлы, исключаемые из сравнения
 **Пример:**
 ```yaml
-moss:
+plagiarism:
   basefiles:
     - repo: teacher/template-repo
       filename: lab3.cpp
-    - repo: teacher/template-repo
-      filename: examples/helper.cpp
 ```
+
+### Переменные окружения
+
+| Переменная | Описание |
+|---|---|
+| `PLAGIARISM_CACHE_DIR` | Корень кэша исходников (по умолчанию `plagiarism_cache`) |
+| `PLAGIARISM_DB_PATH` | Путь к SQLite БД (по умолчанию `{cache}/plagiarism.db`) |
+| `PLAGIARISM_SHADOW_MODE` | `true` — считать совпадения, но не уведомлять преподавателя (пилот) |
+
+### API
+
+`GET /courses/{course_id}/labs/{lab_id}/plagiarism` — список пар выше порога (требует admin-сессию).
+
+`POST /courses/{course_id}/labs/{lab_id}/plagiarism/review` — отметить пару как рассмотренную:
+```json
+{"student_a": "alice", "student_b": "bob", "reviewed": true}
+```
+
+Админ-UI: `/admin/courses` → Выбрать курс → лабораторная → список совпадений.
+
+### Уведомления преподавателя
+
+При совпадении выше порога (и если не включён `PLAGIARISM_SHADOW_MODE`):
+**заметка (note)** на ячейке оценки — видна при наведении в Google Sheets
+(в том числе роли Reader). Сама оценка (`v`, `v@…`) не меняется.
+
+> Cell-anchored discussion comments через Drive API v3 создать нельзя
+> (см. `docs/PLAGIARISM_DETECTION_PLAN.md` §6) — поэтому используется note.
 
 ---
 

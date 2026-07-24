@@ -20,6 +20,9 @@ docker-compose up
 cd frontend/courses-front && npm install --legacy-peer-deps && npm run dev
 pip install -r requirements.txt && uvicorn main:app --reload --port 8000
 
+# Interactive CLI (grade / plagiarism / matches)
+python scripts/menu.py
+
 # Run tests
 pytest tests/ -v
 pytest tests/ --cov=. --cov-report=term-missing

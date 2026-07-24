@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -33,6 +33,9 @@ from grading import (
     format_grade_with_score,
     format_score,
 )
+from grading.plagiarism_check import run_plagiarism_check
+from grading.plagiarism import get_plagiarism_config
+from grading.plagiarism_store import list_matches, mark_reviewed
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -132,7 +135,7 @@ def validate_course_index():
     try:
         index_data = load_course_index()
     except Exception as e:
-        print(f"❌ Failed to load course index: {e}")
+        print(f"[ERROR] Failed to load course index: {e}")
         return False
 
     courses = index_data.get("courses", [])
@@ -149,19 +152,19 @@ def validate_course_index():
     # Check for missing files
     missing_files = indexed_files - actual_files
     if missing_files:
-        print(f"❌ ERROR: Files referenced in index but not found: {missing_files}")
+        print(f"[ERROR] Files referenced in index but not found: {missing_files}")
         return False
 
     # Check for orphaned files
     orphaned_files = actual_files - indexed_files
     if orphaned_files:
-        print(f"⚠️  WARNING: Course files not in index (will be ignored): {orphaned_files}")
+        print(f"[WARN] Course files not in index (will be ignored): {orphaned_files}")
 
     # Check for duplicate IDs
     ids = [entry.get("id") for entry in courses if "id" in entry]
     if len(ids) != len(set(ids)):
         duplicates = {x for x in ids if ids.count(x) > 1}
-        print(f"❌ ERROR: Duplicate course IDs in index: {duplicates}")
+        print(f"[ERROR] Duplicate course IDs in index: {duplicates}")
         return False
 
     # Validate each indexed file can be loaded
@@ -171,13 +174,13 @@ def validate_course_index():
             with open(file_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f)
                 if not isinstance(data, dict) or "course" not in data:
-                    print(f"❌ ERROR: Invalid course structure in {entry['file']}")
+                    print(f"[ERROR] Invalid course structure in {entry['file']}")
                     return False
         except Exception as e:
-            print(f"❌ ERROR: Failed to load {entry['file']}: {e}")
+            print(f"[ERROR] Failed to load {entry['file']}: {e}")
             return False
 
-    print(f"✅ Course index validated successfully ({len(courses)} courses)")
+    print(f"[OK] Course index validated successfully ({len(courses)} courses)")
     return True
 
 def get_course_by_id(course_id: str):
@@ -222,9 +225,9 @@ if not validate_course_index():
 LOGOS_DIR = os.path.join(COURSES_DIR, "logos")
 if os.path.exists(LOGOS_DIR):
     app.mount("/courses/logos", StaticFiles(directory=LOGOS_DIR), name="course_logos")
-    print(f"✅ Course logos available at /courses/logos")
+    print("[OK] Course logos available at /courses/logos")
 else:
-    print(f"⚠️  Warning: Logos directory not found at {LOGOS_DIR}")
+    print(f"[WARN] Logos directory not found at {LOGOS_DIR}")
 
 class AuthRequest(BaseModel):
     login: str
@@ -281,6 +284,104 @@ def check_auth(request: Request):
 def logout(request: Request, response: Response):
     response.delete_cookie("admin_session", path="/")
     return {"message": "Logged out"}
+
+
+def require_admin(request: Request) -> str:
+    """Validate admin_session cookie; return admin login or raise 401."""
+    cookie = request.cookies.get("admin_session")
+    if not cookie:
+        raise HTTPException(status_code=401, detail="Нет сессии")
+    try:
+        login = signer.unsign(cookie, max_age=3600).decode()
+    except BadSignature:
+        raise HTTPException(status_code=401, detail="Невалидная или просроченная сессия")
+    if login != ADMIN_LOGIN:
+        raise HTTPException(status_code=401, detail="Невалидная сессия")
+    return login
+
+
+@app.get("/courses/{course_id}/labs/{lab_id}/plagiarism")
+@limiter.limit("30/minute")
+def get_plagiarism_matches(
+    request: Request,
+    course_id: str,
+    lab_id: str,
+    min_similarity: float | None = None,
+    include_reviewed: bool = True,
+):
+    """
+    List plagiarism matches for a lab (admin only).
+
+    Returns pairs above the configured / requested similarity threshold.
+    """
+    require_admin(request)
+
+    course_info = get_course_by_id(course_id)
+    lab_number = parse_lab_id(lab_id)
+    lab_config = course_info.get("labs", {}).get(str(lab_number), {})
+    cfg = get_plagiarism_config(lab_config)
+
+    threshold = min_similarity
+    if threshold is None and cfg is not None:
+        threshold = cfg.threshold
+
+    matches = list_matches(
+        course_id,
+        str(lab_number),
+        min_similarity=threshold,
+        include_reviewed=include_reviewed,
+    )
+    return {
+        "course_id": course_id,
+        "lab_id": str(lab_number),
+        "threshold": threshold,
+        "matches": [
+            {
+                "student_a": m.student_a,
+                "student_b": m.student_b,
+                "similarity": m.similarity,
+                "details": m.details,
+                "checked_at": m.checked_at,
+                "reviewed_by_teacher": m.reviewed_by_teacher,
+            }
+            for m in matches
+        ],
+    }
+
+
+class PlagiarismReviewRequest(BaseModel):
+    student_a: str = Field(..., min_length=1)
+    student_b: str = Field(..., min_length=1)
+    reviewed: bool = True
+
+
+@app.post("/courses/{course_id}/labs/{lab_id}/plagiarism/review")
+@limiter.limit("30/minute")
+def review_plagiarism_match(
+    request: Request,
+    course_id: str,
+    lab_id: str,
+    body: PlagiarismReviewRequest,
+):
+    """Mark a plagiarism pair as reviewed (or clear the flag). Admin only."""
+    require_admin(request)
+    lab_number = parse_lab_id(lab_id)
+    updated = mark_reviewed(
+        course_id,
+        str(lab_number),
+        body.student_a,
+        body.student_b,
+        reviewed=body.reviewed,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Пара не найдена")
+    return {
+        "course_id": course_id,
+        "lab_id": str(lab_number),
+        "student_a": body.student_a,
+        "student_b": body.student_b,
+        "reviewed_by_teacher": body.reviewed,
+    }
 
 
 @app.get("/courses")
@@ -349,6 +450,19 @@ def parse_lab_id(lab_id: str) -> int:
 def get_course(request: Request, course_id: str):
     course_info = get_course_by_id(course_id)
 
+    labs_summary = []
+    for lab_key, lab_cfg in (course_info.get("labs") or {}).items():
+        if not isinstance(lab_cfg, dict):
+            continue
+        labs_summary.append({
+            "id": str(lab_key),
+            "short-name": lab_cfg.get("short-name") or f"ЛР{lab_key}",
+            "github-prefix": lab_cfg.get("github-prefix"),
+            "has_plagiarism": bool(
+                lab_cfg.get("plagiarism") is not None or lab_cfg.get("moss") is not None
+            ),
+        })
+
     return {
         "id": course_id,
         "config": course_info["_meta"]["filename"],
@@ -360,6 +474,7 @@ def get_course(request: Request, course_id: str):
         "google-spreadsheet": course_info.get("google", {}).get("spreadsheet", "Unknown"),
         "status": course_info["_meta"]["status"],
         "priority": course_info["_meta"]["priority"],
+        "labs": labs_summary,
     }
 
 @app.delete("/courses/{course_id}")
@@ -592,7 +707,14 @@ class GradeRequest(BaseModel):
 
 @app.post("/courses/{course_id}/groups/{group_id}/labs/{lab_id}/grade")
 @limiter.limit("10/minute")
-def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grade_request: GradeRequest):
+def grade_lab(
+    request: Request,
+    course_id: str,
+    group_id: str,
+    lab_id: str,
+    grade_request: GradeRequest,
+    background_tasks: BackgroundTasks,
+):
     """
     Grade a lab submission by checking GitHub repository and CI status.
 
@@ -604,6 +726,7 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
     2. CI evaluation
     3. Return early for errors/pending (no Sheets connection needed)
     4. Connect to Sheets only when we have a result to write
+    5. On successful `v...` grade, schedule background plagiarism check
     """
     logger.info(f"Grading attempt - Course: {course_id}, Group: {group_id}, Lab: {lab_id}, GitHub: {grade_request.github}")
 
@@ -808,6 +931,28 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{final_result}'")
         sheet.update_cell(row_idx, lab_col, final_result)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
+
+        # Schedule plagiarism check after successful pass (does not block student response)
+        if str(final_result).startswith("v") and get_plagiarism_config(lab_config_dict):
+            background_tasks.add_task(
+                run_plagiarism_check,
+                course_id,
+                str(lab_number),
+                org,
+                repo_name,
+                lab_config_dict,
+                GITHUB_TOKEN,
+                spreadsheet_id=spreadsheet_id,
+                worksheet_title=group_id,
+                cell_row=row_idx,
+                cell_col=lab_col,
+                student=username,
+                credentials_file=CREDENTIALS_FILE,
+            )
+            logger.info(
+                "Scheduled background plagiarism check for %s/%s (lab %s)",
+                org, repo_name, lab_id,
+            )
 
         response = {
             "status": "updated",
