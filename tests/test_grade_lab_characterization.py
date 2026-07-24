@@ -13,6 +13,8 @@ from unittest.mock import Mock, MagicMock, patch
 import sys
 import os
 
+from fastapi import BackgroundTasks
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
@@ -87,7 +89,7 @@ class TestGradeLabCharacterization:
         # Import and call
         from main import grade_lab, GradeRequest
         grade_request = GradeRequest(github="testuser")
-        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert result["status"] == "updated"
         assert result["result"] == "v"
@@ -150,7 +152,7 @@ class TestGradeLabCharacterization:
 
         from main import grade_lab, GradeRequest
         grade_request = GradeRequest(github="testuser")
-        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert result["status"] == "updated"
         assert result["result"] == "x"
@@ -179,7 +181,7 @@ class TestGradeLabCharacterization:
 
         grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert exc_info.value.status_code == 400
         assert "test_main.py" in exc_info.value.detail
@@ -213,7 +215,7 @@ class TestGradeLabCharacterization:
 
         grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert exc_info.value.status_code == 400
         assert "workflows" in exc_info.value.detail.lower()
@@ -253,7 +255,7 @@ class TestGradeLabCharacterization:
 
         grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert exc_info.value.status_code == 404
         assert "коммит" in exc_info.value.detail.lower()
@@ -302,7 +304,7 @@ class TestGradeLabCharacterization:
 
         grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert exc_info.value.status_code == 403
         assert "test_main.py" in exc_info.value.detail
@@ -351,7 +353,7 @@ class TestGradeLabCharacterization:
 
         grade_request = GradeRequest(github="testuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert exc_info.value.status_code == 403
         assert "tests" in exc_info.value.detail.lower()
@@ -400,7 +402,7 @@ class TestGradeLabCharacterization:
 
         from main import grade_lab, GradeRequest
         grade_request = GradeRequest(github="testuser")
-        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+        result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert result["status"] == "pending"
         assert "⏳" in result["message"]
@@ -459,7 +461,7 @@ class TestGradeLabCharacterization:
 
         grade_request = GradeRequest(github="unknownuser")
         with pytest.raises(HTTPException) as exc_info:
-            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+            grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
         assert exc_info.value.status_code == 404
         assert "не найден" in exc_info.value.detail.lower()
@@ -479,7 +481,7 @@ class TestGradeLabCharacterization:
 
             grade_request = GradeRequest(github="testuser")
             with pytest.raises(HTTPException) as exc_info:
-                grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+                grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
             assert exc_info.value.status_code == 400
 
@@ -517,7 +519,7 @@ class TestGradeLabResponseFormat:
 
             from main import grade_lab, GradeRequest
             grade_request = GradeRequest(github="testuser")
-            result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
+            result = grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request, BackgroundTasks())
 
             # Verify response structure
             assert "status" in result
