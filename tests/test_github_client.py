@@ -4,6 +4,7 @@ Unit tests for grading/github_client.py
 Tests GitHub API client with mocked HTTP responses.
 """
 import pytest
+import requests
 import responses
 import sys
 import os
@@ -258,6 +259,49 @@ class TestGitHubClientGetCheckRuns:
         client = GitHubClient("test_token")
         runs = client.get_check_runs("org", "repo", "abc123")
         assert runs == []
+
+
+class TestGitHubClientGetJobLogs:
+    """Tests for get_job_logs method."""
+
+    @responses.activate
+    def test_get_job_logs_success(self):
+        """Successfully fetched logs are returned as text."""
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/actions/jobs/12345/logs",
+            body="2024-01-01T00:00:00Z TASKID=5\nDone.",
+            status=200
+        )
+        client = GitHubClient("test_token")
+        logs = client.get_job_logs("org", "repo", 12345)
+        assert logs is not None
+        assert "TASKID=5" in logs
+
+    @responses.activate
+    def test_get_job_logs_api_error(self):
+        """HTTP error returns None."""
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/actions/jobs/12345/logs",
+            json={"message": "Not Found"},
+            status=404
+        )
+        client = GitHubClient("test_token")
+        logs = client.get_job_logs("org", "repo", 12345)
+        assert logs is None
+
+    @responses.activate
+    def test_get_job_logs_connection_error(self):
+        """Network error returns None instead of raising."""
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/actions/jobs/12345/logs",
+            body=requests.exceptions.ConnectionError("Remote end closed connection without response")
+        )
+        client = GitHubClient("test_token")
+        logs = client.get_job_logs("org", "repo", 12345)
+        assert logs is None
 
 
 class TestCheckForbiddenModifications:
