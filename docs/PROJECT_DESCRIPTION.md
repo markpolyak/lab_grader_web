@@ -176,6 +176,9 @@ lab_grader_web/
 | GET | `/courses/{course_id}/groups/{group_id}/labs` | Список лабораторных работ |
 | POST | `/courses/{course_id}/groups/{group_id}/register` | Регистрация студента |
 | POST | `/courses/{course_id}/groups/{group_id}/labs/{lab_id}/grade` | Проверка лабораторной работы |
+| GET | `/join/{course_id}/{lab_id}` | Публичная информация для страницы присоединения к лабе |
+| GET | `/join/{course_id}/{lab_id}/start` | Начало GitHub OAuth Flow для создания репозитория студента |
+| GET | `/join/callback` | Колбэк GitHub OAuth: создание репозитория и починка доступа (см. `docs/REPO_GENERATION_PLAN.md`) |
 
 ### Административные маршруты
 

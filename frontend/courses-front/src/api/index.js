@@ -183,3 +183,32 @@ export async function gradeLab(courseId, groupId, labId, github) {
   return data;
 }
 
+export const fetchJoinLabInfo = async (courseId, labId) => {
+  const response = await fetch(
+    `${API_BASE_URL}/join/${courseId}/${encodeURIComponent(labId)}`
+  );
+  if (response.status === 429) {
+    let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
+    try {
+      const data = await response.json();
+      errorMessage = data.detail || data.message || errorMessage;
+    } catch (e) {
+      // Если не удалось распарсить JSON, используем сообщение по умолчанию
+    }
+    throw new Error(errorMessage);
+  }
+
+  const data = await response.json();
+
+  if (!response.ok) {
+    throw new Error(data.detail || "Не удалось загрузить информацию о лабораторной работе");
+  }
+
+  return data;
+};
+
+// GitHub OAuth flow is a full-page redirect, not a fetch - the caller navigates
+// the browser to this URL (window.location.href = getJoinStartUrl(...)).
+export const getJoinStartUrl = (courseId, labId) =>
+  `${API_BASE_URL}/join/${courseId}/${encodeURIComponent(labId)}/start`;
+

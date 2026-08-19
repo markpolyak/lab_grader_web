@@ -8,6 +8,7 @@ This module contains functions for various aspects of lab grading:
 - github_client: GitHub API client
 - sheets_client: Google Sheets helpers
 - grader: Orchestrator for grading workflow
+- repo_provisioning: Orchestrator for the /join student repo creation flow
 """
 
 from .penalty import (
@@ -61,6 +62,12 @@ from .grader import (
     GradeStatus,
 )
 
+from .repo_provisioning import (
+    RepoProvisioner,
+    ProvisionResult,
+    ProvisionStatus,
+)
+
 from .score import (
     extract_score_from_logs,
     format_score,
@@ -108,6 +115,10 @@ __all__ = [
     "LabGrader",
     "GradeResult",
     "GradeStatus",
+    # repo_provisioning
+    "RepoProvisioner",
+    "ProvisionResult",
+    "ProvisionStatus",
     # score
     "extract_score_from_logs",
     "format_score",

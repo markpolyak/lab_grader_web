@@ -6,14 +6,17 @@ import gspread
 import requests
 from oauth2client.service_account import ServiceAccountCredentials
 from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
+import json
+import base64
 import logging
 from datetime import datetime
+from urllib.parse import urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -22,6 +25,8 @@ from grading import (
     LabGrader,
     GitHubClient,
     GradeStatus,
+    RepoProvisioner,
+    ProvisionStatus,
     find_student_row,
     find_lab_column_by_name,
     calculate_lab_column,
@@ -84,6 +89,20 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
+
+# GitHub OAuth App for the /join student repo creation flow (see docs/REPO_GENERATION_PLAN.md).
+# Optional: existing deployments that don't use this feature can leave these unset;
+# the /join endpoints then respond with a clear 503 instead of the app failing to start.
+GITHUB_OAUTH_CLIENT_ID = os.getenv("GITHUB_OAUTH_CLIENT_ID")
+GITHUB_OAUTH_CLIENT_SECRET = os.getenv("GITHUB_OAUTH_CLIENT_SECRET")
+# Explicit override for the OAuth callback URL registered with the OAuth App.
+# Falls back to request.base_url + "join/callback" when unset (see _oauth_redirect_uri).
+GITHUB_OAUTH_CALLBACK_URL = os.getenv("GITHUB_OAUTH_CALLBACK_URL")
+# Where to send the student's browser after the /join/callback finishes (the frontend's
+# /join/:courseId/:labId route, which renders the "after" state from the query params).
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
+# Max age (seconds) for the signed OAuth `state` param - see docs/REPO_GENERATION_PLAN.md §3.3.
+JOIN_STATE_MAX_AGE = 600
 
 # Rate limiting configuration
 limiter = Limiter(key_func=get_remote_address)
@@ -826,6 +845,248 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 
+# ---------------------------------------------------------------------------
+# /join: automatic student repo creation (replaces GitHub Classroom)
+# See docs/REPO_GENERATION_PLAN.md for the full design.
+# ---------------------------------------------------------------------------
+
+def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
+    """
+    Load course/lab config needed by the /join flow.
+
+    Returns:
+        (course_info, lab_config, github_organization)
+
+    Raises:
+        HTTPException: 404 for unknown course/lab, 400 if the lab has no
+        `template-repo` configured or the course has no GitHub organization.
+    """
+    course_info = get_course_by_id(course_id)  # raises 404 if course unknown
+
+    labs = course_info.get("labs", {})
+    lab_number = parse_lab_id(lab_id)  # raises 400 if lab_id has no number
+    lab_config = labs.get(str(lab_number))
+    if not lab_config:
+        raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+
+    template_repo = lab_config.get("template-repo")
+    if not template_repo:
+        raise HTTPException(
+            status_code=400,
+            detail="Для этой лабораторной работы не настроено автоматическое создание репозитория (template-repo)",
+        )
+
+    org = course_info.get("github", {}).get("organization")
+    if not org:
+        raise HTTPException(status_code=400, detail="Для курса не настроена GitHub организация")
+
+    return course_info, lab_config, org
+
+
+def _oauth_redirect_uri(request: Request) -> str:
+    """Authorization callback URL - must exactly match the one registered with the OAuth App."""
+    if GITHUB_OAUTH_CALLBACK_URL:
+        return GITHUB_OAUTH_CALLBACK_URL
+    return f"{str(request.base_url).rstrip('/')}/join/callback"
+
+
+def _build_join_state(course_id: str, lab_id: str) -> str:
+    """
+    Build a signed `state` param carrying course_id/lab_id, using the same
+    itsdangerous signer already used for admin_session (see §3.3 of the plan).
+    """
+    payload = json.dumps({"course_id": course_id, "lab_id": lab_id}).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload).decode("ascii")
+    return signer.sign(payload_b64.encode("ascii")).decode("ascii")
+
+
+def _parse_join_state(state: str | None) -> dict:
+    """
+    Verify and decode a `state` param built by _build_join_state.
+
+    Raises:
+        HTTPException(400): if the state is missing, malformed, unsigned, or expired
+    """
+    try:
+        payload_b64 = signer.unsign(state, max_age=JOIN_STATE_MAX_AGE).decode("ascii")
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+    except (BadSignature, ValueError, TypeError, KeyError):
+        raise HTTPException(
+            status_code=400,
+            detail="Невалидная или просроченная ссылка. Запросите ссылку на подключение заново",
+        )
+
+    if not isinstance(payload, dict) or "course_id" not in payload or "lab_id" not in payload:
+        raise HTTPException(status_code=400, detail="Невалидная ссылка")
+
+    return payload
+
+
+def _join_result_redirect(course_id: str, lab_id: str, status: str, **extra) -> str:
+    """Build the frontend result URL (/join/:courseId/:labId) the student's browser lands on."""
+    params = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
+    base = FRONTEND_URL.rstrip("/")
+    return f"{base}/join/{course_id}/{lab_id}?{urlencode(params)}"
+
+
+def _exchange_code_for_username(code: str, redirect_uri: str) -> str | None:
+    """
+    Exchange an OAuth `code` for the confirmed GitHub username of the student.
+
+    This is the ONLY source of truth for the student's identity (see §3.2 of
+    the plan) - the student's access token obtained here is used for exactly
+    one request (GET /user) and is never logged, stored, or returned.
+
+    Returns:
+        The confirmed GitHub login, or None if any step of the exchange failed
+    """
+    try:
+        token_resp = requests.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": GITHUB_OAUTH_CLIENT_ID,
+                "client_secret": GITHUB_OAUTH_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        logger.error(f"OAuth token exchange request failed: {e}")
+        return None
+
+    if token_resp.status_code != 200:
+        logger.error(f"OAuth token exchange failed with status {token_resp.status_code}")
+        return None
+
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        logger.error("OAuth token exchange response had no access_token")
+        return None
+
+    try:
+        user_resp = requests.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        logger.error(f"GitHub /user request failed: {e}")
+        return None
+
+    if user_resp.status_code != 200:
+        logger.error(f"GitHub /user returned status {user_resp.status_code}")
+        return None
+
+    username = user_resp.json().get("login")
+    if not username:
+        logger.error("GitHub /user response had no 'login' field")
+        return None
+
+    return username
+
+
+@app.get("/join/{course_id}/{lab_id}")
+@limiter.limit("30/minute")
+def join_lab_info(request: Request, course_id: str, lab_id: str):
+    """Публичная информация для лендинга страницы присоединения к лабе (без аутентификации)."""
+    course_info, lab_config, _org = _load_lab_for_join(course_id, lab_id)
+    return {
+        "course_id": course_id,
+        "lab_id": lab_id,
+        "course_name": course_info.get("name", "Unknown"),
+        "lab_short_name": lab_config.get("short-name", lab_id),
+    }
+
+
+@app.get("/join/{course_id}/{lab_id}/start")
+@limiter.limit("20/minute")
+def join_lab_start(request: Request, course_id: str, lab_id: str):
+    """Начинает GitHub OAuth Web Application Flow (см. §3 плана)."""
+    _load_lab_for_join(course_id, lab_id)  # validate config before sending the student to GitHub
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Вход через GitHub временно недоступен: OAuth App не настроен")
+
+    state = _build_join_state(course_id, lab_id)
+    params = {
+        "client_id": GITHUB_OAUTH_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri(request),
+        "scope": "read:user",
+        "state": state,
+    }
+    logger.info(f"Redirecting to GitHub OAuth for join {course_id}/{lab_id}")
+    return RedirectResponse(url=f"https://github.com/login/oauth/authorize?{urlencode(params)}")
+
+
+@app.get("/join/callback")
+@limiter.limit("20/minute")
+def join_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    """
+    Обрабатывает колбэк GitHub OAuth: проверяет state, получает подтверждённый
+    username, создаёт репозиторий из шаблона и чинит доступ студента (§4 плана).
+    """
+    # state can't be recovered here if it's missing/invalid/expired, so this
+    # is the one case handled as a direct error response rather than a
+    # redirect to the (unknown) frontend course/lab page.
+    payload = _parse_join_state(state)
+    course_id = payload["course_id"]
+    lab_id = payload["lab_id"]
+
+    if error:
+        logger.info(f"Student declined GitHub OAuth for join {course_id}/{lab_id}: {error}")
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="access_denied"))
+
+    if not code:
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="missing_code"))
+
+    try:
+        course_info, lab_config, org = _load_lab_for_join(course_id, lab_id)
+    except HTTPException:
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="config"))
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_not_configured"))
+
+    username = _exchange_code_for_username(code, _oauth_redirect_uri(request))
+    if username is None:
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_exchange_failed"))
+
+    logger.info(f"Confirmed GitHub username '{username}' for join {course_id}/{lab_id}")
+
+    github_prefix = lab_config.get("github-prefix")
+    template_repo = lab_config.get("template-repo")
+
+    try:
+        # Server-side token, never the student's OAuth token (see §3.2/§6 of the plan).
+        github_client = GitHubClient(GITHUB_TOKEN)
+        provisioner = RepoProvisioner(github_client)
+        result = provisioner.provision(org, github_prefix, template_repo, username)
+    except Exception:
+        logger.exception(f"Unexpected error provisioning repo for {username} in {course_id}/{lab_id}")
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="provision_failed"))
+
+    if result.status != ProvisionStatus.OK:
+        logger.warning(f"Provisioning failed for {username} in {course_id}/{lab_id}: {result.error_code}")
+        return RedirectResponse(
+            url=_join_result_redirect(course_id, lab_id, "error", reason=result.error_code or "provision_failed")
+        )
+
+    logger.info(f"Provisioned {result.repo_url} for {username} ({course_id}/{lab_id})")
+    return RedirectResponse(
+        url=_join_result_redirect(course_id, lab_id, "success", repo_url=result.repo_url, username=username)
+    )
 
 
 @app.post("/courses/upload")

@@ -23,5 +23,19 @@
   "information": "Information",
   "activeCourses": "Active Courses",
   "archivedCourses": "Archived Courses",
-  "allCourses": "All Courses"
+  "allCourses": "All Courses",
+  "joinPageTitle": "Connect Repository",
+  "joinCourseLabel": "Course",
+  "joinLabLabel": "Lab",
+  "joinSignInButton": "Sign in with GitHub and create repository",
+  "joinSuccessMessage": "Repository created, access granted.",
+  "joinOpenRepoButton": "Open repository on GitHub",
+  "joinTryAgain": "Try again",
+  "joinLoadError": "Failed to load lab information",
+  "joinErrorAccessDenied": "You declined the access request on GitHub. To create the repository, access must be confirmed",
+  "joinErrorConfig": "Automatic repository creation is not configured for this lab. Please contact your teacher",
+  "joinErrorOauthFailed": "Failed to confirm GitHub sign-in. Please try again",
+  "joinErrorTemplateNotFound": "The template repository was not found or is unavailable. Please contact your teacher",
+  "joinErrorForbidden": "Not enough permissions to create the repository. Please contact your teacher",
+  "joinErrorGeneric": "An error occurred while creating the repository. Please try again later"
 }

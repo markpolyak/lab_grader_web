@@ -6,6 +6,7 @@ import { CourseListWrapper } from "./components/course-list/courseListWrapper";
 import { GroupListWrapper } from "./components/group-list/groupListWrapper";
 import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
+import { JoinLabWrapper } from "./components/JoinLab/joinLabWrapper";
 
 function App() {
   return (
@@ -30,6 +31,7 @@ function App() {
           path="/course/:courseId/group/:groupId/lab/:labId"
           element={<RegistrationFormWrapper />}
         />
+        <Route path="/join/:courseId/:labId" element={<JoinLabWrapper />} />
       </Routes>
     </Router>
   );

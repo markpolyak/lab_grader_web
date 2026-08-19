@@ -26,5 +26,19 @@
   "expand": "展开",
   "activeCourses": "活跃课程",
   "archivedCourses": "归档课程",
-  "allCourses": "所有课程"
+  "allCourses": "所有课程",
+  "joinPageTitle": "连接仓库",
+  "joinCourseLabel": "课程",
+  "joinLabLabel": "实验作业",
+  "joinSignInButton": "使用 GitHub 登录并创建仓库",
+  "joinSuccessMessage": "仓库已创建，访问权限已授予。",
+  "joinOpenRepoButton": "在 GitHub 上打开仓库",
+  "joinTryAgain": "重试",
+  "joinLoadError": "无法加载实验作业信息",
+  "joinErrorAccessDenied": "您在 GitHub 上拒绝了访问请求。要创建仓库，需要确认访问权限",
+  "joinErrorConfig": "该实验作业未配置自动创建仓库功能，请联系教师",
+  "joinErrorOauthFailed": "无法确认 GitHub 登录，请重试",
+  "joinErrorTemplateNotFound": "未找到模板仓库或模板仓库不可用，请联系教师",
+  "joinErrorForbidden": "创建仓库的权限不足，请联系教师",
+  "joinErrorGeneric": "创建仓库时发生错误，请稍后重试"
 }

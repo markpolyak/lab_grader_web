@@ -199,6 +199,17 @@ labs:
     short-name: ЛР1
 ```
 
+### `template-repo`
+**Тип:** `string`
+**Описание:** Репозиторий-шаблон в формате `owner/repo`, из которого автоматически создаётся репозиторий студента при переходе по ссылке `/join/{course_id}/{lab_id}` (замена GitHub Classroom, см. `docs/REPO_GENERATION_PLAN.md`). Репозиторий должен быть отмечен как Template repository в настройках GitHub. Обязательно только для использования этой фичи - без него ссылка `/join/...` для лабы отдаёт понятную ошибку конфигурации.
+**Пример:**
+```yaml
+labs:
+  "1":
+    github-prefix: os-task1
+    template-repo: suai-os-2025/os-task1-template
+```
+
 ---
 
 ## CI/CD опции
@@ -506,6 +517,7 @@ course:
   labs:
     "1":
       github-prefix: os-task1
+      template-repo: suai-os-2025/os-task1-template
       short-name: ЛР1
       taskid-max: 25
       taskid-shift: 0

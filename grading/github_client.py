@@ -176,6 +176,119 @@ class GitHubClient:
 
         return resp.json().get("check_runs", [])
 
+    def repo_exists(self, org: str, repo: str) -> bool:
+        """
+        Check if a repository exists.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+
+        Returns:
+            True if the repository exists, False otherwise
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}"
+        resp = requests.get(url, headers=self.headers)
+        return resp.status_code == 200
+
+    def create_repo_from_template(
+        self,
+        template_owner: str,
+        template_repo: str,
+        owner: str,
+        name: str,
+        private: bool = True,
+    ) -> requests.Response:
+        """
+        Create a repository from a template repository.
+
+        See https://docs.github.com/en/rest/repos/repos#create-a-repository-using-a-template
+
+        Args:
+            template_owner: Owner of the template repository
+            template_repo: Name of the template repository
+            owner: Organization (or user) that will own the new repository
+            name: Name of the new repository
+            private: Whether the new repository should be private
+
+        Returns:
+            The raw requests.Response (caller inspects status_code, since
+            different non-2xx codes need different handling upstream)
+        """
+        url = f"{self.BASE_URL}/repos/{template_owner}/{template_repo}/generate"
+        headers = {**self.headers, "Accept": "application/vnd.github+json"}
+        payload = {"owner": owner, "name": name, "private": private}
+        return requests.post(url, headers=headers, json=payload)
+
+    def is_direct_collaborator(self, org: str, repo: str, username: str) -> bool:
+        """
+        Check whether a user already has direct collaborator access to a repository.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            username: GitHub username to check
+
+        Returns:
+            True if the user is a direct collaborator (204 response)
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators/{username}"
+        resp = requests.get(url, headers=self.headers, params={"affiliation": "direct"})
+        return resp.status_code == 204
+
+    def list_invitations(self, org: str, repo: str) -> list[dict[str, Any]] | None:
+        """
+        List pending repository invitations.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+
+        Returns:
+            List of invitation dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/invitations"
+        resp = requests.get(url, headers=self.headers)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
+    def delete_invitation(self, org: str, repo: str, invitation_id: int) -> bool:
+        """
+        Cancel a pending repository invitation.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            invitation_id: ID of the invitation to delete
+
+        Returns:
+            True if the invitation was deleted
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/invitations/{invitation_id}"
+        resp = requests.delete(url, headers=self.headers)
+        return resp.status_code == 204
+
+    def add_collaborator(self, org: str, repo: str, username: str) -> requests.Response:
+        """
+        Invite (or directly add) a user as a repository collaborator.
+
+        A fresh PUT after deleting a stale pending invitation is what actually
+        re-sends the GitHub notification email - re-PUTting without deleting
+        the old invitation first is a no-op for the notification.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            username: GitHub username to invite
+
+        Returns:
+            The raw requests.Response (201 = invitation created,
+            204 = user already had access and was added directly)
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators/{username}"
+        return requests.put(url, headers=self.headers)
+
     def get_job_logs(self, org: str, repo: str, job_id: int) -> str | None:
         """
         Get logs for a specific workflow job.
