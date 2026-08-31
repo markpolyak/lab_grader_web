@@ -9,6 +9,14 @@ from unittest.mock import Mock, MagicMock, patch
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Pytest импортирует тестовые модули до создания fixture. Обязательные настройки
+# задаются здесь заранее, чтобы импорт ``main`` не зависел от порядка файлов и от
+# переменных окружения компьютера разработчика.
+os.environ.setdefault("GITHUB_TOKEN", "test_github_token")
+os.environ.setdefault("ADMIN_LOGIN", "admin")
+os.environ.setdefault("ADMIN_PASSWORD", "test_password")
+os.environ.setdefault("SECRET_KEY", "test_secret_key")
+
 
 @pytest.fixture
 def mock_env_vars(monkeypatch):
@@ -38,12 +46,12 @@ def disable_rate_limiting(request):
     
     def noop_check(*args, **kwargs):
         """No-op function to disable rate limiting in tests."""
-        # Extract request from args (it's the second argument: self, request, func, sync)
-        if len(args) >= 2:
-            request = args[1]
-            # Set view_rate_limit to avoid AttributeError in wrapper
-            if hasattr(request, 'state') and not hasattr(request.state, 'view_rate_limit'):
-                request.state.view_rate_limit = None
+        # Версии Slowapi различаются наличием ``self`` среди позиционных
+        # аргументов подменённого метода. Ищем Request по атрибуту state, не
+        # полагаясь на позицию аргумента, зависящую от версии библиотеки.
+        for candidate in (*args, *kwargs.values()):
+            if hasattr(candidate, 'state') and not hasattr(candidate.state, 'view_rate_limit'):
+                candidate.state.view_rate_limit = None
     
     # Patch using the full path to the method
     patcher = patch('main.limiter._check_request_limit', noop_check, create=False)

@@ -1,4 +1,44 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const JOIN_REQUEST_TIMEOUT_MS = 10000;
+
+// Публичные данные для страницы создания репозитория. Сам OAuth намеренно не
+// выполняется через fetch: браузер должен перейти на github.com и вернуться
+// через callback backend.
+export const fetchJoinLab = async (courseId, labId) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), JOIN_REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}`,
+      { signal: controller.signal }
+    );
+  } catch (cause) {
+    const error = new Error("Unable to load repository-generation settings", {
+      cause,
+    });
+    error.code = cause?.name === "AbortError" ? "request_timeout" : "unknown";
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    const error = new Error("Unable to load repository-generation settings");
+    // Стабильные коды позволяют компоненту переводить ожидаемые ошибки, не
+    // показывая русскоязычный detail backend во всех поддерживаемых языках UI.
+    if (response.status === 404) error.code = "join_not_found";
+    else if (response.status === 409) error.code = "join_not_configured";
+    else if (response.status === 429) error.code = "rate_limit";
+    else error.code = "unknown";
+    throw error;
+  }
+
+  return response.json();
+};
+
+export const getJoinStartUrl = (courseId, labId) =>
+  `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}/start`;
 
 // Маппинг полей на русские названия для сообщений об ошибках
 const fieldLabels = {
@@ -182,4 +222,3 @@ export async function gradeLab(courseId, groupId, labId, github) {
 
   return data;
 }
-
