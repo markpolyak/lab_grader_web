@@ -2,12 +2,11 @@
 
 import logging
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import main
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -144,8 +143,10 @@ def test_access_filter_redacts_callback_from_test_client_log():
         lineno=1,
         msg='HTTP Request: GET %s "HTTP/1.1 303 See Other"',
         args=(
-            "http://testserver/join/callback"
-            "?code=test-client-code&state=test-client-state",
+            (
+                "http://testserver/join/callback"
+                "?code=test-client-code&state=test-client-state"
+            ),
         ),
         exc_info=None,
     )
