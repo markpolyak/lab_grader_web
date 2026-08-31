@@ -58,6 +58,52 @@ class GitHubRepositoryClient:
             return False
         raise self._api_error("repository_lookup_failed", "check repository", response)
 
+    def repository_uses_template(
+        self,
+        organization: str,
+        repository: str,
+        template_owner: str,
+        template_repository: str,
+    ) -> bool:
+        """Проверить источник репозитория, появившегося во время гонки создания."""
+
+        response = self._request(
+            "get",
+            f"/repos/{quote(organization, safe='')}/{quote(repository, safe='')}",
+        )
+        if response.status_code == 404:
+            return False
+        if response.status_code != 200:
+            raise self._api_error(
+                "repository_lookup_failed",
+                "verify repository template after creation race",
+                response,
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RepositoryProvisionError(
+                "repository_lookup_failed",
+                "GitHub repository metadata was not valid JSON",
+                response.status_code,
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise RepositoryProvisionError(
+                "repository_lookup_failed",
+                "GitHub repository metadata was not an object",
+                response.status_code,
+            )
+
+        source = payload.get("template_repository")
+        source_full_name = source.get("full_name") if isinstance(source, dict) else None
+        expected_full_name = f"{template_owner}/{template_repository}"
+        return (
+            isinstance(source_full_name, str)
+            and source_full_name.casefold() == expected_full_name.casefold()
+        )
+
     def generate_repository(
         self,
         template_owner: str,
@@ -81,8 +127,20 @@ class GitHubRepositoryClient:
         if response.status_code == 201:
             return
 
-        code = "template_unavailable" if response.status_code == 404 else "repository_create_failed"
-        raise self._api_error(code, "generate repository from template", response)
+        # GitHub намеренно возвращает одинаковый 404 и для отсутствующего
+        # приватного шаблона, и для токена без права его видеть. Поэтому общий
+        # код означает «шаблон недоступен серверу», не утверждая точную причину.
+        if response.status_code == 404:
+            raise self._api_error(
+                "template_unavailable",
+                "access template (not found or insufficient server-token permissions)",
+                response,
+            )
+        raise self._api_error(
+            "repository_create_failed",
+            "generate repository from template",
+            response,
+        )
 
     def is_direct_collaborator(
         self,
@@ -252,7 +310,7 @@ class GitHubRepositoryClient:
         except requests.RequestException as exc:
             raise RepositoryProvisionError(
                 "github_unavailable",
-                f"GitHub API request failed during {method.upper()} {path}: {exc.__class__.__name__}",
+                f"GitHub API request failed during {method.upper()}: {exc.__class__.__name__}",
             ) from exc
 
     @staticmethod
@@ -320,9 +378,17 @@ class RepositoryProvisioner:
             except RepositoryProvisionError as exc:
                 # Два callback могут одновременно получить 404 и начать
                 # создание. Ошибка 409/422 медленного запроса считается гонкой
-                # только после GET, подтвердившего появление репозитория.
-                if exc.status_code not in (409, 422) or not self.client.repository_exists(
-                    organization, repository
+                # только если появившийся репозиторий действительно происходит
+                # из ожидаемого шаблона. Чужой репозиторий с тем же именем нельзя
+                # принимать за результат параллельного запроса и выдавать к нему доступ.
+                if exc.status_code not in (
+                    409,
+                    422,
+                ) or not self.client.repository_uses_template(
+                    organization,
+                    repository,
+                    template_owner,
+                    template_repository,
                 ):
                     raise
 
@@ -349,8 +415,13 @@ class RepositoryProvisioner:
             self.client.invite_collaborator(organization, repository, username)
             return "invited"
 
+        # Постановка требует переотправлять любое открытое приглашение. Для этого
+        # старое приглашение обязательно удаляется: повторный PUT без DELETE не
+        # заставляет GitHub повторно отправить уведомление студенту.
         invitation_deleted = self.client.delete_invitation(
-            organization, repository, invitation_id
+            organization,
+            repository,
+            invitation_id,
         )
         if not invitation_deleted and self.client.is_direct_collaborator(
             organization, repository, username

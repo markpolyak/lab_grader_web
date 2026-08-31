@@ -34,4 +34,7 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Proxy headers обрабатываются самим Uvicorn до вызова FastAPI/Slowapi.
+# Явно передаём только доверенные IP/CIDR, чтобы X-Forwarded-For от Caddy
+# определял студента, а заголовок от недоверенного клиента игнорировался.
+CMD ["sh", "-c", "exec uvicorn main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips \"${FORWARDED_ALLOW_IPS:-127.0.0.1}\""]

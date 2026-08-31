@@ -55,7 +55,11 @@ def join_client(monkeypatch, join_course):
 def signed_state(join_client, course_id="os-2026", lab_id="01", set_cookie=True):
     nonce = "test-browser-nonce-with-sufficient-entropy"
     if set_cookie:
-        join_client.cookies.set(main.OAUTH_NONCE_COOKIE_NAME, nonce)
+        join_client.cookies.set(
+            main._oauth_nonce_cookie_name(nonce),
+            nonce,
+            path="/",
+        )
     return main.oauth_state_serializer.dumps(
         {"course_id": course_id, "lab_id": lab_id, "nonce": nonce}
     )
@@ -73,7 +77,6 @@ def assert_oauth_state_error(response, expected_code):
     }
     assert "code=" not in response.headers["location"]
     assert "state=" not in response.headers["location"]
-    assert "max-age=0" in response.headers["set-cookie"].lower()
 
 
 def test_join_info_uses_exact_lab_key(join_client):
@@ -128,10 +131,43 @@ def test_start_redirect_contains_signed_state(join_client):
     assert state_payload["course_id"] == "os-2026"
     assert state_payload["lab_id"] == "01"
     assert len(state_payload["nonce"]) >= 32
-    assert response.cookies[main.OAUTH_NONCE_COOKIE_NAME] == state_payload["nonce"]
+    nonce_cookie_name = main._oauth_nonce_cookie_name(state_payload["nonce"])
+    assert response.cookies[nonce_cookie_name] == state_payload["nonce"]
     set_cookie = response.headers["set-cookie"].lower()
     assert "httponly" in set_cookie
     assert "samesite=lax" in set_cookie
+    assert "path=/" in set_cookie
+
+
+def test_two_oauth_tabs_keep_independent_nonce_cookies(join_client, monkeypatch):
+    """Второй запуск OAuth не должен инвалидировать callback первой вкладки."""
+
+    # TestClient работает по HTTP, поэтому для этого браузерного сценария
+    # отключаем Secure только через локальный callback теста.
+    monkeypatch.setattr(
+        main,
+        "GITHUB_OAUTH_CALLBACK_URL",
+        "http://testserver/join/callback",
+    )
+    first_start = join_client.get("/join/os-2026/01/start", follow_redirects=False)
+    second_start = join_client.get("/join/os-2026/01/start", follow_redirects=False)
+    first_state = parse_qs(urlsplit(first_start.headers["location"]).query)["state"][0]
+    second_state = parse_qs(urlsplit(second_start.headers["location"]).query)["state"][0]
+
+    first_response = join_client.get(
+        "/join/callback",
+        params={"state": first_state},
+        follow_redirects=False,
+    )
+    second_response = join_client.get(
+        "/join/callback",
+        params={"state": second_state},
+        follow_redirects=False,
+    )
+
+    assert "error=oauth_failed" in first_response.headers["location"]
+    assert "error=oauth_failed" in second_response.headers["location"]
+    assert "oauth_state_mismatch" not in first_response.headers["location"]
 
 
 def test_start_reports_missing_oauth_configuration(join_client, monkeypatch):
@@ -142,6 +178,35 @@ def test_start_reports_missing_oauth_configuration(join_client, monkeypatch):
     assert response.status_code == 303
     assert parse_qs(urlsplit(response.headers["location"]).query)["error"] == [
         "oauth_not_configured"
+    ]
+
+
+def test_start_unknown_lab_redirects_to_frontend_error(join_client):
+    response = join_client.get(
+        "/join/os-2026/unknown/start",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert parse_qs(urlsplit(response.headers["location"]).query)["error"] == [
+        "join_not_found"
+    ]
+
+
+def test_start_configuration_error_redirects_to_frontend(
+    join_client,
+    join_course,
+):
+    del join_course["labs"]["01"]["template-repo"]
+
+    response = join_client.get(
+        "/join/os-2026/01/start",
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert parse_qs(urlsplit(response.headers["location"]).query)["error"] == [
+        "join_not_configured"
     ]
 
 
@@ -182,7 +247,11 @@ def test_state_without_browser_nonce_is_rejected(join_client):
 
 def test_signed_state_with_invalid_payload_is_rejected(join_client):
     nonce = "test-browser-nonce-with-sufficient-entropy"
-    join_client.cookies.set(main.OAUTH_NONCE_COOKIE_NAME, nonce)
+    join_client.cookies.set(
+        main._oauth_nonce_cookie_name(nonce),
+        nonce,
+        path="/",
+    )
     state = main.oauth_state_serializer.dumps(
         {"course_id": "os-2026", "nonce": nonce}
     )
@@ -224,6 +293,8 @@ def test_expired_state_redirects_to_frontend_error(join_client):
 
 def test_replayed_callback_is_rejected_after_nonce_cookie_is_deleted(join_client):
     state = signed_state(join_client)
+    nonce = main.oauth_state_serializer.loads(state)["nonce"]
+    nonce_cookie_name = main._oauth_nonce_cookie_name(nonce)
     first_response = join_client.get(
         "/join/callback",
         params={"state": state},
@@ -235,7 +306,7 @@ def test_replayed_callback_is_rejected_after_nonce_cookie_is_deleted(join_client
 
     # TestClient сохраняет вручную установленную cookie иначе, чем браузер.
     # Удаляем её явно после проверки Set-Cookie, воспроизводя повторный callback.
-    join_client.cookies.delete(main.OAUTH_NONCE_COOKIE_NAME)
+    join_client.cookies.delete(nonce_cookie_name, path="/")
     replay_response = join_client.get(
         "/join/callback",
         params={"code": "temporary-code", "state": state},

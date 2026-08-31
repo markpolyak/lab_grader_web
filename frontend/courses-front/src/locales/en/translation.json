@@ -25,6 +25,7 @@
   "archivedCourses": "Archived Courses",
   "allCourses": "All Courses",
   "join": {
+    "language": "Interface language",
     "title": "Get your lab repository",
     "loading": "Loading lab settings…",
     "course": "Course",

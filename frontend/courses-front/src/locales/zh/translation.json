@@ -28,6 +28,7 @@
   "archivedCourses": "归档课程",
   "allCourses": "所有课程",
   "join": {
+    "language": "界面语言",
     "title": "获取实验仓库",
     "loading": "正在加载实验设置…",
     "course": "课程",

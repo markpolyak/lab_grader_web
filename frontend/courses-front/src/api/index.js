@@ -1,12 +1,27 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const JOIN_REQUEST_TIMEOUT_MS = 10000;
 
 // Публичные данные для страницы создания репозитория. Сам OAuth намеренно не
 // выполняется через fetch: браузер должен перейти на github.com и вернуться
 // через callback backend.
 export const fetchJoinLab = async (courseId, labId) => {
-  const response = await fetch(
-    `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}`
-  );
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), JOIN_REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}`,
+      { signal: controller.signal }
+    );
+  } catch (cause) {
+    const error = new Error("Unable to load repository-generation settings", {
+      cause,
+    });
+    error.code = cause?.name === "AbortError" ? "request_timeout" : "unknown";
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     const error = new Error("Unable to load repository-generation settings");

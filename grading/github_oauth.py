@@ -34,7 +34,8 @@ class GitHubOAuthClient:
     """Идентифицировать GitHub-пользователя через OAuth authorization code."""
 
     AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
-    ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
+    # Строка является публичным URL endpoint GitHub, а не встроенным токеном.
+    ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"  # nosec B105
     CURRENT_USER_URL = "https://api.github.com/user"
     REQUEST_TIMEOUT = (3.05, 10)
 

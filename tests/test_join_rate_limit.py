@@ -46,7 +46,7 @@ def test_join_info_returns_429_after_sixty_requests(configured_join):
 
 
 @pytest.mark.rate_limit
-def test_join_start_returns_429_after_ten_requests(configured_join):
+def test_join_start_redirects_to_localized_error_after_ten_requests(configured_join):
     with TestClient(main.app, client=("203.0.113.11", 50000)) as client:
         for _ in range(10):
             response = client.get(
@@ -55,10 +55,14 @@ def test_join_start_returns_429_after_ten_requests(configured_join):
             )
             assert response.status_code == 303
 
-        assert client.get(
+        limited_response = client.get(
             "/join/test-course/01/start",
             follow_redirects=False,
-        ).status_code == 429
+        )
+        assert limited_response.status_code == 303
+        assert limited_response.headers["location"].endswith(
+            "/join/test-course/01?status=error&error=rate_limit"
+        )
 
 
 @pytest.mark.rate_limit
@@ -77,7 +81,10 @@ def test_join_callback_query_cannot_bypass_twenty_request_limit():
             params={"code": "new-code", "state": "new-state"},
             follow_redirects=False,
         )
-        assert response.status_code == 429
+        assert response.status_code == 303
+        assert response.headers["location"].endswith(
+            "/join/error?status=error&error=rate_limit"
+        )
 
 
 @pytest.mark.rate_limit
@@ -96,7 +103,10 @@ def test_arbitrary_forwarded_for_header_cannot_bypass_limit(configured_join):
             headers={"X-Forwarded-For": "198.51.100.250"},
             follow_redirects=False,
         )
-        assert response.status_code == 429
+        assert response.status_code == 303
+        assert response.headers["location"].endswith(
+            "/join/test-course/01?status=error&error=rate_limit"
+        )
 
 
 @pytest.mark.rate_limit
@@ -114,11 +124,12 @@ def test_trusted_proxy_separates_real_client_addresses(configured_join):
             )
             assert response.status_code == 303
 
-        assert client.get(
+        limited_response = client.get(
             "/join/test-course/01/start",
             headers={"X-Forwarded-For": "198.51.100.10"},
             follow_redirects=False,
-        ).status_code == 429
+        )
+        assert limited_response.status_code == 303
 
         assert client.get(
             "/join/test-course/01/start",

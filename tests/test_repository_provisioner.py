@@ -1,15 +1,16 @@
 """Тесты всех ветвей создания репозитория и обработки приглашений."""
 
+from datetime import datetime, timezone
+
 import pytest
 import requests
 import responses
 
 from grading.repository_provisioner import (
     GitHubRepositoryClient,
-    RepositoryProvisionError,
     RepositoryProvisioner,
+    RepositoryProvisionError,
 )
-
 
 API = GitHubRepositoryClient.BASE_URL
 TARGET = "test-org/os-task1-StudentName"
@@ -71,7 +72,15 @@ def test_creates_private_repository_and_first_invitation(provisioner):
 
 @responses.activate
 def test_existing_repository_and_access_are_left_untouched(provisioner):
-    responses.add(responses.GET, f"{API}/repos/test-org/os-task1-StudentName", status=200)
+    responses.add(
+        responses.GET,
+        f"{API}/repos/test-org/os-task1-StudentName",
+        json={
+            "full_name": "test-org/os-task1-StudentName",
+            "template_repository": {"full_name": "teacher-org/lab-template"},
+        },
+        status=200,
+    )
     responses.add(
         responses.GET,
         DIRECT_COLLABORATORS_URL,
@@ -129,7 +138,13 @@ def test_pending_invitation_is_deleted_and_sent_again(provisioner):
     responses.add(
         responses.GET,
         f"{API}/repos/test-org/os-task1-StudentName/invitations",
-        json=[{"id": 77, "invitee": {"login": "studentname"}}],
+        json=[
+            {
+                "id": 77,
+                "invitee": {"login": "studentname"},
+                "created_at": "2020-01-01T00:00:00Z",
+            }
+        ],
         status=200,
     )
     responses.add(
@@ -140,6 +155,41 @@ def test_pending_invitation_is_deleted_and_sent_again(provisioner):
     responses.add(
         responses.PUT,
         f"{API}/repos/test-org/os-task1-StudentName/collaborators/StudentName",
+        status=201,
+    )
+
+    result = provision(provisioner)
+
+    assert result.access_action == "reinvited"
+    assert [call.request.method for call in responses.calls][-2:] == ["DELETE", "PUT"]
+
+
+@responses.activate
+def test_recent_pending_invitation_is_deleted_and_sent_again(provisioner):
+    """Даже свежее pending-приглашение переотправляется согласно постановке."""
+
+    responses.add(responses.GET, f"{API}/repos/{TARGET}", status=200)
+    responses.add(responses.GET, DIRECT_COLLABORATORS_URL, json=[], status=200)
+    responses.add(
+        responses.GET,
+        f"{API}/repos/{TARGET}/invitations",
+        json=[
+            {
+                "id": 78,
+                "invitee": {"login": "StudentName"},
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+        status=200,
+    )
+    responses.add(
+        responses.DELETE,
+        f"{API}/repos/{TARGET}/invitations/78",
+        status=204,
+    )
+    responses.add(
+        responses.PUT,
+        f"{API}/repos/{TARGET}/collaborators/StudentName",
         status=201,
     )
 
@@ -205,7 +255,15 @@ def test_creation_race_is_success_when_repository_appears(provisioner):
         json={"message": "name already exists"},
         status=422,
     )
-    responses.add(responses.GET, f"{API}/repos/test-org/os-task1-StudentName", status=200)
+    responses.add(
+        responses.GET,
+        f"{API}/repos/test-org/os-task1-StudentName",
+        json={
+            "full_name": "test-org/os-task1-StudentName",
+            "template_repository": {"full_name": "teacher-org/lab-template"},
+        },
+        status=200,
+    )
     responses.add(
         responses.GET,
         DIRECT_COLLABORATORS_URL,
@@ -217,6 +275,34 @@ def test_creation_race_is_success_when_repository_appears(provisioner):
 
     assert result.created is False
     assert result.access_action == "already_has_access"
+
+
+@responses.activate
+def test_creation_race_rejects_repository_from_another_source(provisioner):
+    """Не выдавать студенту доступ к репозиторию, подставленному во время гонки."""
+
+    responses.add(responses.GET, f"{API}/repos/{TARGET}", status=404)
+    responses.add(
+        responses.POST,
+        f"{API}/repos/teacher-org/lab-template/generate",
+        json={"message": "name already exists"},
+        status=422,
+    )
+    responses.add(
+        responses.GET,
+        f"{API}/repos/{TARGET}",
+        json={
+            "full_name": TARGET,
+            "template_repository": {"full_name": "another-org/another-template"},
+        },
+        status=200,
+    )
+
+    with pytest.raises(RepositoryProvisionError) as error:
+        provision(provisioner)
+
+    assert error.value.code == "repository_create_failed"
+    assert not any("/collaborators" in call.request.url for call in responses.calls)
 
 
 @responses.activate
@@ -294,6 +380,7 @@ def test_inaccessible_template_has_specific_error_code(provisioner):
         provision(provisioner)
 
     assert error.value.code == "template_unavailable"
+    assert "permissions" in error.value.log_message
 
 
 @pytest.mark.parametrize("status_code", [401, 403, 409, 422, 500, 502, 503])

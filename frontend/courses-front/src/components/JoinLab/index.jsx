@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useParams, useSearchParams } from "react-router-dom";
 
 import { fetchJoinLab, getJoinStartUrl } from "../../api";
+import { SUPPORTED_LANGUAGES } from "../../language";
 import {
   ActionButton,
   Description,
@@ -11,19 +12,25 @@ import {
   JoinCard,
   JoinPage,
   Label,
+  LanguageControl,
+  LanguageSelect,
   RepositoryLink,
   Spinner,
   SuccessPanel,
   Title,
   Value,
 } from "./styled";
-import { ERROR_TRANSLATION_KEYS, getSafeRepositoryUrl } from "./state";
+import {
+  ERROR_TRANSLATION_KEYS,
+  getSafeRepositoryUrl,
+  shouldShowJoinAction,
+} from "./state";
 
 
 export function JoinLab() {
   const { courseId, labId } = useParams();
   const [searchParams] = useSearchParams();
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [lab, setLab] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -81,6 +88,23 @@ export function JoinLab() {
   return (
     <JoinPage>
       <JoinCard>
+        <LanguageControl>
+          <Label as="label" htmlFor="join-language">
+            {t("join.language")}
+          </Label>
+          <LanguageSelect
+            id="join-language"
+            value={i18n.language.split("-")[0]}
+            onChange={(event) => i18n.changeLanguage(event.target.value)}
+          >
+            {SUPPORTED_LANGUAGES.map(({ code, label }) => (
+              <option key={code} value={code}>
+                {label}
+              </option>
+            ))}
+          </LanguageSelect>
+        </LanguageControl>
+
         <Title>{t("join.title")}</Title>
 
         {isLoading && (
@@ -139,7 +163,7 @@ export function JoinLab() {
               <Description>{t("join.description")}</Description>
             )}
 
-            {callbackStatus !== "success" && (
+            {shouldShowJoinAction(callbackStatus, repositoryUrl) && (
               <ActionButton type="button" onClick={beginOAuth} disabled={isRedirecting}>
                 {isRedirecting ? t("join.redirecting") : t("join.signIn")}
               </ActionButton>

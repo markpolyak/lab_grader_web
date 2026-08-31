@@ -18,8 +18,16 @@ export const ERROR_TRANSLATION_KEYS = {
   invitation_create_failed: "join.errors.invitationFailed",
   github_rate_limit: "join.errors.rateLimit",
   github_unavailable: "join.errors.githubUnavailable",
+  request_timeout: "join.errors.githubUnavailable",
   rate_limit: "join.errors.rateLimit",
 };
+
+
+export function shouldShowJoinAction(callbackStatus, repositoryUrl) {
+  // Успех считается завершённым только после проверки безопасной GitHub-ссылки.
+  // Повреждённый query-параметр не должен оставлять пользователя без повтора.
+  return callbackStatus !== "success" || !repositoryUrl;
+}
 
 
 export function getSafeRepositoryUrl(rawUrl) {
@@ -32,11 +40,18 @@ export function getSafeRepositoryUrl(rawUrl) {
     if (
       url.protocol !== "https:" ||
       url.hostname !== "github.com" ||
-      pathParts.length !== 2
+      url.username !== "" ||
+      url.password !== "" ||
+      url.port !== "" ||
+      url.search !== "" ||
+      url.hash !== "" ||
+      pathParts.length !== 2 ||
+      !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(pathParts[0]) ||
+      !/^[A-Za-z0-9_.-]{1,100}$/.test(pathParts[1])
     ) {
       return null;
     }
-    return url.toString();
+    return `https://github.com/${pathParts[0]}/${pathParts[1]}`;
   } catch {
     return null;
   }

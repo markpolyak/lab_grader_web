@@ -12,7 +12,7 @@ import main
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
-def run_main_import(tmp_path, secret_key):
+def run_main_import(tmp_path, secret_key, extra_environment=None):
     """Импортировать приложение в отдельном процессе с контролируемым окружением."""
 
     environment = os.environ.copy()
@@ -29,6 +29,7 @@ def run_main_import(tmp_path, secret_key):
         environment.pop("SECRET_KEY", None)
     else:
         environment["SECRET_KEY"] = secret_key
+    environment.update(extra_environment or {})
 
     # Подмена load_dotenv гарантирует, что локальный .env разработчика не
     # изменит сценарий отдельного процесса и не попадёт в диагностический вывод.
@@ -72,6 +73,33 @@ def test_custom_secret_key_allows_application_import_without_logging_key(tmp_pat
 
     assert result.returncode == 0
     assert custom_key not in output
+
+
+def test_cors_with_credentials_never_uses_wildcard_origin():
+    """Cookie администратора разрешена только для конкретных frontend origin."""
+
+    cors_middleware = next(
+        middleware
+        for middleware in main.app.user_middleware
+        if middleware.cls.__name__ == "CORSMiddleware"
+    )
+
+    assert cors_middleware.kwargs["allow_credentials"] is True
+    assert "*" not in cors_middleware.kwargs["allow_origins"]
+    assert cors_middleware.kwargs["allow_origins"]
+
+
+def test_wildcard_cors_configuration_stops_application(tmp_path):
+    """Ошибочная production-настройка не должна ослаблять защиту cookie."""
+
+    result = run_main_import(
+        tmp_path,
+        "isolated-test-key",
+        {"CORS_ALLOWED_ORIGINS": "*"},
+    )
+
+    assert result.returncode != 0
+    assert "RuntimeError: CORS_ALLOWED_ORIGINS" in result.stdout + result.stderr
 
 
 def test_uvicorn_access_filter_redacts_callback_secrets():

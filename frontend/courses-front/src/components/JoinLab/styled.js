@@ -30,6 +30,28 @@ export const JoinCard = styled.section`
   box-shadow: 0 12px 36px rgba(24, 24, 24, 0.1);
 `;
 
+export const LanguageControl = styled.div`
+  align-self: flex-end;
+  min-width: 140px;
+`;
+
+export const LanguageSelect = styled.select`
+  ${textStyles}
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  border: 1px solid ${colors.buttonHover};
+  border-radius: 8px;
+  background: #fff;
+  color: ${colors.textPrimary};
+  cursor: pointer;
+
+  &:focus-visible {
+    outline: 2px solid ${colors.buttonBackground};
+    outline-offset: 2px;
+  }
+`;
+
 export const Title = styled.h1`
   margin: 0;
   color: ${colors.textPrimary};

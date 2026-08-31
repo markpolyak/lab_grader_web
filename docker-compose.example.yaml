@@ -33,6 +33,7 @@ services:
       GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET}
       GITHUB_OAUTH_CALLBACK_URL: ${GITHUB_OAUTH_CALLBACK_URL}
       FRONTEND_BASE_URL: ${FRONTEND_BASE_URL}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       # Обязательное доверие только к реальному Caddy позволяет Slowapi видеть
       # адрес студента и не даёт произвольному X-Forwarded-For обходить лимит.
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:?Set trusted Caddy IP or CIDR}

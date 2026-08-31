@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.staticfiles import StaticFiles
+import hashlib
 import os
 import yaml
 import gspread
@@ -19,6 +20,7 @@ from itsdangerous import (
 import re
 import logging
 import secrets
+from collections.abc import Mapping
 from datetime import datetime
 from dataclasses import dataclass
 from urllib.parse import quote, urlencode, urlsplit
@@ -138,6 +140,7 @@ GITHUB_OAUTH_CLIENT_ID = os.getenv("GITHUB_OAUTH_CLIENT_ID")
 GITHUB_OAUTH_CLIENT_SECRET = os.getenv("GITHUB_OAUTH_CLIENT_SECRET")
 GITHUB_OAUTH_CALLBACK_URL = os.getenv("GITHUB_OAUTH_CALLBACK_URL")
 FRONTEND_BASE_URL = os.getenv("FRONTEND_BASE_URL")
+CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 DEFAULT_SECRET_KEY = "super-secret-key"
@@ -166,12 +169,35 @@ if not SECRET_KEY or SECRET_KEY == DEFAULT_SECRET_KEY:
         "SECRET_KEY должен быть задан собственным безопасным значением в переменных "
         "окружения. Приложение не запускается с отсутствующим или известным ключом."
     )
+
+# CORS с cookie нельзя безопасно сочетать с универсальным origin "*".
+# В production преподаватель указывает точные адреса через переменную окружения,
+# а локальные значения по умолчанию сохраняют привычный сценарий разработки.
+configured_cors_origins = [
+    origin.strip().rstrip("/")
+    for origin in CORS_ALLOWED_ORIGINS.split(",")
+    if origin.strip()
+]
+if "*" in configured_cors_origins:
+    raise RuntimeError(
+        "CORS_ALLOWED_ORIGINS не может содержать '*' при включённых cookie. "
+        "Укажите точные адреса frontend."
+    )
+if not configured_cors_origins and FRONTEND_BASE_URL:
+    frontend_parts = urlsplit(FRONTEND_BASE_URL)
+    if frontend_parts.scheme in {"http", "https"} and frontend_parts.netloc:
+        configured_cors_origins = [
+            f"{frontend_parts.scheme}://{frontend_parts.netloc}"
+        ]
+if not configured_cors_origins:
+    configured_cors_origins = ["http://localhost:5173", "http://localhost:8080"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Разрешить запросы с любых источников
+    allow_origins=configured_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],  # Разрешить все HTTP-методы
-    allow_headers=["*"],  # Разрешить все заголовки
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Accept", "Content-Type"],
 )
 signer = TimestampSigner(SECRET_KEY)
 # Отдельная соль не позволяет использовать подпись административной сессии как
@@ -181,7 +207,7 @@ oauth_state_serializer = URLSafeTimedSerializer(
     salt="github-oauth-state-v1",
 )
 OAUTH_STATE_MAX_AGE_SECONDS = 600
-OAUTH_NONCE_COOKIE_NAME = "join_oauth_nonce"
+OAUTH_NONCE_COOKIE_PREFIX = "join_oauth_nonce_"
 
 # Course index management
 INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
@@ -498,10 +524,18 @@ def _get_github_oauth_client(request: Request) -> GitHubOAuthClient:
     )
 
 
+def _oauth_nonce_cookie_name(nonce: str) -> str:
+    """Получить короткое безопасное имя cookie для конкретного OAuth-запуска."""
+
+    digest = hashlib.sha256(nonce.encode("utf-8")).hexdigest()[:32]
+    return f"{OAUTH_NONCE_COOKIE_PREFIX}{digest}"
+
+
+
 def _load_oauth_state(
     state: str | None,
-    expected_nonce: str | None,
-) -> tuple[str, str]:
+    cookies: Mapping[str, str],
+) -> tuple[str, str, str]:
     """Проверить подпись, возраст, структуру и привязку OAuth state к браузеру."""
 
     if not state:
@@ -528,20 +562,24 @@ def _load_oauth_state(
         or not lab_id
     ):
         raise OAuthStateError("oauth_state_invalid")
-    if (
-        not isinstance(nonce, str)
-        or not nonce
-        or not isinstance(expected_nonce, str)
-        or not secrets.compare_digest(nonce, expected_nonce)
+    if not isinstance(nonce, str) or not nonce:
+        raise OAuthStateError("oauth_state_mismatch")
+
+    nonce_cookie_name = _oauth_nonce_cookie_name(nonce)
+    expected_nonce = cookies.get(nonce_cookie_name)
+    if not isinstance(expected_nonce, str) or not secrets.compare_digest(
+        nonce,
+        expected_nonce,
     ):
         raise OAuthStateError("oauth_state_mismatch")
-    return course_id, lab_id
+    return course_id, lab_id, nonce_cookie_name
 
 
 def _redirect_to_join_result(
     request: Request,
     course_id: str,
     lab_id: str,
+    oauth_nonce_cookie_name: str | None = None,
     **query: str,
 ) -> RedirectResponse:
     """Перенаправить на frontend и удалить одноразовую OAuth-cookie."""
@@ -550,7 +588,10 @@ def _redirect_to_join_result(
         build_join_result_url(request, course_id, lab_id, **query),
         status_code=303,
     )
-    response.delete_cookie(OAUTH_NONCE_COOKIE_NAME, path="/")
+    if oauth_nonce_cookie_name:
+        # Удаляем только завершённый OAuth-запуск. Остальные вкладки сохраняют
+        # собственные cookie и могут независимо вернуться с GitHub.
+        response.delete_cookie(oauth_nonce_cookie_name, path="/")
     return response
 
 
@@ -564,9 +605,36 @@ def _redirect_to_oauth_state_error(
         f"{get_frontend_base_url(request)}/join/error?"
         f"{urlencode({'status': 'error', 'error': error_code})}"
     )
-    response = RedirectResponse(target, status_code=303)
-    response.delete_cookie(OAUTH_NONCE_COOKIE_NAME, path="/")
-    return response
+    return RedirectResponse(target, status_code=303)
+
+
+def _join_aware_rate_limit_handler(
+    request: Request,
+    exc: RateLimitExceeded,
+):
+    """Вернуть браузерные OAuth-переходы в JoinLab после превышения лимита."""
+
+    path = request.url.path.rstrip("/")
+    if path == "/join/callback":
+        return _redirect_to_oauth_state_error(request, "rate_limit")
+
+    course_id = request.path_params.get("course_id")
+    lab_id = request.path_params.get("lab_id")
+    if path.endswith("/start") and course_id and lab_id:
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error="rate_limit",
+        )
+
+    # JSON endpoint информации о лабораторной сохраняет стандартный ответ 429:
+    # frontend получает его через fetch и показывает локализованное сообщение.
+    return _rate_limit_exceeded_handler(request, exc)
+
+
+app.add_exception_handler(RateLimitExceeded, _join_aware_rate_limit_handler)
 
 
 @app.get("/join/{course_id}/{lab_id}")
@@ -588,7 +656,20 @@ def get_join_lab(request: Request, course_id: str, lab_id: str):
 def start_github_oauth(request: Request, course_id: str, lab_id: str):
     """Запустить OAuth после проверки настройки автоматического создания репозитория."""
 
-    get_join_lab_config(course_id, lab_id)
+    try:
+        get_join_lab_config(course_id, lab_id)
+    except HTTPException as exc:
+        # Этот endpoint открывается обычной навигацией браузера. Возвращаем
+        # пользователя в тот же интерфейс JoinLab, не показывая JSON FastAPI.
+        config_error = "join_not_found" if exc.status_code == 404 else "join_not_configured"
+        return _redirect_to_join_result(
+            request,
+            course_id,
+            lab_id,
+            status="error",
+            error=config_error,
+        )
+
     try:
         oauth_client = _get_github_oauth_client(request)
     except HTTPException:
@@ -615,13 +696,16 @@ def start_github_oauth(request: Request, course_id: str, lab_id: str):
         oauth_client.build_authorization_url(state),
         status_code=302,
     )
+    nonce_cookie_name = _oauth_nonce_cookie_name(nonce)
     response.set_cookie(
-        OAUTH_NONCE_COOKIE_NAME,
+        nonce_cookie_name,
         nonce,
         max_age=OAUTH_STATE_MAX_AGE_SECONDS,
         httponly=True,
         secure=urlsplit(oauth_client.config.callback_url).scheme == "https",
         samesite="lax",
+        # Path остаётся корневым: во внешнем URL callback может находиться под
+        # префиксом reverse proxy (/api/v1), который Caddy удаляет до FastAPI.
         path="/",
     )
     return response
@@ -640,9 +724,9 @@ def github_oauth_callback(
     # State проверяется для любого результата, включая access_denied. Иначе
     # злоумышленник мог бы подделать callback для произвольного курса или лабы.
     try:
-        course_id, lab_id = _load_oauth_state(
+        course_id, lab_id, nonce_cookie_name = _load_oauth_state(
             state,
-            request.cookies.get(OAUTH_NONCE_COOKIE_NAME),
+            request.cookies,
         )
     except OAuthStateError as exc:
         # В лог попадает только фиксированный код причины. Сам state, code и
@@ -650,21 +734,26 @@ def github_oauth_callback(
         logger.warning("OAuth state rejected: %s", exc.code)
         return _redirect_to_oauth_state_error(request, exc.code)
 
-    if error:
-        error_code = "oauth_denied" if error == "access_denied" else "oauth_failed"
+    def redirect_to_result(**query: str) -> RedirectResponse:
+        """Собрать callback-redirect и удалить cookie только текущего запуска."""
+
         return _redirect_to_join_result(
             request,
             course_id,
             lab_id,
+            oauth_nonce_cookie_name=nonce_cookie_name,
+            **query,
+        )
+
+    if error:
+        error_code = "oauth_denied" if error == "access_denied" else "oauth_failed"
+        return redirect_to_result(
             status="error",
             error=error_code,
         )
 
     if not code:
-        return _redirect_to_join_result(
-            request,
-            course_id,
-            lab_id,
+        return redirect_to_result(
             status="error",
             error="oauth_failed",
         )
@@ -673,10 +762,7 @@ def github_oauth_callback(
         config = get_join_lab_config(course_id, lab_id)
     except HTTPException as exc:
         config_error = "join_not_found" if exc.status_code == 404 else "join_not_configured"
-        return _redirect_to_join_result(
-            request,
-            course_id,
-            lab_id,
+        return redirect_to_result(
             status="error",
             error=config_error,
         )
@@ -684,10 +770,7 @@ def github_oauth_callback(
     try:
         oauth_client = _get_github_oauth_client(request)
     except HTTPException:
-        return _redirect_to_join_result(
-            request,
-            course_id,
-            lab_id,
+        return redirect_to_result(
             status="error",
             error="oauth_not_configured",
         )
@@ -696,10 +779,7 @@ def github_oauth_callback(
         username = oauth_client.get_verified_username(code)
     except GitHubOAuthError as exc:
         logger.warning("GitHub OAuth failed: %s", exc.log_message)
-        return _redirect_to_join_result(
-            request,
-            course_id,
-            lab_id,
+        return redirect_to_result(
             status="error",
             error=exc.code,
         )
@@ -715,31 +795,20 @@ def github_oauth_callback(
         )
     except RepositoryProvisionError as exc:
         logger.warning(
-            "Repository provisioning failed for %s/%s-%s: %s",
-            config.organization,
-            config.github_prefix,
-            username,
+            "Repository provisioning failed: %s",
             exc.log_message,
         )
-        return _redirect_to_join_result(
-            request,
-            course_id,
-            lab_id,
+        return redirect_to_result(
             status="error",
             error=exc.code,
         )
 
     logger.info(
-        "Repository provisioning completed for %s/%s (created=%s, access=%s)",
-        result.organization,
-        result.repository,
+        "Repository provisioning completed (created=%s, access=%s)",
         result.created,
         result.access_action,
     )
-    return _redirect_to_join_result(
-        request,
-        course_id,
-        lab_id,
+    return redirect_to_result(
         status="success",
         repository=result.repository_url,
     )
