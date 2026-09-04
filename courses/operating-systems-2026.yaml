@@ -7,7 +7,7 @@ course:
         - OS
         - Operating systems
         - ОС
-    semester: Весна 2026
+    semester: Весна 2026, Осень 2026
     university: ГУАП
     email: k43guap@ya.ru
     timezone: UTC+3
@@ -32,6 +32,8 @@ course:
     labs:
         "0":
             github-prefix: os-task0
+            template-repo: suai-os-2026/github-starter-course
+            repo-provisioning: fork
             short-name: ЛР0
             penalty-max: 5
             ignore-task-id: True
@@ -53,6 +55,8 @@ course:
                         min-count: 1
         "01":
             github-prefix: os-task-I-1
+            template-repo: suai-os-2026/os-course-task1-1
+            repo-provisioning: fork
             short-name: ЛР0.1
             taskid-max: 20
             penalty-max: 6
@@ -72,6 +76,8 @@ course:
                 - Выводы
         "1":
             github-prefix: os-task1
+            template-repo: suai-os-2026/os-course-task1-new
+            repo-provisioning: fork
             short-name: ЛР1
             taskid-max: 25
             penalty-max: 6
@@ -104,6 +110,8 @@ course:
                 - Выводы
         "2":
             github-prefix: os-task2
+            template-repo: suai-os-2026/os-course-task2
+            repo-provisioning: fork
             short-name: ЛР2
             taskid-max: 20
             taskid-shift: 4
@@ -140,6 +148,8 @@ course:
                 - Выводы
         "3":
             github-prefix: os-task3
+            template-repo: suai-os-2026/os-course-task3
+            repo-provisioning: fork
             short-name: ЛР3
             taskid-max: 20
             penalty-max: 7
@@ -175,6 +185,8 @@ course:
                 - Выводы
         "4":
             github-prefix: os-task4
+            template-repo: suai-os-2026/os-course-task4
+            repo-provisioning: fork
             short-name: ЛР4
             taskid-max: 30
             penalty-max: 7
@@ -206,6 +218,8 @@ course:
                 - Выводы
         "5":
             github-prefix: os-task5
+            template-repo: suai-os-2026/os-course-task5
+            repo-provisioning: fork
             short-name: ЛР5
             taskid-max: 30
             penalty-max: 8
