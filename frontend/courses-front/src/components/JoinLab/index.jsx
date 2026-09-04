@@ -1,94 +1,187 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Spin } from "antd";
-import { fetchJoinLabInfo, getJoinStartUrl } from "../../api";
-import { CardTitle, MainContainer } from "../../../theme";
+import { useParams, useSearchParams, useNavigate } from "react-router-dom";
+
+import { fetchJoinLab, getJoinStartUrl } from "../../api";
+import { SUPPORTED_LANGUAGES } from "../../language";
 import { ButtonBack } from "../course-list/styled";
-import { Breadcrumb } from "../breadcrumb";
-import { JoinDescription, JoinButton, JoinResultBox } from "./styled";
+import {
+  ActionButton,
+  Description,
+  Details,
+  ErrorPanel,
+  JoinCard,
+  JoinPage,
+  Label,
+  LanguageControl,
+  LanguageSelect,
+  RepositoryLink,
+  Spinner,
+  SuccessPanel,
+  Title,
+  Value,
+} from "./styled";
+import {
+  ERROR_TRANSLATION_KEYS,
+  getSafeRepositoryUrl,
+  shouldShowJoinAction,
+} from "./state";
 
-// Maps the `reason` query param set by GET /join/callback (see docs/REPO_GENERATION_PLAN.md §7)
-// to a translation key. Anything not listed here falls back to a generic message -
-// still human-readable, never a raw error code shown to the student.
-const ERROR_REASON_KEYS = {
-  access_denied: "joinErrorAccessDenied",
-  config: "joinErrorConfig",
-  oauth_not_configured: "joinErrorConfig",
-  oauth_exchange_failed: "joinErrorOauthFailed",
-  INVALID_TEMPLATE_CONFIG: "joinErrorConfig",
-  TEMPLATE_NOT_FOUND: "joinErrorTemplateNotFound",
-  CREATE_FORBIDDEN: "joinErrorForbidden",
-  RATE_LIMITED: "joinErrorRateLimited",
-};
 
-export const JoinLab = ({ courseId, labId, status, reason, repoUrl, username, onBack }) => {
-  const { t } = useTranslation();
-
-  const [info, setInfo] = useState(null);
-  const [loading, setLoading] = useState(true);
+export function JoinLab() {
+  const { courseId, labId } = useParams();
+  const [searchParams] = useSearchParams();
+  const navigate = useNavigate();
+  const { t, i18n } = useTranslation();
+  const [lab, setLab] = useState(null);
   const [loadError, setLoadError] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRedirecting, setIsRedirecting] = useState(false);
+
+  const callbackStatus = searchParams.get("status");
+  // main.py передаёт код ошибки в query-параметре `reason` (не `error` - тот
+  // зарезервирован под сырой код ошибки GitHub OAuth, см. join_callback).
+  const callbackReason = searchParams.get("reason");
+  const username = searchParams.get("username");
+  const hasLabContext = Boolean(courseId && labId);
+  const isStandaloneError = !hasLabContext && callbackStatus === "error";
+  const repositoryUrl = useMemo(
+    () => getSafeRepositoryUrl(searchParams.get("repo_url")),
+    [searchParams]
+  );
 
   useEffect(() => {
-    setLoading(true);
+    let isCurrentRequest = true;
+    setIsLoading(true);
     setLoadError(null);
-    fetchJoinLabInfo(courseId, labId)
-      .then((data) => {
-        setInfo(data);
-        setLoading(false);
-      })
-      .catch((err) => {
-        setLoading(false);
-        setLoadError(err.message || t("joinLoadError"));
-      });
-  }, [courseId, labId]);
 
-  const handleSignIn = () => {
-    window.location.href = getJoinStartUrl(courseId, labId);
+    if (!hasLabContext) {
+      setLab(null);
+      setLoadError(isStandaloneError ? null : "join_not_found");
+      setIsLoading(false);
+      return () => {
+        isCurrentRequest = false;
+      };
+    }
+
+    fetchJoinLab(courseId, labId)
+      .then((data) => {
+        if (isCurrentRequest) setLab(data);
+      })
+      .catch((error) => {
+        if (isCurrentRequest) setLoadError(error.code || "unknown");
+      })
+      .finally(() => {
+        if (isCurrentRequest) setIsLoading(false);
+      });
+
+    // React может размонтировать route до завершения запроса. Флаг исключает
+    // обновление state, относящегося к предыдущей странице курса или лабы.
+    return () => {
+      isCurrentRequest = false;
+    };
+  }, [courseId, labId, hasLabContext, isStandaloneError]);
+
+  const beginOAuth = () => {
+    setIsRedirecting(true);
+    window.location.assign(getJoinStartUrl(courseId, labId));
   };
 
+  const translatedError = (code) =>
+    t(ERROR_TRANSLATION_KEYS[code] || "join.errors.unknown");
+
   return (
-    <MainContainer>
-      <ButtonBack onClick={onBack}>← Назад</ButtonBack>
-      <Breadcrumb courseId={courseId} labId={labId} />
-      <CardTitle>{t("joinPageTitle")}</CardTitle>
+    <JoinPage>
+      <ButtonBack onClick={() => navigate("/")}>← Назад</ButtonBack>
+      <JoinCard>
+        <LanguageControl>
+          <Label as="label" htmlFor="join-language">
+            {t("join.language")}
+          </Label>
+          <LanguageSelect
+            id="join-language"
+            value={i18n.language.split("-")[0]}
+            onChange={(event) => i18n.changeLanguage(event.target.value)}
+          >
+            {SUPPORTED_LANGUAGES.map(({ code, label }) => (
+              <option key={code} value={code}>
+                {label}
+              </option>
+            ))}
+          </LanguageSelect>
+        </LanguageControl>
 
-      {loading && <Spin size="default" />}
+        <Title>{t("join.title")}</Title>
 
-      {!loading && loadError && <JoinResultBox $type="error">{loadError}</JoinResultBox>}
+        {isLoading && (
+          <Description role="status">
+            <Spinner aria-hidden="true" />
+            {t("join.loading")}
+          </Description>
+        )}
 
-      {!loading && !loadError && info && (
-        <>
-          <JoinDescription>
-            <div>
-              {t("joinCourseLabel")}: <strong>{info.course_name}</strong>
-            </div>
-            <div>
-              {t("joinLabLabel")}: <strong>{info.lab_short_name}</strong>
-            </div>
-          </JoinDescription>
+        {!isLoading && loadError && (
+          <ErrorPanel role="alert">
+            <strong>{t("join.errorTitle")}</strong>
+            <span>{translatedError(loadError)}</span>
+          </ErrorPanel>
+        )}
 
-          {status === "success" ? (
-            <JoinResultBox $type="success">
-              <p>{t("joinSuccessMessage")}</p>
-              {username && (
-                <p>
-                  GitHub: <strong>{username}</strong>
-                </p>
-              )}
-              <JoinButton as="a" href={repoUrl} target="_blank" rel="noreferrer">
-                {t("joinOpenRepoButton")}
-              </JoinButton>
-            </JoinResultBox>
-          ) : status === "error" ? (
-            <JoinResultBox $type="error">
-              <p>{t(ERROR_REASON_KEYS[reason] || "joinErrorGeneric")}</p>
-              <JoinButton onClick={handleSignIn}>{t("joinTryAgain")}</JoinButton>
-            </JoinResultBox>
-          ) : (
-            <JoinButton onClick={handleSignIn}>{t("joinSignInButton")}</JoinButton>
-          )}
-        </>
-      )}
-    </MainContainer>
+        {!isLoading && isStandaloneError && (
+          <ErrorPanel role="alert">
+            <strong>{t("join.errorTitle")}</strong>
+            <span>{translatedError(callbackReason)}</span>
+          </ErrorPanel>
+        )}
+
+        {!isLoading && lab && (
+          <>
+            <Details>
+              <div>
+                <Label>{t("join.course")}</Label>
+                <Value>{lab.course_name}</Value>
+              </div>
+              <div>
+                <Label>{t("join.lab")}</Label>
+                <Value>{lab.lab_short_name}</Value>
+              </div>
+            </Details>
+
+            {callbackStatus === "success" && repositoryUrl ? (
+              <SuccessPanel role="status">
+                <strong>{t("join.successTitle")}</strong>
+                <span>{t("join.successDescription")}</span>
+                {username && (
+                  <span>
+                    {t("join.usernameLabel")}: <strong>{username}</strong>
+                  </span>
+                )}
+                <RepositoryLink href={repositoryUrl} target="_blank" rel="noreferrer">
+                  {t("join.openRepository")}
+                </RepositoryLink>
+              </SuccessPanel>
+            ) : callbackStatus === "success" ? (
+              <ErrorPanel role="alert">
+                <strong>{t("join.errorTitle")}</strong>
+                <span>{t("join.errors.invalidRepositoryLink")}</span>
+              </ErrorPanel>
+            ) : callbackStatus === "error" ? (
+              <ErrorPanel role="alert">
+                <strong>{t("join.errorTitle")}</strong>
+                <span>{translatedError(callbackReason)}</span>
+              </ErrorPanel>
+            ) : (
+              <Description>{t("join.description")}</Description>
+            )}
+
+            {shouldShowJoinAction(callbackStatus, repositoryUrl) && (
+              <ActionButton type="button" onClick={beginOAuth} disabled={isRedirecting}>
+                {isRedirecting ? t("join.redirecting") : t("join.signIn")}
+              </ActionButton>
+            )}
+          </>
+        )}
+      </JoinCard>
+    </JoinPage>
   );
-};
+}

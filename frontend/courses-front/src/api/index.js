@@ -1,4 +1,46 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const JOIN_REQUEST_TIMEOUT_MS = 10000;
+
+// Публичные данные для страницы создания репозитория. Сам OAuth намеренно не
+// выполняется через fetch: браузер должен перейти на github.com и вернуться
+// через callback backend.
+export const fetchJoinLab = async (courseId, labId) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), JOIN_REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(
+      `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}`,
+      { signal: controller.signal }
+    );
+  } catch (cause) {
+    const error = new Error("Unable to load repository-generation settings", {
+      cause,
+    });
+    error.code = cause?.name === "AbortError" ? "request_timeout" : "unknown";
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    const error = new Error("Unable to load repository-generation settings");
+    // Стабильные коды позволяют компоненту переводить ожидаемые ошибки, не
+    // показывая русскоязычный detail backend во всех поддерживаемых языках UI.
+    if (response.status === 404) error.code = "join_not_found";
+    else if (response.status === 400) error.code = "join_not_configured";
+    else if (response.status === 429) error.code = "rate_limit";
+    else error.code = "unknown";
+    throw error;
+  }
+
+  return response.json();
+};
+
+// GitHub OAuth flow is a full-page redirect, not a fetch - the caller navigates
+// the browser to this URL (window.location.href = getJoinStartUrl(...)).
+export const getJoinStartUrl = (courseId, labId) =>
+  `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}/start`;
 
 // Маппинг полей на русские названия для сообщений об ошибках
 const fieldLabels = {
@@ -183,32 +225,4 @@ export async function gradeLab(courseId, groupId, labId, github) {
   return data;
 }
 
-export const fetchJoinLabInfo = async (courseId, labId) => {
-  const response = await fetch(
-    `${API_BASE_URL}/join/${courseId}/${encodeURIComponent(labId)}`
-  );
-  if (response.status === 429) {
-    let errorMessage = "Превышен лимит запросов. Пожалуйста, подождите немного и попробуйте снова.";
-    try {
-      const data = await response.json();
-      errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
-      // Если не удалось распарсить JSON, используем сообщение по умолчанию
-    }
-    throw new Error(errorMessage);
-  }
-
-  const data = await response.json();
-
-  if (!response.ok) {
-    throw new Error(data.detail || "Не удалось загрузить информацию о лабораторной работе");
-  }
-
-  return data;
-};
-
-// GitHub OAuth flow is a full-page redirect, not a fetch - the caller navigates
-// the browser to this URL (window.location.href = getJoinStartUrl(...)).
-export const getJoinStartUrl = (courseId, labId) =>
-  `${API_BASE_URL}/join/${courseId}/${encodeURIComponent(labId)}/start`;
 

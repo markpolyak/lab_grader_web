@@ -929,6 +929,11 @@ def _join_result_redirect(course_id: str, lab_id: str, status: str, **extra) -> 
     return f"{base}/join/{course_id}/{lab_id}?{urlencode(params)}"
 
 
+def _join_error_redirect(reason: str) -> str:
+    """Результат для случая, когда course_id/lab_id ещё неизвестны (битый state)."""
+    return f"{FRONTEND_URL.rstrip('/')}/join/error?{urlencode({'status': 'error', 'reason': reason})}"
+
+
 def _exchange_code_for_username(code: str, redirect_uri: str) -> str | None:
     """
     Exchange an OAuth `code` for the confirmed GitHub username of the student.
@@ -1036,10 +1041,13 @@ def join_callback(
     Обрабатывает колбэк GitHub OAuth: проверяет state, получает подтверждённый
     username, создаёт репозиторий из шаблона и чинит доступ студента (§4 плана).
     """
-    # state can't be recovered here if it's missing/invalid/expired, so this
-    # is the one case handled as a direct error response rather than a
-    # redirect to the (unknown) frontend course/lab page.
-    payload = _parse_join_state(state)
+    # course_id/lab_id are unknown until state is decoded, so a missing/invalid/
+    # expired state can't redirect to the (unknown) frontend course/lab page -
+    # it goes to the course/lab-agnostic /join/error page instead.
+    try:
+        payload = _parse_join_state(state)
+    except HTTPException:
+        return RedirectResponse(url=_join_error_redirect("invalid_state"))
     course_id = payload["course_id"]
     lab_id = payload["lab_id"]
 

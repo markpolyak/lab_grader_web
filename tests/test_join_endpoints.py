@@ -115,26 +115,40 @@ def _get_state(mock_request):
 
 
 class TestJoinCallback:
-    def test_invalid_state_returns_400_not_500(self, mock_request):
-        with pytest.raises(HTTPException) as exc_info:
-            main_module.join_callback(mock_request, code="abc", state="garbage", error=None)
-        assert exc_info.value.status_code == 400
+    def test_invalid_state_redirects_to_join_error(self, mock_request):
+        """course_id/lab_id are unknown for a garbled state, so the student lands
+        on the course/lab-agnostic /join/error page instead of a raw 400 response."""
+        resp = main_module.join_callback(mock_request, code="abc", state="garbage", error=None)
 
-    def test_missing_state_returns_400_not_500(self, mock_request):
-        with pytest.raises(HTTPException) as exc_info:
-            main_module.join_callback(mock_request, code="abc", state=None, error=None)
-        assert exc_info.value.status_code == 400
+        location = resp.headers["location"]
+        assert location.startswith("https://front.example.com/join/error?")
+        params = qs(location)
+        assert params["status"] == ["error"]
+        assert params["reason"] == ["invalid_state"]
 
-    def test_expired_state_returns_400_not_500(self, mock_request, mock_get_course_by_id):
+    def test_missing_state_redirects_to_join_error(self, mock_request):
+        resp = main_module.join_callback(mock_request, code="abc", state=None, error=None)
+
+        location = resp.headers["location"]
+        assert location.startswith("https://front.example.com/join/error?")
+        params = qs(location)
+        assert params["status"] == ["error"]
+        assert params["reason"] == ["invalid_state"]
+
+    def test_expired_state_redirects_to_join_error(self, mock_request, mock_get_course_by_id):
         """A validly-signed state older than JOIN_STATE_MAX_AGE must be rejected too,
         not just a garbled/forged one (§10 of the plan)."""
         backdated = time.time() - (main_module.JOIN_STATE_MAX_AGE + 10)
         with patch("itsdangerous.timed.time.time", return_value=backdated):
             state = _get_state(mock_request)
 
-        with pytest.raises(HTTPException) as exc_info:
-            main_module.join_callback(mock_request, code="abc", state=state, error=None)
-        assert exc_info.value.status_code == 400
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        location = resp.headers["location"]
+        assert location.startswith("https://front.example.com/join/error?")
+        params = qs(location)
+        assert params["status"] == ["error"]
+        assert params["reason"] == ["invalid_state"]
 
     def test_access_denied_redirects_with_error_reason(self, mock_request, mock_get_course_by_id):
         state = _get_state(mock_request)
