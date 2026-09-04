@@ -8,6 +8,7 @@ import os
 from unittest.mock import patch
 
 import pytest
+import requests
 import responses
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -94,6 +95,20 @@ class TestListTargetForksFiltering:
         assert summary["total"] == 1
         repos = {r["repo"] for r in summary["results"] if r["status"] == "will_process"}
         assert repos == {"os-task1-student1"}
+
+    @responses.activate
+    def test_template_itself_is_not_reported_as_not_a_fork(self):
+        """The template usually sits in the same org and matches the lab prefix
+        (github-prefix: os-task1 + os-task1-template) - listing it as a repo
+        left out of the update is a false alarm."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        org_repos = [{"name": "os-task1-student1"}, {"name": TEMPLATE_NAME}]
+        add_template_and_forks([forks], org_repos=org_repos)
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert summary["not_a_fork_count"] == 0
+        assert TEMPLATE_NAME not in {r["repo"] for r in summary["results"]}
 
     @responses.activate
     def test_owner_match_is_case_insensitive(self):
@@ -385,6 +400,23 @@ class TestRunPropagationSetupFailure:
         statuses = {r.repo: r.status for r in job.results}
         assert statuses["os-task1-student2"] == "not_a_fork"
         assert statuses["os-task1-student1"] == "pr_created"
+
+
+    def test_unexpected_exception_fails_job_and_unlocks_the_lab(self):
+        """A bare requests timeout isn't a PropagateSetupError - if it escaped,
+        the job would stay "running" forever and every later run for that lab
+        would 409 until the backend restarts."""
+        job = try_start_propagate_job("test-course", "1")
+        assert job is not None
+
+        with patch("grading.propagate._list_target_forks", side_effect=requests.ConnectionError("boom")):
+            run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert job.status == "failed"
+        assert job.error
+        assert job.finished_at
+        # The lab is free again: a retry must not be rejected with 409.
+        assert try_start_propagate_job("test-course", "1") is not None
 
 
 class TestJobStore:

@@ -198,10 +198,16 @@ def _list_target_forks(
     if org_repos is None:
         raise PropagateSetupError("Не удалось получить список репозиториев организации")
 
+    # The template usually lives in the same org and often matches the lab's
+    # prefix itself (github-prefix: os-task1 + template-repo: .../os-task1-template),
+    # and it obviously isn't a student repo left out of the update.
+    template_own_name = template_name.lower() if org_lower == template_owner.lower() else None
     not_a_fork = [
         repo
         for repo in org_repos
-        if repo.get("name", "").startswith(prefix) and repo.get("name") not in target_names
+        if repo.get("name", "").startswith(prefix)
+        and repo.get("name") not in target_names
+        and repo.get("name", "").lower() != template_own_name
     ]
 
     return target_forks, not_a_fork, template_default_branch
@@ -302,7 +308,7 @@ def _create_pr_for_fork(
     return PropagateResult(repo=fork_name, status="error", message=resp.text[:500])
 
 
-def run_propagation(
+def _run_propagation(
     job: PropagateJob,
     github_client: GitHubClient,
     org: str,
@@ -310,11 +316,8 @@ def run_propagation(
     template_repo: str,
 ) -> None:
     """
-    Background worker body for a propagate-template-update run.
-
-    A plain `def`, not `async def`, so FastAPI's BackgroundTasks executes it
-    in the threadpool instead of blocking the event loop on synchronous
-    `requests` calls (see issue #52).
+    Body of a propagate-template-update run. Call run_propagation instead -
+    it is what guarantees the job never stays stuck in "running".
 
     A single repo failing never aborts the job - only a failure to read the
     template or list forks/org repos (before any PR is attempted) fails it
@@ -357,3 +360,38 @@ def run_propagation(
 
     with _jobs_lock:
         _finish_job_locked(job, "done")
+
+
+def run_propagation(
+    job: PropagateJob,
+    github_client: GitHubClient,
+    org: str,
+    github_prefix: str,
+    template_repo: str,
+) -> None:
+    """
+    Background worker entry point for a propagate-template-update run.
+
+    A plain `def`, not `async def`, so FastAPI's BackgroundTasks executes it
+    in the threadpool instead of blocking the event loop on synchronous
+    `requests` calls (see issue #52).
+
+    Wraps the actual work so that the job is always closed out. _list_target_forks
+    converts the expected GitHub failures into PropagateSetupError, but a bare
+    `requests` timeout on api.github.com raises RequestException straight
+    through - and a job left in "running" keeps (course_id, lab_id) locked in
+    _running_lab_keys, so every later run for that lab would 409 (and the admin
+    page would poll a never-finishing job) until the backend restarts.
+    """
+    try:
+        _run_propagation(job, github_client, org, github_prefix, template_repo)
+    except Exception:
+        logger.exception(f"Propagate job {job.job_id} ({org}, {github_prefix}) crashed")
+    finally:
+        with _jobs_lock:
+            if job.status == "running":
+                _finish_job_locked(
+                    job,
+                    "failed",
+                    "Непредвиденная ошибка при рассылке обновлений. Попробуйте ещё раз позже",
+                )
