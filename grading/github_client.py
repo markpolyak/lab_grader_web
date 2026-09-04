@@ -34,6 +34,9 @@ class GitHubClient:
     """Client for GitHub API operations."""
 
     BASE_URL = "https://api.github.com"
+    # Used by the /join repo-provisioning calls below, to match the timeout already
+    # used for the OAuth requests in main.py (avoids a hung worker if api.github.com stalls).
+    DEFAULT_TIMEOUT = 10
 
     def __init__(self, token: str):
         """
@@ -188,7 +191,7 @@ class GitHubClient:
             True if the repository exists, False otherwise
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 200
 
     def create_repo_from_template(
@@ -218,11 +221,18 @@ class GitHubClient:
         url = f"{self.BASE_URL}/repos/{template_owner}/{template_repo}/generate"
         headers = {**self.headers, "Accept": "application/vnd.github+json"}
         payload = {"owner": owner, "name": name, "private": private}
-        return requests.post(url, headers=headers, json=payload)
+        return requests.post(url, headers=headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
 
     def is_direct_collaborator(self, org: str, repo: str, username: str) -> bool:
         """
         Check whether a user already has direct collaborator access to a repository.
+
+        Note: GitHub's docs don't document an `affiliation` param for this
+        single-user "check collaborator" endpoint (only for the list-collaborators
+        one) - it's used here anyway per docs/REPO_GENERATION_PLAN.md §4, which
+        specifies this exact call. It's harmless for the current one-student-one-repo
+        model; a future team-lab variant relying on "direct only" here should
+        double check GitHub's actual behavior first.
 
         Args:
             org: Organization or user name
@@ -230,10 +240,12 @@ class GitHubClient:
             username: GitHub username to check
 
         Returns:
-            True if the user is a direct collaborator (204 response)
+            True if the user is a collaborator (204 response)
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators/{username}"
-        resp = requests.get(url, headers=self.headers, params={"affiliation": "direct"})
+        resp = requests.get(
+            url, headers=self.headers, params={"affiliation": "direct"}, timeout=self.DEFAULT_TIMEOUT
+        )
         return resp.status_code == 204
 
     def list_invitations(self, org: str, repo: str) -> list[dict[str, Any]] | None:
@@ -248,7 +260,7 @@ class GitHubClient:
             List of invitation dicts, or None on error
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/invitations"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         if resp.status_code != 200:
             return None
         return resp.json()
@@ -266,7 +278,7 @@ class GitHubClient:
             True if the invitation was deleted
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/invitations/{invitation_id}"
-        resp = requests.delete(url, headers=self.headers)
+        resp = requests.delete(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 204
 
     def add_collaborator(self, org: str, repo: str, username: str) -> requests.Response:
@@ -287,7 +299,7 @@ class GitHubClient:
             204 = user already had access and was added directly)
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators/{username}"
-        return requests.put(url, headers=self.headers)
+        return requests.put(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
     def get_job_logs(self, org: str, repo: str, job_id: int) -> str | None:
         """

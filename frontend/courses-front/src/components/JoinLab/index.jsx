@@ -18,6 +18,7 @@ const ERROR_REASON_KEYS = {
   INVALID_TEMPLATE_CONFIG: "joinErrorConfig",
   TEMPLATE_NOT_FOUND: "joinErrorTemplateNotFound",
   CREATE_FORBIDDEN: "joinErrorForbidden",
+  RATE_LIMITED: "joinErrorRateLimited",
 };
 
 export const JoinLab = ({ courseId, labId, status, reason, repoUrl, username, onBack }) => {

@@ -37,5 +37,6 @@
   "joinErrorOauthFailed": "Failed to confirm GitHub sign-in. Please try again",
   "joinErrorTemplateNotFound": "The template repository was not found or is unavailable. Please contact your teacher",
   "joinErrorForbidden": "Not enough permissions to create the repository. Please contact your teacher",
+  "joinErrorRateLimited": "GitHub is temporarily rate-limiting requests. Please try again in a few minutes",
   "joinErrorGeneric": "An error occurred while creating the repository. Please try again later"
 }

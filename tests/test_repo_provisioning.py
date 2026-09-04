@@ -143,6 +143,47 @@ class TestCreateFromTemplate:
         assert result.status == ProvisionStatus.ERROR
         assert result.error_code == "INVALID_TEMPLATE_CONFIG"
 
+    @responses.activate
+    def test_secondary_rate_limit_is_reported_as_retryable_not_forbidden(self):
+        """A 403 with a rate-limit signature must not be reported as CREATE_FORBIDDEN
+        (§7 of the plan lists rate limiting as a retryable GitHub API error)."""
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}",
+            status=404,
+        )
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{TEMPLATE_REPO}/generate",
+            json={"message": "You have exceeded a secondary rate limit"},
+            status=403,
+            headers={"Retry-After": "30"},
+        )
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME)
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "RATE_LIMITED"
+
+    @responses.activate
+    def test_plain_403_without_rate_limit_signature_is_forbidden(self):
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}",
+            status=404,
+        )
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{TEMPLATE_REPO}/generate",
+            json={"message": "Must have admin rights to Repository."},
+            status=403,
+        )
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME)
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "CREATE_FORBIDDEN"
+
 
 class TestAccessRepair:
     """Collaborator access checks/repairs (replaces github-reinvite, §10)."""

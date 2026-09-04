@@ -10,6 +10,7 @@ See docs/REPO_GENERATION_PLAN.md §7, §10, §11 (stage 2/3/4 acceptance).
 """
 import sys
 import os
+import time
 from unittest.mock import patch
 from urllib.parse import urlparse, parse_qs
 
@@ -122,6 +123,17 @@ class TestJoinCallback:
     def test_missing_state_returns_400_not_500(self, mock_request):
         with pytest.raises(HTTPException) as exc_info:
             main_module.join_callback(mock_request, code="abc", state=None, error=None)
+        assert exc_info.value.status_code == 400
+
+    def test_expired_state_returns_400_not_500(self, mock_request, mock_get_course_by_id):
+        """A validly-signed state older than JOIN_STATE_MAX_AGE must be rejected too,
+        not just a garbled/forged one (§10 of the plan)."""
+        backdated = time.time() - (main_module.JOIN_STATE_MAX_AGE + 10)
+        with patch("itsdangerous.timed.time.time", return_value=backdated):
+            state = _get_state(mock_request)
+
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.join_callback(mock_request, code="abc", state=state, error=None)
         assert exc_info.value.status_code == 400
 
     def test_access_denied_redirects_with_error_reason(self, mock_request, mock_get_course_by_id):

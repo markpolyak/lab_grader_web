@@ -40,5 +40,6 @@
   "joinErrorOauthFailed": "无法确认 GitHub 登录，请重试",
   "joinErrorTemplateNotFound": "未找到模板仓库或模板仓库不可用，请联系教师",
   "joinErrorForbidden": "创建仓库的权限不足，请联系教师",
+  "joinErrorRateLimited": "GitHub 暂时限制了请求速率，请稍等几分钟后重试",
   "joinErrorGeneric": "创建仓库时发生错误，请稍后重试"
 }
