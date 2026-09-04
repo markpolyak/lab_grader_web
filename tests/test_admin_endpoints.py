@@ -182,6 +182,38 @@ def run_background_tasks(bg: BackgroundTasks):
         task.func(*task.args, **task.kwargs)
 
 
+class TestPropagateTemplateUpdateEndpointNoBody:
+    """A POST with no JSON body at all must default to dry_run=true (issue
+    #52: "значение по умолчанию - true, чтобы вызов без тела ничего не
+    разослал"), exercised through a real ASGI request rather than a direct
+    function call so FastAPI's own body-defaulting is what's under test."""
+
+    @responses.activate
+    def test_missing_body_defaults_to_dry_run(self, client, propagate_course_config):
+        client.cookies.set("admin_session", valid_cookie())
+        responses.add(
+            responses.GET, "https://api.github.com/repos/test-org/os-task1-template",
+            json={"default_branch": "main"}, status=200,
+        )
+        responses.add(
+            responses.GET, "https://api.github.com/repos/test-org/os-task1-template/forks",
+            json=[{"name": "test-task1-student1", "owner": {"login": "test-org"}, "default_branch": "main"}],
+            status=200,
+        )
+        responses.add(responses.GET, "https://api.github.com/orgs/test-org/repos", json=[], status=200)
+        pr_call = responses.add(
+            responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/pulls",
+            json={"html_url": "url"}, status=201,
+        )
+
+        with patch("main.get_course_by_id", return_value=propagate_course_config):
+            response = client.post("/admin/courses/test-course/labs/1/propagate-template-update")
+
+        assert response.status_code == 200
+        assert response.json()["total"] == 1
+        assert pr_call.call_count == 0
+
+
 class TestPropagateTemplateUpdateEndpoint:
     def test_rejects_lab_with_template_mode(self, mock_request, sample_course_config):
         sample_course_config["labs"]["1"]["template-repo"] = "test-org/os-task1-template"
@@ -189,9 +221,8 @@ class TestPropagateTemplateUpdateEndpoint:
         with patch("main.get_course_by_id", return_value=sample_course_config):
             with pytest.raises(HTTPException) as exc_info:
                 main_module.propagate_template_update(
-                    mock_request, "test-course", "1",
-                    main_module.PropagateRequest(dry_run=True),
-                    BackgroundTasks(), admin="admin",
+                    mock_request, "test-course", "1", BackgroundTasks(),
+                    body=main_module.PropagateRequest(dry_run=True), admin="admin",
                 )
         assert exc_info.value.status_code == 400
 
@@ -200,9 +231,8 @@ class TestPropagateTemplateUpdateEndpoint:
         with patch("main.get_course_by_id", return_value=sample_course_config):
             with pytest.raises(HTTPException) as exc_info:
                 main_module.propagate_template_update(
-                    mock_request, "test-course", "1",
-                    main_module.PropagateRequest(dry_run=True),
-                    BackgroundTasks(), admin="admin",
+                    mock_request, "test-course", "1", BackgroundTasks(),
+                    body=main_module.PropagateRequest(dry_run=True), admin="admin",
                 )
         assert exc_info.value.status_code == 400
 
@@ -226,9 +256,8 @@ class TestPropagateTemplateUpdateEndpoint:
         )
 
         result = main_module.propagate_template_update(
-            mock_request, "test-course", "1",
-            main_module.PropagateRequest(dry_run=True),
-            BackgroundTasks(), admin="admin",
+            mock_request, "test-course", "1", BackgroundTasks(),
+            body=main_module.PropagateRequest(dry_run=True), admin="admin",
         )
 
         assert result["total"] == 1
@@ -256,9 +285,8 @@ class TestPropagateTemplateUpdateEndpoint:
 
         bg = BackgroundTasks()
         response = main_module.propagate_template_update(
-            mock_request, "test-course", "1",
-            main_module.PropagateRequest(dry_run=False),
-            bg, admin="admin",
+            mock_request, "test-course", "1", bg,
+            body=main_module.PropagateRequest(dry_run=False), admin="admin",
         )
         assert response.status_code == 202
         import json
@@ -276,9 +304,8 @@ class TestPropagateTemplateUpdateEndpoint:
 
         with pytest.raises(HTTPException) as exc_info:
             main_module.propagate_template_update(
-                mock_request, "test-course", "1",
-                main_module.PropagateRequest(dry_run=False),
-                BackgroundTasks(), admin="admin",
+                mock_request, "test-course", "1", BackgroundTasks(),
+                body=main_module.PropagateRequest(dry_run=False), admin="admin",
             )
         assert exc_info.value.status_code == 409
 

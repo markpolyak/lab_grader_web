@@ -1208,8 +1208,8 @@ def propagate_template_update(
     request: Request,
     course_id: str,
     lab_id: str,
-    body: PropagateRequest,
     background_tasks: BackgroundTasks,
+    body: PropagateRequest = PropagateRequest(),
     admin: str = Depends(require_admin),
 ):
     """
