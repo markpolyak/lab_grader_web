@@ -590,3 +590,62 @@ class TestGetDefaultForbiddenPatterns:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestGitHubClientRefs:
+    """Tests for get_ref / create_ref / update_ref (issue #52)."""
+
+    @responses.activate
+    def test_get_ref_returns_object_sha(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/template/git/ref/heads/master",
+            json={"ref": "refs/heads/master", "object": {"sha": "abc123"}},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+
+        assert client.get_ref("org", "template", "heads/master")["object"]["sha"] == "abc123"
+
+    @responses.activate
+    def test_get_ref_missing_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/template/git/ref/heads/nope",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+
+        assert client.get_ref("org", "template", "heads/nope") is None
+
+    @responses.activate
+    def test_create_ref_posts_full_ref_and_sha(self):
+        call = responses.add(
+            responses.POST,
+            "https://api.github.com/repos/org/os-task1-student1/git/refs",
+            json={"ref": "refs/heads/template-update"},
+            status=201,
+        )
+        client = GitHubClient("test_token")
+        resp = client.create_ref("org", "os-task1-student1", "refs/heads/template-update", "abc123")
+
+        assert resp.status_code == 201
+        assert json.loads(call.calls[0].request.body) == {
+            "ref": "refs/heads/template-update",
+            "sha": "abc123",
+        }
+
+    @responses.activate
+    def test_update_ref_patches_with_force(self):
+        call = responses.add(
+            responses.PATCH,
+            "https://api.github.com/repos/org/os-task1-student1/git/refs/heads/template-update",
+            json={"ref": "refs/heads/template-update"},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        resp = client.update_ref("org", "os-task1-student1", "heads/template-update", "abc123")
+
+        assert resp.status_code == 200
+        assert json.loads(call.calls[0].request.body) == {"sha": "abc123", "force": True}

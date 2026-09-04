@@ -196,11 +196,20 @@ class TestPropagateTemplateUpdateEndpointNoBody:
             json={"default_branch": "main"}, status=200,
         )
         responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/os-task1-template/git/ref/heads/main",
+            json={"object": {"sha": "a" * 40}}, status=200,
+        )
+        responses.add(
             responses.GET, "https://api.github.com/repos/test-org/os-task1-template/forks",
             json=[{"name": "test-task1-student1", "owner": {"login": "test-org"}, "default_branch": "main"}],
             status=200,
         )
         responses.add(responses.GET, "https://api.github.com/orgs/test-org/repos", json=[], status=200)
+        responses.add(
+            responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/git/refs",
+            json={}, status=201,
+        )
         pr_call = responses.add(
             responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/pulls",
             json={"html_url": "url"}, status=201,
@@ -243,12 +252,21 @@ class TestPropagateTemplateUpdateEndpoint:
             json={"default_branch": "main"}, status=200,
         )
         responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/os-task1-template/git/ref/heads/main",
+            json={"object": {"sha": "a" * 40}}, status=200,
+        )
+        responses.add(
             responses.GET, "https://api.github.com/repos/test-org/os-task1-template/forks",
             json=[{"name": "test-task1-student1", "owner": {"login": "test-org"}, "default_branch": "main"}],
             status=200,
         )
         responses.add(
             responses.GET, "https://api.github.com/orgs/test-org/repos", json=[], status=200,
+        )
+        responses.add(
+            responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/git/refs",
+            json={}, status=201,
         )
         pr_call = responses.add(
             responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/pulls",
@@ -271,12 +289,21 @@ class TestPropagateTemplateUpdateEndpoint:
             json={"default_branch": "main"}, status=200,
         )
         responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/os-task1-template/git/ref/heads/main",
+            json={"object": {"sha": "a" * 40}}, status=200,
+        )
+        responses.add(
             responses.GET, "https://api.github.com/repos/test-org/os-task1-template/forks",
             json=[{"name": "test-task1-student1", "owner": {"login": "test-org"}, "default_branch": "main"}],
             status=200,
         )
         responses.add(
             responses.GET, "https://api.github.com/orgs/test-org/repos", json=[], status=200,
+        )
+        responses.add(
+            responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/git/refs",
+            json={}, status=201,
         )
         responses.add(
             responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/pulls",

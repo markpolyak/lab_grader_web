@@ -439,6 +439,74 @@ class GitHubClient:
             params["head"] = head
         return self._get_all_pages(url, params=params)
 
+    def get_ref(self, owner: str, repo: str, ref: str) -> dict[str, Any] | None:
+        """
+        Read a single git reference.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            ref: Reference without the "refs/" prefix, e.g. "heads/master"
+
+        Returns:
+            The reference dict (its `object.sha` is the branch tip), or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/git/ref/{ref}"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
+    def create_ref(self, owner: str, repo: str, ref: str, sha: str) -> requests.Response:
+        """
+        Create a git reference pointing at an existing commit.
+
+        Used to place the template's tip commit into a student fork as a
+        branch: repositories in one fork network share object storage, so a
+        commit that only exists in the template can be referenced from the
+        fork (issue #52). For a repo created with `generate` instead of a
+        fork, the object isn't there and GitHub answers 422 "Object does
+        not exist".
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            ref: Full reference name, e.g. "refs/heads/template-update"
+            sha: Commit the reference should point at
+
+        Returns:
+            The raw requests.Response (201 on success, 422 if the reference
+            already exists or the object is unknown)
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/git/refs"
+        payload = {"ref": ref, "sha": sha}
+        return requests.post(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
+    def update_ref(
+        self,
+        owner: str,
+        repo: str,
+        ref: str,
+        sha: str,
+        force: bool = True,
+    ) -> requests.Response:
+        """
+        Move an existing git reference to another commit.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            ref: Reference without the "refs/" prefix, e.g. "heads/template-update"
+            sha: Commit the reference should point at
+            force: Allow a non-fast-forward update
+
+        Returns:
+            The raw requests.Response (200 on success)
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/git/refs/{ref}"
+        payload = {"sha": sha, "force": force}
+        return requests.patch(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
     def is_direct_collaborator(self, org: str, repo: str, username: str) -> bool:
         """
         Check whether a user already has direct collaborator access to a repository.

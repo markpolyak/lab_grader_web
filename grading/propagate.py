@@ -34,6 +34,15 @@ PR_CREATE_PAUSE_SECONDS = 1
 # How many finished jobs to keep around for GET /admin/propagate-jobs/{id}.
 MAX_JOBS_KEPT = 20
 
+# Service branch created in each student fork, pointing at the template's tip
+# commit. A cross-repo PR (head="owner:branch") cannot be used here: when the
+# template and the forks share an owner, GitHub resolves head to the base repo
+# itself and answers "No commits between master and master" - verified on live
+# GitHub, see issue #52. Placing the commit as a branch inside the fork and
+# opening an ordinary same-repo PR is what actually works, and it only works
+# because a fork shares object storage with its template.
+TEMPLATE_UPDATE_BRANCH = "template-update"
+
 PR_TITLE = "Обновление стартового кода лабораторной работы"
 PR_BODY = (
     "Преподаватель обновил стартовый код лабораторной работы в репозитории-шаблоне.\n\n"
@@ -170,15 +179,25 @@ def _list_target_forks(
     Resolve which repositories a propagate run would touch.
 
     Returns:
-        (target_forks, not_a_fork_repos, template_default_branch)
+        (target_forks, not_a_fork_repos, template_head_sha)
 
     Raises:
-        PropagateSetupError: template unreadable, or forks/org repos list unavailable
+        PropagateSetupError: template unreadable, its branch tip unreadable,
+        or forks/org repos list unavailable
     """
     template = github_client.get_repo(template_owner, template_name)
     if template is None:
         raise PropagateSetupError("Репозиторий-шаблон не найден или недоступен")
     template_default_branch = template.get("default_branch") or "main"
+
+    # The tip commit itself, not just the branch name: it is what gets placed
+    # into each fork as TEMPLATE_UPDATE_BRANCH (see issue #52).
+    ref = github_client.get_ref(template_owner, template_name, f"heads/{template_default_branch}")
+    template_head_sha = ((ref or {}).get("object") or {}).get("sha")
+    if not template_head_sha:
+        raise PropagateSetupError(
+            f"Не удалось прочитать ветку {template_default_branch} репозитория-шаблона"
+        )
 
     forks = github_client.list_forks(template_owner, template_name)
     if forks is None:
@@ -210,7 +229,7 @@ def _list_target_forks(
         and repo.get("name", "").lower() != template_own_name
     ]
 
-    return target_forks, not_a_fork, template_default_branch
+    return target_forks, not_a_fork, template_head_sha
 
 
 def dry_run_propagation(
@@ -230,7 +249,7 @@ def dry_run_propagation(
     Raises:
         PropagateSetupError: see _list_target_forks
     """
-    target_forks, not_a_fork, _template_default_branch = _list_target_forks(
+    target_forks, not_a_fork, _template_head_sha = _list_target_forks(
         github_client, org, github_prefix, template_owner, template_name
     )
     results = [PropagateResult(repo=f["name"], status="will_process") for f in target_forks]
@@ -253,18 +272,68 @@ def _parse_retry_after(resp, default: float = 5.0) -> float:
 
 
 def _response_message(resp) -> str:
+    """
+    Text to classify a GitHub error by.
+
+    A 422 puts "Validation Failed" in the top-level `message` and the actual
+    reason in `errors[].message` ("No commits between ...", "A pull request
+    already exists for ..."), so both are joined here - reading only the
+    top-level field would classify every expected outcome as an error
+    (verified on live GitHub, see issue #52).
+    """
     try:
-        return resp.json().get("message", "")
+        payload = resp.json()
     except ValueError:
         return ""
+    if not isinstance(payload, dict):
+        return ""
+
+    parts = [payload.get("message", "")]
+    errors = payload.get("errors")
+    if isinstance(errors, list):
+        parts += [e.get("message", "") for e in errors if isinstance(e, dict)]
+    return " ".join(part for part in parts if part)
+
+
+def _place_template_branch(github_client: GitHubClient, org: str, fork_name: str, sha: str) -> str | None:
+    """
+    Point TEMPLATE_UPDATE_BRANCH in the fork at the template's tip commit,
+    creating the branch or moving an existing one.
+
+    Moving a branch that an open PR is built on is deliberate: the PR picks
+    up the new commits instead of a second one being opened.
+
+    Returns:
+        None on success, or an error message for the per-repo result
+    """
+    resp = github_client.create_ref(org, fork_name, f"refs/heads/{TEMPLATE_UPDATE_BRANCH}", sha)
+    if resp.status_code == 201:
+        return None
+
+    if resp.status_code == 422 and "already exists" in _response_message(resp).lower():
+        update_resp = github_client.update_ref(
+            org, fork_name, f"heads/{TEMPLATE_UPDATE_BRANCH}", sha, force=True
+        )
+        if update_resp.status_code == 200:
+            return None
+        logger.error(
+            f"Failed to move {TEMPLATE_UPDATE_BRANCH} in {org}/{fork_name}: "
+            f"{update_resp.status_code} {update_resp.text[:500]}"
+        )
+        return update_resp.text[:500]
+
+    logger.error(
+        f"Failed to create {TEMPLATE_UPDATE_BRANCH} in {org}/{fork_name}: "
+        f"{resp.status_code} {resp.text[:500]}"
+    )
+    return resp.text[:500]
 
 
 def _create_pr_for_fork(
     github_client: GitHubClient,
     org: str,
     fork: dict,
-    template_owner: str,
-    template_default_branch: str,
+    template_head_sha: str,
 ) -> PropagateResult:
     """
     Open (or discover the state of) a single update PR, per the response
@@ -272,7 +341,11 @@ def _create_pr_for_fork(
     """
     fork_name = fork["name"]
     fork_default_branch = fork.get("default_branch") or "main"
-    head = f"{template_owner}:{template_default_branch}"
+    head = TEMPLATE_UPDATE_BRANCH
+
+    branch_error = _place_template_branch(github_client, org, fork_name, template_head_sha)
+    if branch_error:
+        return PropagateResult(repo=fork_name, status="error", message=branch_error)
 
     resp = github_client.create_pull_request(
         org, fork_name, head=head, base=fork_default_branch, title=PR_TITLE, body=PR_BODY
@@ -331,7 +404,7 @@ def _run_propagation(
         return
 
     try:
-        target_forks, not_a_fork, template_default_branch = _list_target_forks(
+        target_forks, not_a_fork, template_head_sha = _list_target_forks(
             github_client, org, github_prefix, template_owner, template_name
         )
     except PropagateSetupError as e:
@@ -346,7 +419,7 @@ def _run_propagation(
 
     for index, fork in enumerate(target_forks):
         try:
-            result = _create_pr_for_fork(github_client, org, fork, template_owner, template_default_branch)
+            result = _create_pr_for_fork(github_client, org, fork, template_head_sha)
         except Exception:
             logger.exception(f"Unexpected error creating PR for {org}/{fork.get('name')}")
             result = PropagateResult(repo=fork.get("name", "?"), status="error", message="Внутренняя ошибка")

@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from grading import GitHubClient
 from grading.propagate import (
+    TEMPLATE_UPDATE_BRANCH,
     PropagateJob,
     PropagateSetupError,
     dry_run_propagation,
@@ -54,11 +55,42 @@ def clean_job_store():
     _running_lab_keys.clear()
 
 
-def add_template_and_forks(forks_pages, org_repos=None):
+TEMPLATE_HEAD_SHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+
+def add_branch_creation_mock(fork_name, status=201, json_body=None):
+    """POST /git/refs - placing TEMPLATE_UPDATE_BRANCH into a student fork."""
+    return responses.add(
+        responses.POST,
+        f"https://api.github.com/repos/{ORG}/{fork_name}/git/refs",
+        json=json_body if json_body is not None else {"ref": f"refs/heads/{TEMPLATE_UPDATE_BRANCH}"},
+        status=status,
+    )
+
+
+def add_branch_update_mock(fork_name, status=200):
+    """PATCH /git/refs/heads/... - moving an existing service branch."""
+    return responses.add(
+        responses.PATCH,
+        f"https://api.github.com/repos/{ORG}/{fork_name}/git/refs/heads/{TEMPLATE_UPDATE_BRANCH}",
+        json={"ref": f"refs/heads/{TEMPLATE_UPDATE_BRANCH}"},
+        status=status,
+    )
+
+
+def add_template_and_forks(forks_pages, org_repos=None, branch_mocks=True):
     responses.add(
         responses.GET,
         f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}",
         json={"default_branch": "main"},
+        status=200,
+    )
+    # The tip commit of the template's default branch - it is what gets placed
+    # into each fork as TEMPLATE_UPDATE_BRANCH.
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}/git/ref/heads/main",
+        json={"object": {"sha": TEMPLATE_HEAD_SHA}},
         status=200,
     )
     for page in forks_pages:
@@ -74,6 +106,14 @@ def add_template_and_forks(forks_pages, org_repos=None):
         json=org_repos or [],
         status=200,
     )
+    if branch_mocks:
+        seen = set()
+        for page in forks_pages:
+            for fork in page:
+                name = fork.get("name")
+                if name and name not in seen:
+                    seen.add(name)
+                    add_branch_creation_mock(name)
 
 
 class TestListTargetForksFiltering:
@@ -188,6 +228,12 @@ class TestDryRun:
         )
         responses.add(
             responses.GET,
+            f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}/git/ref/heads/main",
+            json={"object": {"sha": TEMPLATE_HEAD_SHA}},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
             f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}/forks",
             json={"message": "Not Found"},
             status=404,
@@ -230,7 +276,11 @@ class TestCreatePullRequestResponseTable:
         responses.add(
             responses.POST,
             f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
-            json={"message": "No commits between test-org:main and test-org:main"},
+            # Real shape: the discriminating text is in errors[], not in `message`.
+            json={
+                "message": "Validation Failed",
+                "errors": [{"message": "No commits between main and main"}],
+            },
             status=422,
         )
 
@@ -247,7 +297,12 @@ class TestCreatePullRequestResponseTable:
         responses.add(
             responses.POST,
             f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
-            json={"message": "A pull request already exists for test-org:main."},
+            json={
+                "message": "Validation Failed",
+                "errors": [
+                    {"message": f"A pull request already exists for {ORG}:{TEMPLATE_UPDATE_BRANCH}."}
+                ],
+            },
             status=422,
         )
         responses.add(
@@ -338,12 +393,15 @@ class TestCreatePullRequestResponseTable:
         assert statuses["os-task1-student2"] == "pr_created"
 
     @responses.activate
-    def test_head_points_at_template_owner_not_org(self):
-        """head must be TEMPLATE owner:branch, distinct from the course org
-        when the template lives elsewhere (issue #52)."""
+    def test_pr_is_opened_from_the_service_branch_inside_the_fork(self):
+        """A cross-repo head ("owner:branch") silently resolves to the base repo
+        when template and forks share an owner, so the template's commit is
+        placed as a branch in the fork and the PR is a plain same-repo one
+        (issue #52, verified against live GitHub)."""
         forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "dev"}]
-        add_template_and_forks([forks])
-        call = responses.add(
+        add_template_and_forks([forks], branch_mocks=False)
+        branch_call = add_branch_creation_mock("os-task1-student1")
+        pr_call = responses.add(
             responses.POST,
             f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
             json={"html_url": "url"},
@@ -354,9 +412,71 @@ class TestCreatePullRequestResponseTable:
         run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
 
         import json as jsonlib
-        body = jsonlib.loads(call.calls[0].request.body)
-        assert body["head"] == f"{TEMPLATE_OWNER}:main"
-        assert body["base"] == "dev"
+        branch_body = jsonlib.loads(branch_call.calls[0].request.body)
+        assert branch_body["ref"] == f"refs/heads/{TEMPLATE_UPDATE_BRANCH}"
+        assert branch_body["sha"] == TEMPLATE_HEAD_SHA
+
+        pr_body = jsonlib.loads(pr_call.calls[0].request.body)
+        assert pr_body["head"] == TEMPLATE_UPDATE_BRANCH  # bare branch, no owner prefix
+        assert pr_body["base"] == "dev"
+
+    @responses.activate
+    def test_existing_service_branch_is_force_moved(self):
+        """A re-run finds the branch already there; moving it updates the open
+        PR instead of leaving it pointing at the previous template commit."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        add_branch_creation_mock(
+            "os-task1-student1",
+            status=422,
+            json_body={"message": "Reference already exists"},
+        )
+        update_call = add_branch_update_mock("os-task1-student1")
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "url"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        import json as jsonlib
+        body = jsonlib.loads(update_call.calls[0].request.body)
+        assert body["sha"] == TEMPLATE_HEAD_SHA
+        assert body["force"] is True
+        assert [r.status for r in job.results] == ["pr_created"]
+
+    @responses.activate
+    def test_branch_placement_failure_is_a_per_repo_error(self):
+        """A repo where the commit can't be placed (e.g. not really a fork, so
+        the object is unknown) is an error for that repo only."""
+        forks = [
+            {"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"},
+            {"name": "os-task1-student2", "owner": {"login": ORG}, "default_branch": "main"},
+        ]
+        add_template_and_forks([forks], branch_mocks=False)
+        add_branch_creation_mock(
+            "os-task1-student1",
+            status=422,
+            json_body={"message": "Object does not exist"},
+        )
+        add_branch_creation_mock("os-task1-student2")
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student2/pulls",
+            json={"html_url": "url"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert job.status == "done"
+        statuses = {r.repo: r.status for r in job.results}
+        assert statuses["os-task1-student1"] == "error"
+        assert statuses["os-task1-student2"] == "pr_created"
 
 
 class TestRunPropagationSetupFailure:
