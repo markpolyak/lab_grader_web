@@ -7,12 +7,20 @@ for pending invitations silently expiring after 7 days. See
 docs/REPO_GENERATION_PLAN.md for the full design.
 """
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 
 from .github_client import GitHubClient
 
 logger = logging.getLogger(__name__)
+
+# How long to keep polling repo_exists() after a fork_repo() call before
+# giving up: fork creation is asynchronous on GitHub's side, and 30s is
+# about as long as it's reasonable to keep the student's browser waiting on
+# /join/callback (see issue #51).
+FORK_POLL_ATTEMPTS = 15
+FORK_POLL_INTERVAL_SECONDS = 2
 
 
 def _is_rate_limited(resp) -> bool:
@@ -70,6 +78,7 @@ class RepoProvisioner:
         github_prefix: str,
         template_repo: str,
         repo_suffix: str,
+        mode: str = "template",
     ) -> ProvisionResult:
         """
         Ensure `{github_prefix}-{repo_suffix}` exists in `org` (created from
@@ -86,6 +95,8 @@ class RepoProvisioner:
             github_prefix: Repo name prefix from lab config
             template_repo: Template repository as "owner/repo"
             repo_suffix: Suffix identifying the student (their GitHub username)
+            mode: "template" (default, current behavior - GitHub's `generate`
+                API) or "fork" (a real fork of the template, see issue #51)
 
         Returns:
             ProvisionResult describing success or the specific failure
@@ -101,7 +112,7 @@ class RepoProvisioner:
                 error_code="INVALID_TEMPLATE_CONFIG",
             )
 
-        create_error = self._ensure_repo_created(org, repo_name, template_owner, template_name)
+        create_error = self._ensure_repo_created(org, repo_name, template_owner, template_name, mode)
         if create_error:
             return create_error
 
@@ -122,17 +133,42 @@ class RepoProvisioner:
         repo_name: str,
         template_owner: str,
         template_name: str,
+        mode: str = "template",
     ) -> ProvisionResult | None:
         """
-        Create the repo from the template if it doesn't already exist.
+        Create the repo (from the template, or as a fork of it per `mode`)
+        if it doesn't already exist.
 
         Returns:
             ProvisionResult with an error, or None if the repo exists (or now does)
         """
         if self.github.repo_exists(org, repo_name):
             logger.info(f"Repository {org}/{repo_name} already exists, skipping creation")
+            if mode == "fork":
+                # Unlike template mode, a same-named repo here could be an
+                # unrelated repo that just happens to share the name - only
+                # a fork whose parent really is our template counts (§ "Коллизия
+                # имён при гонке" of issue #51).
+                return self._check_fork_parent(org, repo_name, template_owner, template_name)
             return None
 
+        if mode == "fork":
+            return self._create_from_fork(org, repo_name, template_owner, template_name)
+        return self._create_from_template(org, repo_name, template_owner, template_name)
+
+    def _create_from_template(
+        self,
+        org: str,
+        repo_name: str,
+        template_owner: str,
+        template_name: str,
+    ) -> ProvisionResult | None:
+        """
+        Create the repo from the template via GitHub's `generate` API.
+
+        Returns:
+            ProvisionResult with an error, or None on success
+        """
         logger.info(f"Creating {org}/{repo_name} from template {template_owner}/{template_name}")
         resp = self.github.create_repo_from_template(template_owner, template_name, org, repo_name, private=True)
 
@@ -184,6 +220,163 @@ class RepoProvisioner:
             message="Ошибка GitHub API при создании репозитория. Попробуйте ещё раз позже",
             error_code="CREATE_FAILED",
         )
+
+    def _check_fork_parent(
+        self,
+        org: str,
+        repo_name: str,
+        template_owner: str,
+        template_name: str,
+    ) -> ProvisionResult | None:
+        """
+        Verify that a repo which already exists at `org/repo_name` really is
+        a fork of our template, not an unrelated repo that happens to share
+        the name (fork mode has no equivalent of template mode's `generate`
+        409, so a same-named foreign repo would otherwise look like "already
+        provisioned" - see issue #51).
+
+        Returns:
+            ProvisionResult with NAME_TAKEN_BY_FOREIGN_REPO, or None if the
+            parent matches
+        """
+        repo = self.github.get_repo(org, repo_name)
+        parent_full_name = ((repo or {}).get("parent") or {}).get("full_name", "")
+        expected = f"{template_owner}/{template_name}"
+        if repo is not None and parent_full_name.lower() == expected.lower():
+            return None
+
+        logger.error(
+            f"{org}/{repo_name} already exists but is not a fork of {expected} (parent={parent_full_name!r})"
+        )
+        return ProvisionResult(
+            status=ProvisionStatus.ERROR,
+            message="Репозиторий с таким именем уже занят другим репозиторием. Обратитесь к преподавателю",
+            error_code="NAME_TAKEN_BY_FOREIGN_REPO",
+        )
+
+    def _poll_for_repo(self, org: str, repo_name: str) -> bool:
+        """
+        Fork creation is asynchronous on GitHub's side - poll repo_exists()
+        until it appears or FORK_POLL_ATTEMPTS is exhausted.
+
+        Returns:
+            True once the repo is visible, False if it never showed up
+        """
+        for _ in range(FORK_POLL_ATTEMPTS):
+            if self.github.repo_exists(org, repo_name):
+                return True
+            time.sleep(FORK_POLL_INTERVAL_SECONDS)
+        return False
+
+    def _create_from_fork(
+        self,
+        org: str,
+        repo_name: str,
+        template_owner: str,
+        template_name: str,
+    ) -> ProvisionResult | None:
+        """
+        Create the repo as a real GitHub fork of the template, then repair
+        the two fork side-effects that would otherwise break grading:
+        Actions disabled by default on forks, and the "template repository"
+        flag being inherited by the fork itself (see issue #51 for the
+        experimentally-verified GitHub behavior this encodes).
+
+        Returns:
+            ProvisionResult with an error, or None on success
+        """
+        template = self.github.get_repo(template_owner, template_name)
+        if template is None:
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="Репозиторий-шаблон не найден или недоступен",
+                error_code="TEMPLATE_NOT_FOUND",
+            )
+        if not template.get("private", False):
+            # Fork mode inherits the template's visibility, unlike template mode
+            # (which always creates private=True regardless of the template) -
+            # forking a public template would silently make student repos public.
+            logger.error(
+                f"Template {template_owner}/{template_name} is public, refusing to fork it "
+                "(would make student repos public)"
+            )
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="Репозиторий-шаблон должен быть приватным для режима fork",
+                error_code="TEMPLATE_MUST_BE_PRIVATE",
+            )
+
+        logger.info(f"Forking {template_owner}/{template_name} to {org}/{repo_name}")
+        resp = self.github.fork_repo(template_owner, template_name, org, repo_name)
+
+        if resp.status_code == 422:
+            # Скорее всего гонка: репозиторий уже создан параллельным запросом
+            # между проверкой существования и вызовом /forks.
+            collision_error = self._check_fork_parent(org, repo_name, template_owner, template_name)
+            if collision_error:
+                return collision_error
+            logger.info(f"Repository {org}/{repo_name} appeared concurrently, continuing")
+        elif resp.status_code != 202:
+            if resp.status_code in (401, 403):
+                if _is_rate_limited(resp):
+                    logger.warning(f"Rate limited forking to {org}/{repo_name}: {resp.status_code} {resp.text[:500]}")
+                    return ProvisionResult(
+                        status=ProvisionStatus.ERROR,
+                        message="GitHub API временно ограничивает запросы (rate limit). Попробуйте ещё раз через несколько минут",
+                        error_code="RATE_LIMITED",
+                    )
+                logger.error(f"Forbidden forking to {org}/{repo_name}: {resp.status_code} {resp.text[:500]}")
+                return ProvisionResult(
+                    status=ProvisionStatus.ERROR,
+                    message="Недостаточно прав для создания репозитория. Обратитесь к преподавателю",
+                    error_code="CREATE_FORBIDDEN",
+                )
+            if resp.status_code == 404:
+                return ProvisionResult(
+                    status=ProvisionStatus.ERROR,
+                    message="Репозиторий-шаблон не найден или недоступен",
+                    error_code="TEMPLATE_NOT_FOUND",
+                )
+            logger.error(f"Unexpected status forking to {org}/{repo_name}: {resp.status_code} {resp.text[:500]}")
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="Ошибка GitHub API при создании репозитория. Попробуйте ещё раз позже",
+                error_code="CREATE_FAILED",
+            )
+
+        if not self._poll_for_repo(org, repo_name):
+            logger.error(f"Fork {org}/{repo_name} did not appear after {FORK_POLL_ATTEMPTS} polls")
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="GitHub ещё создаёт репозиторий, обновите страницу через минуту",
+                error_code="FORK_TIMEOUT",
+            )
+
+        # Actions are disabled by default on forks and the blocked state isn't
+        # visible through the API, so this call is unconditional (not just for
+        # freshly-created forks) - see GitHubClient.enable_actions. Failure here
+        # is fatal: without it CI never runs and grade_lab finds no check-runs.
+        actions_resp = self.github.enable_actions(org, repo_name)
+        if actions_resp.status_code not in (200, 204):
+            logger.error(
+                f"Failed to enable Actions for {org}/{repo_name}: {actions_resp.status_code} {actions_resp.text[:500]}"
+            )
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="Не удалось включить GitHub Actions в репозитории. Обратитесь к преподавателю",
+                error_code="ACTIONS_ENABLE_FAILED",
+            )
+
+        # Clearing the inherited "template repository" flag is cosmetic only -
+        # log and move on rather than failing an otherwise-working repo over it.
+        update_resp = self.github.update_repo(org, repo_name, {"is_template": False})
+        if update_resp.status_code != 200:
+            logger.error(
+                f"Failed to clear is_template flag on {org}/{repo_name}: "
+                f"{update_resp.status_code} {update_resp.text[:500]}"
+            )
+
+        return None
 
     def _ensure_access(self, org: str, repo_name: str, username: str) -> ProvisionResult | None:
         """

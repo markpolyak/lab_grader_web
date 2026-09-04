@@ -77,6 +77,21 @@ class TestJoinInfo:
             main_module.join_lab_info(mock_request, "test-course", "99")
         assert exc_info.value.status_code == 404
 
+    def test_unknown_repo_provisioning_value_returns_400(self, mock_request, join_course_config):
+        """A typo like 'forks' must not silently fall back to 'template' (issue #51)."""
+        join_course_config["labs"]["1"]["repo-provisioning"] = "forks"
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_info(mock_request, "test-course", "1")
+        assert exc_info.value.status_code == 400
+        assert "repo-provisioning" in exc_info.value.detail
+
+    def test_fork_repo_provisioning_value_is_accepted(self, mock_request, join_course_config):
+        join_course_config["labs"]["1"]["repo-provisioning"] = "fork"
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            data = main_module.join_lab_info(mock_request, "test-course", "1")
+        assert data["course_name"] == "Test Course"
+
 
 class TestJoinStart:
     def test_redirects_to_github_authorize_with_signed_state(self, mock_request, mock_get_course_by_id):
@@ -220,6 +235,78 @@ class TestJoinCallback:
         )
 
         resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["success"]
+        assert params["username"] == ["student1"]
+        assert params["repo_url"] == [f"https://github.com/{org}/{repo_name}"]
+
+    @responses.activate
+    def test_successful_join_with_fork_provisioning(self, mock_request, join_course_config):
+        """A lab configured with repo-provisioning: fork drives the fork-creation
+        branch (fork_repo -> poll -> enable_actions -> clear is_template), not
+        the template `generate` API (issue #51)."""
+        join_course_config["labs"]["1"]["repo-provisioning"] = "fork"
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            state = _get_state(mock_request)
+
+            responses.add(
+                responses.POST,
+                "https://github.com/login/oauth/access_token",
+                json={"access_token": "gho_student_token"},
+                status=200,
+            )
+            responses.add(
+                responses.GET,
+                "https://api.github.com/user",
+                json={"login": "student1"},
+                status=200,
+            )
+
+            org = "test-org"
+            repo_name = "test-task1-student1"
+            responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo_name}", status=404)
+            responses.add(
+                responses.GET,
+                f"https://api.github.com/repos/{org}/os-task1-template",
+                json={"private": True},
+                status=200,
+            )
+            responses.add(
+                responses.POST,
+                f"https://api.github.com/repos/{org}/os-task1-template/forks",
+                json={},
+                status=202,
+            )
+            responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo_name}", status=200)
+            responses.add(
+                responses.PUT,
+                f"https://api.github.com/repos/{org}/{repo_name}/actions/permissions",
+                status=204,
+            )
+            responses.add(
+                responses.PATCH,
+                f"https://api.github.com/repos/{org}/{repo_name}",
+                status=200,
+            )
+            responses.add(
+                responses.GET,
+                f"https://api.github.com/repos/{org}/{repo_name}/collaborators/student1",
+                status=404,
+            )
+            responses.add(
+                responses.GET,
+                f"https://api.github.com/repos/{org}/{repo_name}/invitations",
+                json=[],
+                status=200,
+            )
+            responses.add(
+                responses.PUT,
+                f"https://api.github.com/repos/{org}/{repo_name}/collaborators/student1",
+                status=201,
+            )
+
+            resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
 
         params = qs(resp.headers["location"])
         assert params["status"] == ["success"]

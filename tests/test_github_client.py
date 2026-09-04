@@ -3,6 +3,7 @@ Unit tests for grading/github_client.py
 
 Tests GitHub API client with mocked HTTP responses.
 """
+import json
 import pytest
 import responses
 import sys
@@ -258,6 +259,90 @@ class TestGitHubClientGetCheckRuns:
         client = GitHubClient("test_token")
         runs = client.get_check_runs("org", "repo", "abc123")
         assert runs == []
+
+
+class TestGitHubClientForkRepo:
+    """Tests for fork_repo method."""
+
+    @responses.activate
+    def test_fork_repo_posts_organization_and_name(self):
+        call = responses.add(
+            responses.POST,
+            "https://api.github.com/repos/owner/template/forks",
+            json={},
+            status=202,
+        )
+        client = GitHubClient("test_token")
+        resp = client.fork_repo("owner", "template", "org", "os-task1-student1")
+
+        assert resp.status_code == 202
+        assert call.call_count == 1
+        assert json.loads(call.calls[0].request.body) == {
+            "organization": "org",
+            "name": "os-task1-student1",
+        }
+
+
+class TestGitHubClientGetRepo:
+    """Tests for get_repo method."""
+
+    @responses.activate
+    def test_get_repo_returns_json(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo",
+            json={"full_name": "org/repo", "private": True},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        repo = client.get_repo("org", "repo")
+        assert repo == {"full_name": "org/repo", "private": True}
+
+    @responses.activate
+    def test_get_repo_not_found_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+        assert client.get_repo("org", "repo") is None
+
+
+class TestGitHubClientUpdateRepo:
+    """Tests for update_repo method."""
+
+    @responses.activate
+    def test_update_repo_patches_payload(self):
+        call = responses.add(
+            responses.PATCH,
+            "https://api.github.com/repos/org/repo",
+            json={},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        resp = client.update_repo("org", "repo", {"is_template": False})
+
+        assert resp.status_code == 200
+        assert json.loads(call.calls[0].request.body) == {"is_template": False}
+
+
+class TestGitHubClientEnableActions:
+    """Tests for enable_actions method."""
+
+    @responses.activate
+    def test_enable_actions_puts_enabled_true(self):
+        call = responses.add(
+            responses.PUT,
+            "https://api.github.com/repos/org/repo/actions/permissions",
+            status=204,
+        )
+        client = GitHubClient("test_token")
+        resp = client.enable_actions("org", "repo")
+
+        assert resp.status_code == 204
+        assert json.loads(call.calls[0].request.body) == {"enabled": True}
 
 
 class TestCheckForbiddenModifications:

@@ -21,6 +21,10 @@ export const ERROR_TRANSLATION_KEYS = {
   INVITATIONS_FETCH_FAILED: "join.errors.accessFailed",
   REINVITE_DELETE_FAILED: "join.errors.accessFailed",
   INVITE_FAILED: "join.errors.invitationFailed",
+  TEMPLATE_MUST_BE_PRIVATE: "join.errors.templateMustBePrivate",
+  FORK_TIMEOUT: "join.errors.forkTimeout",
+  ACTIONS_ENABLE_FAILED: "join.errors.actionsEnableFailed",
+  NAME_TAKEN_BY_FOREIGN_REPO: "join.errors.nameTaken",
 
   // src/api/index.js: fetchJoinLab error.code
   join_not_found: "join.errors.notFound",

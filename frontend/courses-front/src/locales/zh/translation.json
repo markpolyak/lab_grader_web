@@ -57,6 +57,10 @@
       "rateLimit": "GitHub 暂时限制了请求或邀请数量，请稍后重试。",
       "githubUnavailable": "无法连接 GitHub，请检查网络后重试。",
       "invalidRepositoryLink": "服务器返回了无效的仓库链接，请重新开始。",
+      "templateMustBePrivate": "模板仓库配置有误，请联系教师。",
+      "forkTimeout": "GitHub 仍在创建仓库，请一分钟后刷新页面。",
+      "actionsEnableFailed": "无法在仓库中启用检查，请联系教师。",
+      "nameTaken": "该名称的仓库已被占用，请联系教师。",
       "unknown": "发生未知错误，请重试或联系教师。"
     }
   }

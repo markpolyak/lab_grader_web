@@ -4,12 +4,15 @@ see docs/REPO_GENERATION_PLAN.md §4 and §10).
 """
 import sys
 import os
+from unittest.mock import patch
 
+import pytest
 import responses
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from grading import GitHubClient, RepoProvisioner, ProvisionStatus
+from grading.repo_provisioning import FORK_POLL_ATTEMPTS
 
 
 ORG = "test-org"
@@ -21,6 +24,14 @@ REPO_NAME = f"{GITHUB_PREFIX}-{USERNAME}"
 
 def make_provisioner():
     return RepoProvisioner(GitHubClient("test_token"))
+
+
+@pytest.fixture(autouse=True)
+def no_sleep():
+    """Fork-mode polling calls time.sleep between attempts - patch it out so
+    these tests don't actually wait (see FORK_POLL_INTERVAL_SECONDS)."""
+    with patch("grading.repo_provisioning.time.sleep") as mock_sleep:
+        yield mock_sleep
 
 
 class TestCreateFromTemplate:
@@ -334,3 +345,271 @@ class TestAccessRepair:
 
         assert result.status == ProvisionStatus.ERROR
         assert result.error_code == "INVITE_FAILED"
+
+
+TEMPLATE_OWNER, TEMPLATE_NAME = TEMPLATE_REPO.split("/", 1)
+
+
+def make_fork_urls():
+    return {
+        "repo": f"https://api.github.com/repos/{ORG}/{REPO_NAME}",
+        "template": f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}",
+        "forks": f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}/forks",
+        "actions": f"https://api.github.com/repos/{ORG}/{REPO_NAME}/actions/permissions",
+        "collaborators": f"https://api.github.com/repos/{ORG}/{REPO_NAME}/collaborators/{USERNAME}",
+        "invitations": f"https://api.github.com/repos/{ORG}/{REPO_NAME}/invitations",
+    }
+
+
+def add_access_mocks(urls, existing=False):
+    """Register the collaborator-access mocks that run after repo creation."""
+    if existing:
+        responses.add(responses.GET, urls["collaborators"], status=204)
+        return
+    responses.add(responses.GET, urls["collaborators"], status=404)
+    responses.add(responses.GET, urls["invitations"], json=[], status=200)
+    responses.add(responses.PUT, urls["collaborators"], status=201)
+
+
+class TestDefaultModeIsTemplate:
+    """`provision()` called without a `mode` argument must behave exactly as before."""
+
+    @responses.activate
+    def test_default_mode_does_not_touch_fork_endpoints(self):
+        """No fork-only endpoint is mocked - if the code called one, `responses`
+        would raise ConnectionError and this test would fail, proving
+        enable_actions/update_repo/fork_repo are never invoked in this mode."""
+        responses.add(responses.GET, f"https://api.github.com/repos/{ORG}/{REPO_NAME}", status=404)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{TEMPLATE_REPO}/generate",
+            json={},
+            status=201,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}/collaborators/{USERNAME}",
+            status=404,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}/invitations",
+            json=[],
+            status=200,
+        )
+        responses.add(
+            responses.PUT,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}/collaborators/{USERNAME}",
+            status=201,
+        )
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME)
+
+        assert result.status == ProvisionStatus.OK
+
+
+class TestCreateFromFork:
+    """Repo creation via mode="fork" (issue #51)."""
+
+    @responses.activate
+    def test_creates_fork_when_missing_and_grants_access(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)  # not created yet
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={}, status=202)
+        responses.add(responses.GET, urls["repo"], status=200)  # appears on first poll
+        responses.add(responses.PUT, urls["actions"], status=204)
+        responses.add(responses.PATCH, urls["repo"], status=200)
+        add_access_mocks(urls)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK
+        assert result.repo_name == REPO_NAME
+        assert result.repo_url == f"https://github.com/{ORG}/{REPO_NAME}"
+
+    @responses.activate
+    def test_existing_fork_with_matching_parent_is_not_recreated(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=200)  # already exists
+        responses.add(
+            responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
+        )
+        add_access_mocks(urls, existing=True)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK
+
+    @responses.activate
+    def test_existing_repo_with_foreign_parent_is_reported_as_name_taken(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=200)  # already exists
+        responses.add(
+            responses.GET, urls["repo"], json={"parent": {"full_name": "someone-else/unrelated"}}, status=200
+        )
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "NAME_TAKEN_BY_FOREIGN_REPO"
+
+    @responses.activate
+    def test_race_condition_with_matching_parent_continues(self):
+        """Concurrent double-fork: /forks 422s, but the repo really is our fork -> success."""
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)  # not created yet
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={"message": "name already exists"}, status=422)
+        responses.add(
+            responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
+        )
+        responses.add(responses.GET, urls["repo"], status=200)  # poll after collision check
+        responses.add(responses.PUT, urls["actions"], status=204)
+        responses.add(responses.PATCH, urls["repo"], status=200)
+        add_access_mocks(urls)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK
+
+    @responses.activate
+    def test_race_condition_with_foreign_repo_is_reported_as_name_taken(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)  # not created yet
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={"message": "name already exists"}, status=422)
+        responses.add(
+            responses.GET, urls["repo"], json={"parent": {"full_name": "someone-else/unrelated"}}, status=200
+        )
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "NAME_TAKEN_BY_FOREIGN_REPO"
+
+    @responses.activate
+    def test_public_template_is_rejected(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": False}, status=200)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "TEMPLATE_MUST_BE_PRIVATE"
+
+    @responses.activate
+    def test_template_not_found_is_reported_as_error(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"message": "Not Found"}, status=404)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "TEMPLATE_NOT_FOUND"
+
+    @responses.activate
+    def test_fork_call_404_is_reported_as_template_not_found(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={"message": "Not Found"}, status=404)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "TEMPLATE_NOT_FOUND"
+
+    @responses.activate
+    def test_secondary_rate_limit_is_reported_as_retryable_not_forbidden(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(
+            responses.POST,
+            urls["forks"],
+            json={"message": "You have exceeded a secondary rate limit"},
+            status=403,
+            headers={"Retry-After": "30"},
+        )
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "RATE_LIMITED"
+
+    @responses.activate
+    def test_plain_403_without_rate_limit_signature_is_forbidden(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(
+            responses.POST,
+            urls["forks"],
+            json={"message": "Must have admin rights to Repository."},
+            status=403,
+        )
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "CREATE_FORBIDDEN"
+
+    @responses.activate
+    def test_unexpected_status_on_fork_is_reported_as_create_failed(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={"message": "Internal error"}, status=500)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "CREATE_FAILED"
+
+    @responses.activate
+    def test_fork_timeout_is_reported_as_error(self, no_sleep):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)  # not created yet
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={}, status=202)
+        responses.add(responses.GET, urls["repo"], status=404)  # never appears, repeats for every poll
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "FORK_TIMEOUT"
+        assert no_sleep.call_count == FORK_POLL_ATTEMPTS
+
+    @responses.activate
+    def test_actions_enable_failure_is_fatal(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={}, status=202)
+        responses.add(responses.GET, urls["repo"], status=200)  # appears on first poll
+        responses.add(responses.PUT, urls["actions"], json={"message": "error"}, status=500)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "ACTIONS_ENABLE_FAILED"
+
+    @responses.activate
+    def test_is_template_clear_failure_is_not_fatal(self):
+        """Clearing the inherited template flag is cosmetic - failure must not
+        fail an otherwise successfully provisioned repo."""
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={}, status=202)
+        responses.add(responses.GET, urls["repo"], status=200)  # appears on first poll
+        responses.add(responses.PUT, urls["actions"], status=204)
+        responses.add(responses.PATCH, urls["repo"], json={"message": "error"}, status=500)
+        add_access_mocks(urls)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK

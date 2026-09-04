@@ -850,6 +850,12 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
 # See docs/REPO_GENERATION_PLAN.md for the full design.
 # ---------------------------------------------------------------------------
 
+# Valid values of a lab's `repo-provisioning` config field (see docs/COURSE_CONFIG.md).
+# "template" is the default (backward-compatible) - GitHub's `generate` API.
+# "fork" creates a real fork of template-repo instead (issue #51).
+REPO_PROVISIONING_MODES = {"template", "fork"}
+
+
 def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
     """
     Load course/lab config needed by the /join flow.
@@ -859,7 +865,8 @@ def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
 
     Raises:
         HTTPException: 404 for unknown course/lab, 400 if the lab has no
-        `template-repo` configured or the course has no GitHub organization.
+        `template-repo` configured, has an unrecognized `repo-provisioning`
+        value, or the course has no GitHub organization.
     """
     course_info = get_course_by_id(course_id)  # raises 404 if course unknown
 
@@ -874,6 +881,16 @@ def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
         raise HTTPException(
             status_code=400,
             detail="Для этой лабораторной работы не настроено автоматическое создание репозитория (template-repo)",
+        )
+
+    repo_provisioning = lab_config.get("repo-provisioning", "template")
+    if repo_provisioning not in REPO_PROVISIONING_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Некорректное значение repo-provisioning: '{repo_provisioning}' "
+                f"(допустимо: {', '.join(sorted(REPO_PROVISIONING_MODES))})"
+            ),
         )
 
     org = course_info.get("github", {}).get("organization")
@@ -1075,12 +1092,13 @@ def join_callback(
 
     github_prefix = lab_config.get("github-prefix")
     template_repo = lab_config.get("template-repo")
+    repo_provisioning = lab_config.get("repo-provisioning", "template")
 
     try:
         # Server-side token, never the student's OAuth token (see §3.2/§6 of the plan).
         github_client = GitHubClient(GITHUB_TOKEN)
         provisioner = RepoProvisioner(github_client)
-        result = provisioner.provision(org, github_prefix, template_repo, username)
+        result = provisioner.provision(org, github_prefix, template_repo, username, repo_provisioning)
     except Exception:
         logger.exception(f"Unexpected error provisioning repo for {username} in {course_id}/{lab_id}")
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="provision_failed"))
