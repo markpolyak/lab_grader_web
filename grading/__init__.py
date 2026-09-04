@@ -9,6 +9,7 @@ This module contains functions for various aspects of lab grading:
 - sheets_client: Google Sheets helpers
 - grader: Orchestrator for grading workflow
 - repo_provisioning: Orchestrator for the /join student repo creation flow
+- propagate: Orchestrator for propagating template updates via fork PRs (admin)
 """
 
 from .penalty import (
@@ -40,6 +41,7 @@ from .github_client import (
     CommitInfo,
     check_forbidden_modifications,
     get_default_forbidden_patterns,
+    is_rate_limited,
 )
 
 from .sheets_client import (
@@ -66,6 +68,17 @@ from .repo_provisioning import (
     RepoProvisioner,
     ProvisionResult,
     ProvisionStatus,
+)
+
+from .propagate import (
+    PropagateJob,
+    PropagateResult,
+    PropagateSetupError,
+    dry_run_propagation,
+    try_start_propagate_job,
+    run_propagation,
+    get_propagate_job,
+    PR_CREATE_PAUSE_SECONDS,
 )
 
 from .score import (
@@ -99,6 +112,7 @@ __all__ = [
     "CommitInfo",
     "check_forbidden_modifications",
     "get_default_forbidden_patterns",
+    "is_rate_limited",
     # sheets_client
     "find_student_row",
     "find_lab_column_by_name",
@@ -119,6 +133,15 @@ __all__ = [
     "RepoProvisioner",
     "ProvisionResult",
     "ProvisionStatus",
+    # propagate
+    "PropagateJob",
+    "PropagateResult",
+    "PropagateSetupError",
+    "dry_run_propagation",
+    "try_start_propagate_job",
+    "run_propagation",
+    "get_propagate_job",
+    "PR_CREATE_PAUSE_SECONDS",
     # score
     "extract_score_from_logs",
     "format_score",

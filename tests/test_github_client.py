@@ -16,6 +16,7 @@ from grading.github_client import (
     CommitInfo,
     check_forbidden_modifications,
     get_default_forbidden_patterns,
+    is_rate_limited,
 )
 
 
@@ -343,6 +344,172 @@ class TestGitHubClientEnableActions:
 
         assert resp.status_code == 204
         assert json.loads(call.calls[0].request.body) == {"enabled": True}
+
+
+class TestGitHubClientListForks:
+    """Tests for list_forks method."""
+
+    @responses.activate
+    def test_lists_forks_across_two_pages(self):
+        """per_page defaults to 30 on GitHub's side - without paging through,
+        a course with 200 students would silently lose most of the forks (issue #52)."""
+        page1 = [{"name": f"os-task1-student{i}"} for i in range(100)]
+        page2 = [{"name": "os-task1-student100"}]
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/owner/template/forks",
+            json=page1,
+            status=200,
+            match=[responses.matchers.query_param_matcher({"per_page": "100", "page": "1"})],
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/owner/template/forks",
+            json=page2,
+            status=200,
+            match=[responses.matchers.query_param_matcher({"per_page": "100", "page": "2"})],
+        )
+        client = GitHubClient("test_token")
+        forks = client.list_forks("owner", "template")
+        assert len(forks) == 101
+        assert forks[-1]["name"] == "os-task1-student100"
+
+    @responses.activate
+    def test_list_forks_error_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/owner/template/forks",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+        assert client.list_forks("owner", "template") is None
+
+
+class TestGitHubClientListOrgRepos:
+    """Tests for list_org_repos method."""
+
+    @responses.activate
+    def test_lists_org_repos_across_two_pages(self):
+        page1 = [{"name": f"repo{i}"} for i in range(100)]
+        page2 = [{"name": "repo100"}]
+        responses.add(
+            responses.GET,
+            "https://api.github.com/orgs/test-org/repos",
+            json=page1,
+            status=200,
+            match=[responses.matchers.query_param_matcher({"per_page": "100", "page": "1"})],
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/orgs/test-org/repos",
+            json=page2,
+            status=200,
+            match=[responses.matchers.query_param_matcher({"per_page": "100", "page": "2"})],
+        )
+        client = GitHubClient("test_token")
+        repos = client.list_org_repos("test-org")
+        assert len(repos) == 101
+
+    @responses.activate
+    def test_single_short_page_stops_after_one_request(self):
+        call = responses.add(
+            responses.GET,
+            "https://api.github.com/orgs/test-org/repos",
+            json=[{"name": "repo1"}],
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        repos = client.list_org_repos("test-org")
+        assert len(repos) == 1
+        assert call.call_count == 1
+
+
+class TestGitHubClientCreatePullRequest:
+    """Tests for create_pull_request method."""
+
+    @responses.activate
+    def test_posts_head_base_title_body(self):
+        call = responses.add(
+            responses.POST,
+            "https://api.github.com/repos/org/os-task1-student1/pulls",
+            json={"html_url": "https://github.com/org/os-task1-student1/pull/1"},
+            status=201,
+        )
+        client = GitHubClient("test_token")
+        resp = client.create_pull_request(
+            "org", "os-task1-student1",
+            head="template-owner:main", base="main",
+            title="Обновление стартового кода", body="body text",
+        )
+
+        assert resp.status_code == 201
+        assert json.loads(call.calls[0].request.body) == {
+            "head": "template-owner:main",
+            "base": "main",
+            "title": "Обновление стартового кода",
+            "body": "body text",
+        }
+
+
+class TestGitHubClientListPullRequests:
+    """Tests for list_pull_requests method."""
+
+    @responses.activate
+    def test_filters_by_head_and_state(self):
+        call = responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/os-task1-student1/pulls",
+            json=[{"html_url": "https://github.com/org/os-task1-student1/pull/1"}],
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        prs = client.list_pull_requests("org", "os-task1-student1", head="template-owner:main", state="open")
+
+        assert len(prs) == 1
+        request_params = call.calls[0].request.params
+        assert request_params["head"] == "template-owner:main"
+        assert request_params["state"] == "open"
+
+    @responses.activate
+    def test_error_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/pulls",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+        assert client.list_pull_requests("org", "repo") is None
+
+
+class TestIsRateLimited:
+    """Tests for the shared is_rate_limited helper."""
+
+    @responses.activate
+    def test_retry_after_header_means_rate_limited(self):
+        responses.add(
+            responses.POST,
+            "https://api.github.com/repos/org/repo/pulls",
+            json={"message": "secondary rate limit"},
+            status=403,
+            headers={"Retry-After": "30"},
+        )
+        client = GitHubClient("test_token")
+        resp = client.create_pull_request("org", "repo", head="a:b", base="main", title="t", body="b")
+        assert is_rate_limited(resp) is True
+
+    @responses.activate
+    def test_permission_denied_is_not_rate_limited(self):
+        responses.add(
+            responses.POST,
+            "https://api.github.com/repos/org/repo/pulls",
+            json={"message": "Must have admin rights"},
+            status=403,
+        )
+        client = GitHubClient("test_token")
+        resp = client.create_pull_request("org", "repo", head="a:b", base="main", title="t", body="b")
+        assert is_rate_limited(resp) is False
 
 
 class TestCheckForbiddenModifications:

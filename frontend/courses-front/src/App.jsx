@@ -7,6 +7,7 @@ import { GroupListWrapper } from "./components/group-list/groupListWrapper";
 import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
 import { JoinLab } from "./components/JoinLab";
+import { LabListWrapper as AdminLabListWrapper } from "./components/admin/LabList/labListWrapper";
 
 function App() {
   return (
@@ -18,6 +19,14 @@ function App() {
           element={
             <ProtectedRoute>
               <CourseList onSelectCourse={() => {}} isAdmin={true} />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/courses/:courseId/labs"
+          element={
+            <ProtectedRoute>
+              <AdminLabListWrapper />
             </ProtectedRoute>
           }
         />

@@ -27,6 +27,59 @@
   "activeCourses": "活跃课程",
   "archivedCourses": "归档课程",
   "allCourses": "所有课程",
+  "manageLabs": "实验列表",
+  "adminLabs": {
+    "back": "← 返回课程列表",
+    "title": "课程实验列表",
+    "loading": "正在加载实验列表…",
+    "errorLoadingLabs": "无法加载实验列表",
+    "columns": {
+      "number": "编号",
+      "shortName": "名称",
+      "githubPrefix": "github-prefix",
+      "templateRepo": "template-repo",
+      "provisioning": "仓库创建方式",
+      "actions": "操作"
+    },
+    "provisioningTemplate": "template",
+    "provisioningFork": "fork",
+    "updateButton": "更新学生仓库",
+    "disabledReason": "仅当 repo-provisioning 为 fork 且已设置 template-repo 时可用",
+    "dryRun": {
+      "title": "预览更新分发",
+      "summary": "将有 {{count}} 个学生仓库收到更新提议",
+      "notAFork": "有 {{count}} 个使用此前缀的仓库与模板没有 fork 关系（在切换到 fork 之前创建），不会受到影响",
+      "cancel": "取消",
+      "confirm": "发送更新",
+      "statusWillProcess": "将被处理",
+      "statusNotAFork": "不是模板的 fork"
+    },
+    "progress": {
+      "title": "更新分发",
+      "inProgress": "已处理 {{processed}} / {{total}}",
+      "done": "分发已完成",
+      "failed": "分发失败",
+      "close": "关闭",
+      "columns": {
+        "repo": "仓库",
+        "status": "状态",
+        "link": "链接"
+      },
+      "openPr": "打开 PR",
+      "statuses": {
+        "pr_created": "已创建 PR",
+        "up_to_date": "已是最新",
+        "pr_exists": "PR 已存在",
+        "not_a_fork": "不是模板的 fork",
+        "error": "错误"
+      }
+    },
+    "errors": {
+      "dryRunFailed": "无法加载分发预览，请重试。",
+      "startFailed": "无法启动更新分发，请重试。",
+      "alreadyRunning": "此实验的更新分发正在进行中。"
+    }
+  },
   "join": {
     "back": "← 返回",
     "language": "界面语言",

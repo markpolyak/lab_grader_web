@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -6,7 +6,7 @@ import gspread
 import requests
 from oauth2client.service_account import ServiceAccountCredentials
 from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File
 from dotenv import load_dotenv
@@ -37,6 +37,11 @@ from grading import (
     get_decimal_separator,
     format_grade_with_score,
     format_score,
+    PropagateSetupError,
+    dry_run_propagation,
+    try_start_propagate_job,
+    run_propagation,
+    get_propagate_job,
 )
 
 # Configure logging to both file and console
@@ -278,21 +283,29 @@ def admin_login(request: Request, data: AuthRequest, response: Response):
         return {"authenticated": True}
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-@app.get("/admin/check-auth")
-@limiter.limit("30/minute")
-def check_auth(request: Request):
+def require_admin(request: Request) -> str:
+    """
+    Reusable auth dependency for admin-only endpoints (see issue #52).
+
+    Same check /admin/check-auth used to do inline - factored out so it can
+    be attached via Depends() to every admin route instead of relying on the
+    frontend's ProtectedRoute alone.
+    """
     cookie = request.cookies.get("admin_session")
     if not cookie:
         raise HTTPException(status_code=401, detail="Нет сессии")
-
     try:
         login = signer.unsign(cookie, max_age=3600).decode()
     except BadSignature:
         raise HTTPException(status_code=401, detail="Невалидная или просроченная сессия")
-
     if login != ADMIN_LOGIN:
         raise HTTPException(status_code=401, detail="Невалидная сессия")
+    return login
 
+
+@app.get("/admin/check-auth")
+@limiter.limit("30/minute")
+def check_auth(request: Request, admin: str = Depends(require_admin)):
     return {"authenticated": True}
 
 @app.post("/admin/logout")
@@ -383,7 +396,7 @@ def get_course(request: Request, course_id: str):
 
 @app.delete("/courses/{course_id}")
 @limiter.limit("20/minute")
-def delete_course(request: Request, course_id: str):
+def delete_course(request: Request, course_id: str, admin: str = Depends(require_admin)):
     """
     Mark course as hidden in index (soft delete)
     The course file is preserved in repository
@@ -414,7 +427,7 @@ class EditCourseRequest(BaseModel):
 
 @app.get("/courses/{course_id}/edit")
 @limiter.limit("30/minute")
-def edit_course_get(request: Request, course_id: str):
+def edit_course_get(request: Request, course_id: str, admin: str = Depends(require_admin)):
     """Получить YAML содержимое курса для редактирования"""
     course_info = get_course_by_id(course_id)
     filename = course_info["_meta"]["filename"]
@@ -431,7 +444,7 @@ def edit_course_get(request: Request, course_id: str):
 
 @app.put("/courses/{course_id}/edit")
 @limiter.limit("20/minute")
-def edit_course_put(request: Request, course_id: str, data: EditCourseRequest):
+def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, admin: str = Depends(require_admin)):
     """Сохранить изменения в YAML файле курса"""
     course_info = get_course_by_id(course_id)
     filename = course_info["_meta"]["filename"]
@@ -1115,9 +1128,143 @@ def join_callback(
     )
 
 
+# ---------------------------------------------------------------------------
+# Admin: propagate template repository updates to student repos via fork PRs
+# (issue #52). Only meaningful for labs with repo-provisioning: fork - a real
+# fork network is what lets GitHub build the cross-repo PR.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/admin/courses/{course_id}/labs")
+@limiter.limit("30/minute")
+def admin_list_course_labs(request: Request, course_id: str, admin: str = Depends(require_admin)):
+    """Labs of a course with the fields the admin lab list page needs."""
+    course_info = get_course_by_id(course_id)
+    labs = course_info.get("labs", {})
+
+    result = []
+    for lab_number, lab_config in labs.items():
+        repo_provisioning = lab_config.get("repo-provisioning", "template")
+        template_repo = lab_config.get("template-repo")
+        result.append({
+            "id": lab_number,
+            "short_name": lab_config.get("short-name", lab_number),
+            "github_prefix": lab_config.get("github-prefix"),
+            "template_repo": template_repo,
+            "repo_provisioning": repo_provisioning,
+            "can_propagate": bool(template_repo) and repo_provisioning == "fork",
+        })
+
+    result.sort(key=lambda lab: parse_lab_id(lab["id"]) if re.search(r"\d+", lab["id"]) else 0)
+    return result
+
+
+def _load_lab_for_propagate(course_id: str, lab_id: str) -> tuple[str, str, str]:
+    """
+    Load the config needed to propagate a template update for a lab.
+
+    Returns:
+        (org, github_prefix, template_repo)
+
+    Raises:
+        HTTPException: 404 for unknown course/lab, 400 if the lab isn't
+        `repo-provisioning: fork` with a `template-repo` set, or the course
+        has no GitHub organization / the lab has no github-prefix
+    """
+    course_info = get_course_by_id(course_id)  # raises 404 if course unknown
+
+    labs = course_info.get("labs", {})
+    lab_number = parse_lab_id(lab_id)  # raises 400 if lab_id has no number
+    lab_config = labs.get(str(lab_number))
+    if not lab_config:
+        raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+
+    template_repo = lab_config.get("template-repo")
+    repo_provisioning = lab_config.get("repo-provisioning", "template")
+    if not template_repo or repo_provisioning != "fork":
+        raise HTTPException(
+            status_code=400,
+            detail="Обновление шаблона доступно только для лаб с repo-provisioning: fork",
+        )
+
+    org = course_info.get("github", {}).get("organization")
+    if not org:
+        raise HTTPException(status_code=400, detail="Для курса не настроена GitHub организация")
+
+    github_prefix = lab_config.get("github-prefix")
+    if not github_prefix:
+        raise HTTPException(status_code=400, detail="Для лабы не настроен github-prefix")
+
+    return org, github_prefix, template_repo
+
+
+class PropagateRequest(BaseModel):
+    dry_run: bool = True
+
+
+@app.post("/admin/courses/{course_id}/labs/{lab_id}/propagate-template-update")
+@limiter.limit("10/minute")
+def propagate_template_update(
+    request: Request,
+    course_id: str,
+    lab_id: str,
+    body: PropagateRequest,
+    background_tasks: BackgroundTasks,
+    admin: str = Depends(require_admin),
+):
+    """
+    Preview (dry_run=true, default) or start (dry_run=false) sending PR
+    proposals with the template's latest code to every student fork.
+
+    dry_run runs synchronously (read-only) and returns 200 with the summary.
+    A real run returns 202 with a job_id to poll via GET
+    /admin/propagate-jobs/{job_id}; only one run per (course_id, lab_id) at
+    a time - a second POST while one is in flight gets HTTP 409.
+    """
+    org, github_prefix, template_repo = _load_lab_for_propagate(course_id, lab_id)
+
+    try:
+        template_owner, template_name = template_repo.split("/", 1)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Некорректно настроен template-repo лабы (ожидается формат 'owner/repo')",
+        )
+
+    github_client = GitHubClient(GITHUB_TOKEN)
+
+    if body.dry_run:
+        try:
+            summary = dry_run_propagation(github_client, org, github_prefix, template_owner, template_name)
+        except PropagateSetupError as e:
+            logger.error(f"Dry-run propagate failed for {course_id}/{lab_id}: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+        return summary
+
+    job = try_start_propagate_job(course_id, lab_id)
+    if job is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Рассылка обновлений для этой лабораторной уже выполняется",
+        )
+
+    logger.info(f"Starting propagate job {job.job_id} for {course_id}/{lab_id} (admin={admin})")
+    background_tasks.add_task(run_propagation, job, github_client, org, github_prefix, template_repo)
+    return JSONResponse(status_code=202, content={"job_id": job.job_id})
+
+
+@app.get("/admin/propagate-jobs/{job_id}")
+@limiter.limit("60/minute")
+def get_propagate_job_status(request: Request, job_id: str, admin: str = Depends(require_admin)):
+    job = get_propagate_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Работа не найдена")
+    return job.to_dict()
+
+
 @app.post("/courses/upload")
 @limiter.limit("10/minute")
-async def upload_course(request: Request, file: UploadFile = File(...)):
+async def upload_course(request: Request, file: UploadFile = File(...), admin: str = Depends(require_admin)):
     """
     Upload a new course file and add it to index
 

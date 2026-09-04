@@ -1,0 +1,430 @@
+"""
+Tests for grading/propagate.py (propagate template updates via fork PRs,
+issue #52). Follows the mocking style of test_repo_provisioning.py:
+GitHubClient against `responses`, time.sleep patched out.
+"""
+import sys
+import os
+from unittest.mock import patch
+
+import pytest
+import responses
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from grading import GitHubClient
+from grading.propagate import (
+    PropagateJob,
+    PropagateSetupError,
+    dry_run_propagation,
+    run_propagation,
+    try_start_propagate_job,
+    get_propagate_job,
+    _jobs,
+    _running_lab_keys,
+)
+
+
+ORG = "test-org"
+GITHUB_PREFIX = "os-task1"
+TEMPLATE_OWNER = "test-org"
+TEMPLATE_NAME = "os-task1-template"
+TEMPLATE_REPO = f"{TEMPLATE_OWNER}/{TEMPLATE_NAME}"
+
+
+def make_client():
+    return GitHubClient("test_token")
+
+
+@pytest.fixture(autouse=True)
+def no_sleep():
+    """run_propagation pauses between PR creations - don't actually wait."""
+    with patch("grading.propagate.time.sleep") as mock_sleep:
+        yield mock_sleep
+
+
+@pytest.fixture(autouse=True)
+def clean_job_store():
+    """Job store is module-level global state - reset it around every test."""
+    _jobs.clear()
+    _running_lab_keys.clear()
+    yield
+    _jobs.clear()
+    _running_lab_keys.clear()
+
+
+def add_template_and_forks(forks_pages, org_repos=None):
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}",
+        json={"default_branch": "main"},
+        status=200,
+    )
+    for page in forks_pages:
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}/forks",
+            json=page,
+            status=200,
+        )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/orgs/{ORG}/repos",
+        json=org_repos or [],
+        status=200,
+    )
+
+
+class TestListTargetForksFiltering:
+    """Filtering rules shared by dry_run_propagation and run_propagation."""
+
+    @responses.activate
+    def test_filters_by_owner_and_prefix(self):
+        forks = [
+            {"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"},
+            # Wrong owner - forked outside the course org, must not be targeted.
+            {"name": "os-task1-student2", "owner": {"login": "someone-else"}, "default_branch": "main"},
+            # Right owner, wrong lab's prefix.
+            {"name": "os-task2-student1", "owner": {"login": ORG}, "default_branch": "main"},
+        ]
+        add_template_and_forks([forks])
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert summary["total"] == 1
+        repos = {r["repo"] for r in summary["results"] if r["status"] == "will_process"}
+        assert repos == {"os-task1-student1"}
+
+    @responses.activate
+    def test_owner_match_is_case_insensitive(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG.upper()}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+        assert summary["total"] == 1
+
+    @responses.activate
+    def test_not_a_fork_repo_is_reported_separately(self):
+        """A repo with the right prefix that isn't a fork of the template
+        (created via `generate`, or from GitHub Classroom days) must show up
+        as not_a_fork, not silently vanish."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        org_repos = [
+            {"name": "os-task1-student1"},
+            {"name": "os-task1-student2"},  # not in the fork list
+            {"name": "os-task2-student3"},  # different lab's prefix, ignored entirely
+        ]
+        add_template_and_forks([forks], org_repos=org_repos)
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert summary["total"] == 1
+        assert summary["not_a_fork_count"] == 1
+        not_a_fork = [r for r in summary["results"] if r["status"] == "not_a_fork"]
+        assert [r["repo"] for r in not_a_fork] == ["os-task1-student2"]
+
+    @responses.activate
+    def test_pagination_collects_forks_across_pages(self):
+        page1 = [
+            {"name": f"os-task1-student{i}", "owner": {"login": ORG}, "default_branch": "main"}
+            for i in range(100)
+        ]
+        page2 = [{"name": "os-task1-student100", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([page1, page2])
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+        assert summary["total"] == 101
+
+
+class TestDryRun:
+    @responses.activate
+    def test_dry_run_never_calls_create_pull_request(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        pr_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "should-not-be-called"},
+            status=201,
+        )
+
+        dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert pr_call.call_count == 0
+
+    @responses.activate
+    def test_template_not_found_raises_setup_error(self):
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        with pytest.raises(PropagateSetupError):
+            dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+    @responses.activate
+    def test_forks_list_failure_raises_setup_error(self):
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}",
+            json={"default_branch": "main"},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}/forks",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        with pytest.raises(PropagateSetupError):
+            dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+
+def make_job():
+    return PropagateJob(job_id="job1", course_id="test-course", lab_id="1")
+
+
+class TestCreatePullRequestResponseTable:
+    """The response-parsing table from issue #52, exercised via run_propagation."""
+
+    @responses.activate
+    def test_201_is_pr_created(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "https://github.com/test-org/os-task1-student1/pull/1"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert job.status == "done"
+        assert job.processed == 1
+        [result] = [r for r in job.results if r.repo == "os-task1-student1"]
+        assert result.status == "pr_created"
+        assert result.pr_url == "https://github.com/test-org/os-task1-student1/pull/1"
+
+    @responses.activate
+    def test_no_commits_between_is_up_to_date(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"message": "No commits between test-org:main and test-org:main"},
+            status=422,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "up_to_date"
+
+    @responses.activate
+    def test_pr_already_exists_looks_up_url(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"message": "A pull request already exists for test-org:main."},
+            status=422,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json=[{"html_url": "https://github.com/test-org/os-task1-student1/pull/7"}],
+            status=200,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "pr_exists"
+        assert result.pr_url == "https://github.com/test-org/os-task1-student1/pull/7"
+
+    @responses.activate
+    def test_rate_limit_is_retried_once_then_succeeds(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"message": "secondary rate limit"},
+            status=403,
+            headers={"Retry-After": "1"},
+        )
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "https://github.com/test-org/os-task1-student1/pull/1"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "pr_created"
+
+    @responses.activate
+    def test_rate_limit_still_failing_after_retry_is_error(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        for _ in range(2):
+            responses.add(
+                responses.POST,
+                f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+                json={"message": "secondary rate limit"},
+                status=403,
+                headers={"Retry-After": "1"},
+            )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "error"
+
+    @responses.activate
+    def test_other_error_is_reported_and_does_not_abort_job(self):
+        """One repo failing must not stop the rest of the run (issue #52)."""
+        forks = [
+            {"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"},
+            {"name": "os-task1-student2", "owner": {"login": ORG}, "default_branch": "main"},
+        ]
+        add_template_and_forks([forks])
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"message": "Validation Failed"},
+            status=422,
+        )
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student2/pulls",
+            json={"html_url": "https://github.com/test-org/os-task1-student2/pull/2"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert job.status == "done"
+        assert job.processed == 2
+        statuses = {r.repo: r.status for r in job.results}
+        assert statuses["os-task1-student1"] == "error"
+        assert statuses["os-task1-student2"] == "pr_created"
+
+    @responses.activate
+    def test_head_points_at_template_owner_not_org(self):
+        """head must be TEMPLATE owner:branch, distinct from the course org
+        when the template lives elsewhere (issue #52)."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "dev"}]
+        add_template_and_forks([forks])
+        call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "url"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        import json as jsonlib
+        body = jsonlib.loads(call.calls[0].request.body)
+        assert body["head"] == f"{TEMPLATE_OWNER}:main"
+        assert body["base"] == "dev"
+
+
+class TestRunPropagationSetupFailure:
+    @responses.activate
+    def test_template_unreadable_fails_whole_job(self):
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{TEMPLATE_OWNER}/{TEMPLATE_NAME}",
+            json={"message": "Not Found"},
+            status=404,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert job.status == "failed"
+        assert job.error
+
+    def test_invalid_template_repo_format_fails_job(self):
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, "not-a-valid-format")
+        assert job.status == "failed"
+
+    @responses.activate
+    def test_not_a_fork_repos_are_included_in_results_without_being_processed(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        org_repos = [{"name": "os-task1-student1"}, {"name": "os-task1-student2"}]
+        add_template_and_forks([forks], org_repos=org_repos)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "url"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert job.total == 1  # not_a_fork doesn't count toward total/processed
+        assert job.processed == 1
+        statuses = {r.repo: r.status for r in job.results}
+        assert statuses["os-task1-student2"] == "not_a_fork"
+        assert statuses["os-task1-student1"] == "pr_created"
+
+
+class TestJobStore:
+    def test_unknown_job_id_returns_none(self):
+        assert get_propagate_job("does-not-exist") is None
+
+    def test_try_start_returns_job_and_registers_it(self):
+        job = try_start_propagate_job("test-course", "1")
+        assert job is not None
+        assert get_propagate_job(job.job_id) is job
+
+    def test_second_start_for_same_lab_while_running_returns_none(self):
+        job = try_start_propagate_job("test-course", "1")
+        assert job is not None
+        assert try_start_propagate_job("test-course", "1") is None
+
+    def test_different_lab_can_start_concurrently(self):
+        assert try_start_propagate_job("test-course", "1") is not None
+        assert try_start_propagate_job("test-course", "2") is not None
+
+    @responses.activate
+    def test_finishing_a_job_allows_restarting_same_lab(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "url"},
+            status=201,
+        )
+
+        job = try_start_propagate_job("test-course", "1")
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert try_start_propagate_job("test-course", "1") is not None
+
+    def test_job_to_dict_matches_expected_shape(self):
+        job = make_job()
+        data = job.to_dict()
+        assert set(data.keys()) == {
+            "job_id", "course_id", "lab_id", "status", "started_at",
+            "finished_at", "total", "processed", "results", "error",
+        }

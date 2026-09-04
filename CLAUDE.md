@@ -112,6 +112,12 @@ server's `GITHUB_TOKEN` - not the student's OAuth token. Orchestration lives in
 `grading/repo_provisioning.py` (`RepoProvisioner`), mirroring `grading/grader.py`'s `LabGrader`.
 Requires a GitHub OAuth App registered by the teacher (not the student) - see `.env.example`.
 
+Labs with `repo-provisioning: fork` (see `docs/COURSE_CONFIG.md`) can later have template updates propagated
+to every student fork as pull requests, from the admin lab list page (`/admin/courses/{course_id}/labs`).
+Orchestration lives in `grading/propagate.py` (in-memory job state, single-worker backend required - see
+`docs/PROJECT_DESCRIPTION.md`). All `/admin/...` and course-management routes require the `require_admin`
+FastAPI dependency in `main.py`, not just the frontend's `ProtectedRoute`.
+
 ## CI/CD
 
 - **Tests**: Run on every push via `.github/workflows/tests.yml`

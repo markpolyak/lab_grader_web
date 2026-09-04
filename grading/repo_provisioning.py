@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 
-from .github_client import GitHubClient
+from .github_client import GitHubClient, is_rate_limited as _is_rate_limited
 
 logger = logging.getLogger(__name__)
 
@@ -21,25 +21,6 @@ logger = logging.getLogger(__name__)
 # /join/callback (see issue #51).
 FORK_POLL_ATTEMPTS = 15
 FORK_POLL_INTERVAL_SECONDS = 2
-
-
-def _is_rate_limited(resp) -> bool:
-    """
-    Detect a GitHub rate-limit response hiding behind a 403.
-
-    GitHub answers both "you don't have permission" and "you hit a
-    (secondary) rate limit" with HTTP 403 - distinguishing them matters
-    because only the second one should be reported as retryable.
-    """
-    if resp.headers.get("Retry-After"):
-        return True
-    if resp.headers.get("X-RateLimit-Remaining") == "0":
-        return True
-    try:
-        message = resp.json().get("message", "")
-    except ValueError:
-        message = ""
-    return "rate limit" in message.lower()
 
 
 class ProvisionStatus(Enum):

@@ -24,6 +24,59 @@
   "activeCourses": "Active Courses",
   "archivedCourses": "Archived Courses",
   "allCourses": "All Courses",
+  "manageLabs": "Labs",
+  "adminLabs": {
+    "back": "← Back to courses",
+    "title": "Course labs",
+    "loading": "Loading labs…",
+    "errorLoadingLabs": "Could not load the list of labs",
+    "columns": {
+      "number": "#",
+      "shortName": "Name",
+      "githubPrefix": "github-prefix",
+      "templateRepo": "template-repo",
+      "provisioning": "Repository creation",
+      "actions": "Actions"
+    },
+    "provisioningTemplate": "template",
+    "provisioningFork": "fork",
+    "updateButton": "Update student repositories",
+    "disabledReason": "Only available for labs with repo-provisioning: fork and a template-repo set",
+    "dryRun": {
+      "title": "Preview update rollout",
+      "summary": "{{count}} student repositories will receive an update proposal",
+      "notAFork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected",
+      "cancel": "Cancel",
+      "confirm": "Send the update",
+      "statusWillProcess": "will be processed",
+      "statusNotAFork": "not a template fork"
+    },
+    "progress": {
+      "title": "Update rollout",
+      "inProgress": "Processed {{processed}} of {{total}}",
+      "done": "Rollout finished",
+      "failed": "Rollout failed",
+      "close": "Close",
+      "columns": {
+        "repo": "Repository",
+        "status": "Status",
+        "link": "Link"
+      },
+      "openPr": "Open PR",
+      "statuses": {
+        "pr_created": "PR created",
+        "up_to_date": "already up to date",
+        "pr_exists": "PR already open",
+        "not_a_fork": "not a template fork",
+        "error": "error"
+      }
+    },
+    "errors": {
+      "dryRunFailed": "Could not load the rollout preview. Please try again.",
+      "startFailed": "Could not start the update rollout. Please try again.",
+      "alreadyRunning": "An update rollout for this lab is already running."
+    }
+  },
   "join": {
     "back": "← Back",
     "language": "Interface language",

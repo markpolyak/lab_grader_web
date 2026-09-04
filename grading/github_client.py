@@ -30,6 +30,27 @@ class GitHubClientError(Exception):
     pass
 
 
+def is_rate_limited(resp: requests.Response) -> bool:
+    """
+    Detect a GitHub rate-limit response hiding behind a 403.
+
+    GitHub answers both "you don't have permission" and "you hit a
+    (secondary) rate limit" with HTTP 403 - distinguishing them matters
+    because only the second one should be reported as retryable. Shared
+    between grading/repo_provisioning.py and grading/propagate.py (issue #52
+    asked for this to live in one place instead of being duplicated).
+    """
+    if resp.headers.get("Retry-After"):
+        return True
+    if resp.headers.get("X-RateLimit-Remaining") == "0":
+        return True
+    try:
+        message = resp.json().get("message", "")
+    except ValueError:
+        message = ""
+    return "rate limit" in message.lower()
+
+
 class GitHubClient:
     """Client for GitHub API operations."""
 
@@ -297,6 +318,126 @@ class GitHubClient:
         """
         url = f"{self.BASE_URL}/repos/{owner}/{repo}/actions/permissions"
         return requests.put(url, headers=self.headers, json={"enabled": True}, timeout=self.DEFAULT_TIMEOUT)
+
+    def _get_all_pages(self, url: str, params: dict | None = None) -> list[dict[str, Any]] | None:
+        """
+        Follow GitHub's `per_page`/page pagination and collect every item.
+
+        GitHub defaults to 30 items per page - without paging through, a
+        course with 200 students would silently lose most of the forks/repos
+        (see issue #52). Stops once a page comes back with fewer than
+        `per_page` items (the standard "last page" signal).
+
+        Returns:
+            All items across every page, or None if any page request failed
+        """
+        per_page = 100
+        items: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            resp = requests.get(
+                url,
+                headers=self.headers,
+                params={**(params or {}), "per_page": per_page, "page": page},
+                timeout=self.DEFAULT_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                return None
+            page_items = resp.json()
+            items.extend(page_items)
+            if len(page_items) < per_page:
+                return items
+            page += 1
+
+    def list_forks(self, owner: str, repo: str) -> list[dict[str, Any]] | None:
+        """
+        List all forks of a repository (all pages).
+
+        See https://docs.github.com/en/rest/repos/forks#list-forks
+
+        Args:
+            owner: Owner of the (template) repository
+            repo: Name of the (template) repository
+
+        Returns:
+            List of fork repo dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/forks"
+        return self._get_all_pages(url)
+
+    def list_org_repos(self, org: str) -> list[dict[str, Any]] | None:
+        """
+        List all repositories owned by an organization (all pages).
+
+        See https://docs.github.com/en/rest/repos/repos#list-organization-repositories
+
+        Args:
+            org: Organization name
+
+        Returns:
+            List of repo dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/orgs/{org}/repos"
+        return self._get_all_pages(url)
+
+    def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        head: str,
+        base: str,
+        title: str,
+        body: str,
+    ) -> requests.Response:
+        """
+        Open a pull request in a repository.
+
+        See https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request
+
+        Args:
+            owner: Organization (or user) that owns the repository the PR is opened in
+            repo: Name of the repository the PR is opened in
+            head: Branch to merge from, as "owner:branch" for a cross-repo PR
+                (e.g. the template's owner:default_branch when opening into a fork)
+            base: Branch to merge into (the target repo's default branch)
+            title: PR title
+            body: PR body
+
+        Returns:
+            The raw requests.Response (caller inspects status_code - 201 is
+            success, 422 covers both "up to date" and "PR already exists",
+            see grading/propagate.py)
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/pulls"
+        payload = {"head": head, "base": base, "title": title, "body": body}
+        return requests.post(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
+    def list_pull_requests(
+        self,
+        owner: str,
+        repo: str,
+        head: str | None = None,
+        state: str = "open",
+    ) -> list[dict[str, Any]] | None:
+        """
+        List pull requests in a repository (all pages).
+
+        See https://docs.github.com/en/rest/pulls/pulls#list-pull-requests
+
+        Args:
+            owner: Organization (or user) that owns the repository
+            repo: Repository name
+            head: Optional filter, as "owner:branch" (see create_pull_request)
+            state: PR state filter ("open", "closed", or "all")
+
+        Returns:
+            List of pull request dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/pulls"
+        params: dict[str, Any] = {"state": state}
+        if head is not None:
+            params["head"] = head
+        return self._get_all_pages(url, params=params)
 
     def is_direct_collaborator(self, org: str, repo: str, username: str) -> bool:
         """
