@@ -92,7 +92,7 @@ export function JoinLab() {
 
   return (
     <JoinPage>
-      <ButtonBack onClick={() => navigate("/")}>← Назад</ButtonBack>
+      <ButtonBack onClick={() => navigate("/")}>{t("join.back")}</ButtonBack>
       <JoinCard>
         <LanguageControl>
           <Label as="label" htmlFor="join-language">
