@@ -61,6 +61,7 @@
       "forkTimeout": "GitHub 仍在创建仓库，请一分钟后刷新页面。",
       "actionsEnableFailed": "无法在仓库中启用检查，请联系教师。",
       "nameTaken": "该名称的仓库已被占用，请联系教师。",
+      "forkCheckFailed": "无法验证仓库，请几分钟后重试。",
       "unknown": "发生未知错误，请重试或联系教师。"
     }
   }

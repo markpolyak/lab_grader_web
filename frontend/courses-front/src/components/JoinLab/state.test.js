@@ -30,6 +30,7 @@ test("каждый код ошибки бэкенда имеет ключ лок
     "FORK_TIMEOUT",
     "ACTIONS_ENABLE_FAILED",
     "NAME_TAKEN_BY_FOREIGN_REPO",
+    "FORK_CHECK_FAILED",
     "join_not_found",
     "join_not_configured",
     "rate_limit",

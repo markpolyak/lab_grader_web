@@ -25,6 +25,7 @@ export const ERROR_TRANSLATION_KEYS = {
   FORK_TIMEOUT: "join.errors.forkTimeout",
   ACTIONS_ENABLE_FAILED: "join.errors.actionsEnableFailed",
   NAME_TAKEN_BY_FOREIGN_REPO: "join.errors.nameTaken",
+  FORK_CHECK_FAILED: "join.errors.forkCheckFailed",
 
   // src/api/index.js: fetchJoinLab error.code
   join_not_found: "join.errors.notFound",

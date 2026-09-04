@@ -149,7 +149,14 @@ class RepoProvisioner:
                 # unrelated repo that just happens to share the name - only
                 # a fork whose parent really is our template counts (§ "Коллизия
                 # имён при гонке" of issue #51).
-                return self._check_fork_parent(org, repo_name, template_owner, template_name)
+                collision_error = self._check_fork_parent(org, repo_name, template_owner, template_name)
+                if collision_error:
+                    return collision_error
+                # An existing fork still needs the repairs: a previous attempt
+                # may have created it and then failed on enable_actions (a
+                # student retrying /join lands here), and a fork made by hand
+                # never had them applied at all.
+                return self._repair_fork(org, repo_name)
             return None
 
         if mode == "fork":
@@ -240,9 +247,21 @@ class RepoProvisioner:
             parent matches
         """
         repo = self.github.get_repo(org, repo_name)
-        parent_full_name = ((repo or {}).get("parent") or {}).get("full_name", "")
+        if repo is None:
+            # repo_exists() just said it is there, so a failure here is the API
+            # being unavailable - not evidence that the name belongs to someone
+            # else. Reporting it as a name collision would send the student to
+            # the teacher over what a retry fixes.
+            logger.error(f"Could not read {org}/{repo_name} to verify its fork parent")
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="Не удалось проверить репозиторий. Попробуйте ещё раз позже",
+                error_code="FORK_CHECK_FAILED",
+            )
+
+        parent_full_name = (repo.get("parent") or {}).get("full_name", "")
         expected = f"{template_owner}/{template_name}"
-        if repo is not None and parent_full_name.lower() == expected.lower():
+        if parent_full_name.lower() == expected.lower():
             return None
 
         logger.error(
@@ -262,10 +281,11 @@ class RepoProvisioner:
         Returns:
             True once the repo is visible, False if it never showed up
         """
-        for _ in range(FORK_POLL_ATTEMPTS):
+        for attempt in range(FORK_POLL_ATTEMPTS):
             if self.github.repo_exists(org, repo_name):
                 return True
-            time.sleep(FORK_POLL_INTERVAL_SECONDS)
+            if attempt < FORK_POLL_ATTEMPTS - 1:
+                time.sleep(FORK_POLL_INTERVAL_SECONDS)
         return False
 
     def _create_from_fork(
@@ -316,7 +336,7 @@ class RepoProvisioner:
             if collision_error:
                 return collision_error
             logger.info(f"Repository {org}/{repo_name} appeared concurrently, continuing")
-        elif resp.status_code != 202:
+        elif not 200 <= resp.status_code < 300:
             if resp.status_code in (401, 403):
                 if _is_rate_limited(resp):
                     logger.warning(f"Rate limited forking to {org}/{repo_name}: {resp.status_code} {resp.text[:500]}")
@@ -352,9 +372,21 @@ class RepoProvisioner:
                 error_code="FORK_TIMEOUT",
             )
 
+        return self._repair_fork(org, repo_name)
+
+    def _repair_fork(self, org: str, repo_name: str) -> ProvisionResult | None:
+        """
+        Fix the two fork side-effects that would otherwise break grading.
+
+        Runs for every fork the flow touches, freshly created or pre-existing:
+        the enabled state of Actions isn't readable through the API, so there
+        is nothing to check first and re-applying is the only way to be sure.
+
+        Returns:
+            ProvisionResult with an error, or None on success
+        """
         # Actions are disabled by default on forks and the blocked state isn't
-        # visible through the API, so this call is unconditional (not just for
-        # freshly-created forks) - see GitHubClient.enable_actions. Failure here
+        # visible through the API - see GitHubClient.enable_actions. Failure here
         # is fatal: without it CI never runs and grade_lab finds no check-runs.
         actions_resp = self.github.enable_actions(org, repo_name)
         if actions_resp.status_code not in (200, 204):

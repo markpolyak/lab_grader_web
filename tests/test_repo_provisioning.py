@@ -435,7 +435,61 @@ class TestCreateFromFork:
         responses.add(
             responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
         )
+        actions_call = responses.add(responses.PUT, urls["actions"], status=204)
+        responses.add(responses.PATCH, urls["repo"], status=200)
         add_access_mocks(urls, existing=True)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK
+        # The fork is not re-created, but the repairs still run: an existing fork
+        # may come from an attempt that died right after fork_repo, or be one a
+        # teacher made by hand, and Actions would stay blocked either way.
+        assert actions_call.call_count == 1
+
+    @responses.activate
+    def test_existing_fork_gets_actions_enabled_after_earlier_failure(self):
+        """A student retrying /join after ACTIONS_ENABLE_FAILED must not get a
+        'success' with Actions still blocked - the repo would look fine and
+        never run CI (see issue #51 review)."""
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=200)  # created by the failed attempt
+        responses.add(
+            responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
+        )
+        responses.add(responses.PUT, urls["actions"], status=500)  # fails again
+        add_access_mocks(urls, existing=True)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "ACTIONS_ENABLE_FAILED"
+
+    @responses.activate
+    def test_existing_repo_unreadable_is_not_reported_as_name_taken(self):
+        """A GitHub outage while checking the parent is a retryable failure, not
+        proof that the name belongs to an unrelated repo."""
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=200)  # exists
+        responses.add(responses.GET, urls["repo"], status=502)  # but can't be read
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "FORK_CHECK_FAILED"
+
+    @responses.activate
+    def test_fork_call_returning_200_is_treated_as_success(self):
+        """GitHub documents 202 for /forks, but any 2xx means the fork was
+        accepted - it must not fall through to CREATE_FAILED."""
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={}, status=200)
+        responses.add(responses.GET, urls["repo"], status=200)
+        responses.add(responses.PUT, urls["actions"], status=204)
+        responses.add(responses.PATCH, urls["repo"], status=200)
+        add_access_mocks(urls)
 
         result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
 
@@ -581,7 +635,9 @@ class TestCreateFromFork:
 
         assert result.status == ProvisionStatus.ERROR
         assert result.error_code == "FORK_TIMEOUT"
-        assert no_sleep.call_count == FORK_POLL_ATTEMPTS
+        # No sleep after the last attempt - the student waits out the poll
+        # interval only between checks, not once more before the error.
+        assert no_sleep.call_count == FORK_POLL_ATTEMPTS - 1
 
     @responses.activate
     def test_actions_enable_failure_is_fatal(self):

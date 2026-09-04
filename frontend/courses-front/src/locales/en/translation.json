@@ -58,6 +58,7 @@
       "forkTimeout": "GitHub is still creating the repository. Refresh the page in a minute.",
       "actionsEnableFailed": "Could not enable checks in the repository. Contact the teacher.",
       "nameTaken": "A repository with this name is already taken. Contact the teacher.",
+      "forkCheckFailed": "Could not verify the repository. Please try again in a few minutes.",
       "unknown": "An unexpected error occurred. Try again or contact the teacher."
     }
   }
