@@ -479,6 +479,121 @@ class TestCreatePullRequestResponseTable:
         assert statuses["os-task1-student2"] == "pr_created"
 
 
+class TestRepositorySelection:
+    """`only_repos` ограничивает рассылку выбранными репозиториями."""
+
+    @responses.activate
+    def test_only_selected_repos_get_a_pull_request(self):
+        forks = [
+            {"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"},
+            {"name": "os-task1-student2", "owner": {"login": ORG}, "default_branch": "main"},
+        ]
+        add_template_and_forks([forks])
+        pr_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student2/pulls",
+            json={"html_url": "url"},
+            status=201,
+        )
+        # Мока /pulls для student1 нет: если бы его тронули, `responses`
+        # уронил бы тест на ConnectionError.
+
+        job = make_job()
+        run_propagation(
+            job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO,
+            only_repos=["os-task1-student2"],
+        )
+
+        assert job.status == "done"
+        assert job.total == 1
+        assert job.processed == 1
+        assert pr_call.call_count == 1
+        assert [r.repo for r in job.results] == ["os-task1-student2"]
+
+    @responses.activate
+    def test_none_means_every_fork(self):
+        """Прежнее поведение сохраняется, когда выборка не передана."""
+        forks = [
+            {"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"},
+            {"name": "os-task1-student2", "owner": {"login": ORG}, "default_branch": "main"},
+        ]
+        add_template_and_forks([forks])
+        for name in ("os-task1-student1", "os-task1-student2"):
+            responses.add(
+                responses.POST,
+                f"https://api.github.com/repos/{ORG}/{name}/pulls",
+                json={"html_url": "url"},
+                status=201,
+            )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO, only_repos=None)
+
+        assert job.total == 2
+        assert job.processed == 2
+
+    @responses.activate
+    def test_unknown_name_in_selection_is_ignored(self):
+        """Выборка пересекается с реальным списком форков, посторонние имена
+        отбрасываются - отдельная валидация не нужна."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "url"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(
+            job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO,
+            only_repos=["os-task1-student1", "totally-unrelated-repo"],
+        )
+
+        assert job.status == "done"
+        assert job.total == 1
+        assert [r.repo for r in job.results] == ["os-task1-student1"]
+
+    @responses.activate
+    def test_selection_matching_nothing_fails_the_job(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+
+        job = make_job()
+        run_propagation(
+            job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO,
+            only_repos=["not-a-fork-of-ours"],
+        )
+
+        assert job.status == "failed"
+        assert job.error
+        assert job.processed == 0
+
+    @responses.activate
+    def test_not_a_fork_rows_are_still_reported_with_a_selection(self):
+        """Сводка по репозиториям вне форк-сети не зависит от выборки."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        org_repos = [{"name": "os-task1-student1"}, {"name": "os-task1-legacy"}]
+        add_template_and_forks([forks], org_repos=org_repos)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "url"},
+            status=201,
+        )
+
+        job = make_job()
+        run_propagation(
+            job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO,
+            only_repos=["os-task1-student1"],
+        )
+
+        statuses = {r.repo: r.status for r in job.results}
+        assert statuses["os-task1-legacy"] == "not_a_fork"
+        assert statuses["os-task1-student1"] == "pr_created"
+
+
 class TestRunPropagationSetupFailure:
     @responses.activate
     def test_template_unreadable_fails_whole_job(self):

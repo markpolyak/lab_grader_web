@@ -49,8 +49,10 @@
       "title": "预览更新分发",
       "summary": "将有 {{count}} 个学生仓库收到更新提议",
       "notAFork": "有 {{count}} 个使用此前缀的仓库与模板没有 fork 关系（在切换到 fork 之前创建），不会受到影响",
+      "selectAll": "全选",
+      "selectedCount": "已选择 {{selected}} / {{total}}",
       "cancel": "取消",
-      "confirm": "发送更新",
+      "confirm": "发送更新（{{count}}）",
       "statusWillProcess": "将被处理",
       "statusNotAFork": "不是模板的 fork"
     },

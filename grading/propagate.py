@@ -387,6 +387,7 @@ def _run_propagation(
     org: str,
     github_prefix: str,
     template_repo: str,
+    only_repos: list[str] | None = None,
 ) -> None:
     """
     Body of a propagate-template-update run. Call run_propagation instead -
@@ -412,6 +413,21 @@ def _run_propagation(
         with _jobs_lock:
             _finish_job_locked(job, "failed", str(e))
         return
+
+    if only_repos is not None:
+        # Пересечение с уже вычисленным списком форков: посторонняя строка
+        # в выборке просто не пройдёт, отдельная валидация не нужна.
+        selected = set(only_repos)
+        target_forks = [fork for fork in target_forks if fork["name"] in selected]
+        if not target_forks:
+            logger.warning(
+                f"Propagate job {job.job_id}: selection {sorted(selected)} matched no fork of {template_repo}"
+            )
+            with _jobs_lock:
+                _finish_job_locked(
+                    job, "failed", "Ни один из выбранных репозиториев не является форком шаблона"
+                )
+            return
 
     with _jobs_lock:
         job.total = len(target_forks)
@@ -441,6 +457,7 @@ def run_propagation(
     org: str,
     github_prefix: str,
     template_repo: str,
+    only_repos: list[str] | None = None,
 ) -> None:
     """
     Background worker entry point for a propagate-template-update run.
@@ -448,6 +465,10 @@ def run_propagation(
     A plain `def`, not `async def`, so FastAPI's BackgroundTasks executes it
     in the threadpool instead of blocking the event loop on synchronous
     `requests` calls (see issue #52).
+
+    `only_repos` limits the run to the named repositories (as shown in the
+    dry-run summary); None means every fork of the lab, the previous
+    behaviour.
 
     Wraps the actual work so that the job is always closed out. _list_target_forks
     converts the expected GitHub failures into PropagateSetupError, but a bare
@@ -457,7 +478,7 @@ def run_propagation(
     page would poll a never-finishing job) until the backend restarts.
     """
     try:
-        _run_propagation(job, github_client, org, github_prefix, template_repo)
+        _run_propagation(job, github_client, org, github_prefix, template_repo, only_repos)
     except Exception:
         logger.exception(f"Propagate job {job.job_id} ({org}, {github_prefix}) crashed")
     finally:

@@ -1246,6 +1246,10 @@ def _load_lab_for_propagate(course_id: str, lab_id: str) -> tuple[str, str, str]
 
 class PropagateRequest(BaseModel):
     dry_run: bool = True
+    # Кому именно рассылать: имена репозиториев из сводки dry-run. None -
+    # всем найденным форкам лабы (прежнее поведение). Позволяет обновить
+    # только часть репозиториев, например созданные после перехода на fork.
+    repos: list[str] | None = None
 
 
 @app.post("/admin/courses/{course_id}/labs/{lab_id}/propagate-template-update")
@@ -1295,7 +1299,9 @@ def propagate_template_update(
         )
 
     logger.info(f"Starting propagate job {job.job_id} for {course_id}/{lab_id} (admin={admin})")
-    background_tasks.add_task(run_propagation, job, github_client, org, github_prefix, template_repo)
+    background_tasks.add_task(
+        run_propagation, job, github_client, org, github_prefix, template_repo, body.repos
+    )
     return JSONResponse(status_code=202, content={"job_id": job.job_id})
 
 

@@ -46,8 +46,10 @@
       "title": "Preview update rollout",
       "summary": "{{count}} student repositories will receive an update proposal",
       "notAFork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected",
+      "selectAll": "Select all",
+      "selectedCount": "Selected {{selected}} of {{total}}",
       "cancel": "Cancel",
-      "confirm": "Send the update",
+      "confirm": "Send the update ({{count}})",
       "statusWillProcess": "will be processed",
       "statusNotAFork": "not a template fork"
     },

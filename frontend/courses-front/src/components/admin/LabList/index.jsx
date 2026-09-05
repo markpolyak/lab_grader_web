@@ -16,6 +16,7 @@ import {
   DialogContent,
   DialogActions,
   Button as MuiButton,
+  Checkbox,
 } from "@mui/material";
 import {
   Container,
@@ -65,6 +66,10 @@ export const LabList = ({ courseId, onBack }) => {
   const [dryRunOpen, setDryRunOpen] = useState(false);
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [dryRunResult, setDryRunResult] = useState(null);
+  // Имена репозиториев, которым уйдёт обновление. Заполняется всеми
+  // will_process при получении предпросмотра; выбор живёт только пока
+  // открыт диалог - при повторном открытии список перезапрашивается.
+  const [selectedRepos, setSelectedRepos] = useState([]);
   const [starting, setStarting] = useState(false);
 
   const [job, setJob] = useState(null);
@@ -128,6 +133,9 @@ export const LabList = ({ courseId, onBack }) => {
     })
       .then((data) => {
         setDryRunResult(data);
+        setSelectedRepos(
+          data.results.filter((r) => r.status === "will_process").map((r) => r.repo)
+        );
         setDryRunLoading(false);
       })
       .catch((err) => {
@@ -141,7 +149,13 @@ export const LabList = ({ courseId, onBack }) => {
     setDryRunOpen(false);
     setSelectedLab(null);
     setDryRunResult(null);
+    setSelectedRepos([]);
   };
+
+  const toggleRepo = (repo) =>
+    setSelectedRepos((current) =>
+      current.includes(repo) ? current.filter((r) => r !== repo) : [...current, repo]
+    );
 
   const handleConfirmRun = () => {
     if (!selectedLab) return;
@@ -149,7 +163,7 @@ export const LabList = ({ courseId, onBack }) => {
     fetchJson(`/api/v1/admin/courses/${courseId}/labs/${selectedLab.id}/propagate-template-update`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dry_run: false }),
+      body: JSON.stringify({ dry_run: false, repos: selectedRepos }),
     })
       .then((data) => {
         setStarting(false);
@@ -157,7 +171,7 @@ export const LabList = ({ courseId, onBack }) => {
         setJob({
           job_id: data.job_id,
           status: "running",
-          total: dryRunResult ? dryRunResult.total : 0,
+          total: selectedRepos.length,
           processed: 0,
           results: [],
         });
@@ -185,6 +199,10 @@ export const LabList = ({ courseId, onBack }) => {
   const notAFork = dryRunResult
     ? dryRunResult.results.filter((r) => r.status === "not_a_fork")
     : [];
+  const allSelected = willProcess.length > 0 && selectedRepos.length === willProcess.length;
+  const someSelected = selectedRepos.length > 0 && !allSelected;
+  const toggleAll = () =>
+    setSelectedRepos(allSelected ? [] : willProcess.map((r) => r.repo));
 
   return (
     <Container>
@@ -251,14 +269,38 @@ export const LabList = ({ courseId, onBack }) => {
           ) : dryRunResult ? (
             <>
               <p>{t("adminLabs.dryRun.summary", { count: willProcess.length })}</p>
+              <p>{t("adminLabs.dryRun.selectedCount", { selected: selectedRepos.length, total: willProcess.length })}</p>
               {notAFork.length > 0 && (
                 <p>{t("adminLabs.dryRun.notAFork", { count: notAFork.length })}</p>
               )}
               <TableWrapper>
                 <Table size="small">
+                  <TableHead>
+                    <TableRow>
+                      <TableCell padding="checkbox">
+                        <Checkbox
+                          size="small"
+                          checked={allSelected}
+                          indeterminate={someSelected}
+                          onChange={toggleAll}
+                          disabled={willProcess.length === 0}
+                          inputProps={{ "aria-label": t("adminLabs.dryRun.selectAll") }}
+                        />
+                      </TableCell>
+                      <TableCell>{t("adminLabs.dryRun.selectAll")}</TableCell>
+                      <TableCell />
+                    </TableRow>
+                  </TableHead>
                   <TableBody>
                     {willProcess.map((r) => (
-                      <TableRow key={r.repo}>
+                      <TableRow key={r.repo} hover onClick={() => toggleRepo(r.repo)}>
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            size="small"
+                            checked={selectedRepos.includes(r.repo)}
+                            inputProps={{ "aria-label": r.repo }}
+                          />
+                        </TableCell>
                         <TableCell>{r.repo}</TableCell>
                         <TableCell>
                           <Chip size="small" label={t("adminLabs.dryRun.statusWillProcess")} />
@@ -267,6 +309,8 @@ export const LabList = ({ courseId, onBack }) => {
                     ))}
                     {notAFork.map((r) => (
                       <TableRow key={r.repo}>
+                        {/* Форк-связи нет, рассылать нечего - строка без чекбокса */}
+                        <TableCell padding="checkbox" />
                         <TableCell>{r.repo}</TableCell>
                         <TableCell>
                           <Chip
@@ -287,10 +331,10 @@ export const LabList = ({ courseId, onBack }) => {
           <MuiButton onClick={handleCloseDryRun}>{t("adminLabs.dryRun.cancel")}</MuiButton>
           <MuiButton
             variant="contained"
-            disabled={dryRunLoading || starting || willProcess.length === 0}
+            disabled={dryRunLoading || starting || selectedRepos.length === 0}
             onClick={handleConfirmRun}
           >
-            {t("adminLabs.dryRun.confirm")}
+            {t("adminLabs.dryRun.confirm", { count: selectedRepos.length })}
           </MuiButton>
         </DialogActions>
       </Dialog>
