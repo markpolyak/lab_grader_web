@@ -376,6 +376,46 @@ def parse_lab_id(lab_id: str) -> int:
         raise HTTPException(status_code=400, detail="Некорректный lab_id")
     return int(match.group(0))
 
+
+def find_lab_config(labs: dict, lab_id: str) -> tuple[str, dict] | None:
+    r"""
+    Найти лабораторную по идентификатору, которым её назвал вызывающий.
+
+    Одна и та же лаба адресуется тремя разными способами:
+      - ключом из YAML ("01", "1") - URL /join и админки;
+      - коротким именем ("ЛР0.1", "ЛР1") - интерфейс проверки, потому что
+        GET /courses/{id}/groups/{gid}/labs отдаёт именно short-name;
+      - произвольной строкой с числом ("lab3") - исторические вызовы.
+
+    Сопоставление по одному лишь числу (прежнее `labs[str(parse_lab_id(...))]`)
+    склеивает разные лабы: int("01") == 1 делает ключ "01" недостижимым, а
+    re.search(r"\d+", "ЛР0.1") останавливается на "0", из-за чего ЛР0.1
+    разрешалась в ЛР0 - чужой github-prefix и чужой столбец в таблице.
+
+    Returns:
+        (ключ в конфиге, конфиг лабы) или None, если лаба не найдена
+    """
+    if not isinstance(labs, dict):
+        return None
+
+    if lab_id in labs:
+        return lab_id, labs[lab_id]
+
+    for key, config in labs.items():
+        if isinstance(config, dict) and config.get("short-name") == lab_id:
+            return str(key), config
+
+    # Запасной путь для строк, которые не являются ни ключом, ни коротким
+    # именем ("lab3"). Неоднозначные случаи выше уже разобраны точным
+    # совпадением, так что сюда доходят только однозначные.
+    match = re.search(r"\d+", lab_id)
+    if match:
+        numeric_key = str(int(match.group(0)))
+        if numeric_key in labs:
+            return numeric_key, labs[numeric_key]
+
+    return None
+
 @app.get("/courses/{course_id}")
 @limiter.limit("100/minute")
 def get_course(request: Request, course_id: str):
@@ -646,11 +686,14 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
 
         labs = course_info.get("labs", {})
-        lab_number = parse_lab_id(lab_id)
-        lab_config_dict = labs.get(str(lab_number), {})
+        # lab_id приходит из интерфейса как short-name ("ЛР0.1"), а из прочих
+        # вызовов - как ключ конфига. Разбор по числу выбирал не ту лабу,
+        # см. find_lab_config.
+        resolved = find_lab_config(labs, lab_id)
+        lab_key, lab_config_dict = resolved if resolved else (None, {})
         repo_prefix = lab_config_dict.get("github-prefix")
 
-        logger.debug(f"Looking for lab config with key '{lab_number}', found: {bool(lab_config_dict)}")
+        logger.debug(f"Looking for lab config by '{lab_id}', resolved key: {lab_key!r}, found: {bool(lab_config_dict)}")
 
         if not all([org, spreadsheet_id, repo_prefix]):
             logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}")
@@ -741,6 +784,8 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         else:
             logger.warning(f"Lab config for '{lab_id}' is missing 'short-name', using offset calculation")
             lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
+            # Номер берём из ключа конфига: строка клиента может быть short-name.
+            lab_number = parse_lab_id(lab_key or lab_id)
             lab_col = calculate_lab_column(lab_number, lab_offset)
             logger.info(f"Calculated lab column using offset: {lab_offset} + {lab_number} = {lab_col}")
 
@@ -884,10 +929,10 @@ def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
     course_info = get_course_by_id(course_id)  # raises 404 if course unknown
 
     labs = course_info.get("labs", {})
-    lab_number = parse_lab_id(lab_id)  # raises 400 if lab_id has no number
-    lab_config = labs.get(str(lab_number))
-    if not lab_config:
+    resolved = find_lab_config(labs, lab_id)
+    if not resolved:
         raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+    _lab_key, lab_config = resolved
 
     template_repo = lab_config.get("template-repo")
     if not template_repo:
@@ -1155,7 +1200,14 @@ def admin_list_course_labs(request: Request, course_id: str, admin: str = Depend
             "can_propagate": bool(template_repo) and repo_provisioning == "fork",
         })
 
-    result.sort(key=lambda lab: parse_lab_id(lab["id"]) if re.search(r"\d+", lab["id"]) else 0)
+    # Порядок как у преподавателя в таблице: ЛР0, ЛР0.1, ЛР1... Сортировка по
+    # одному числу ставила бы "01" и "1" вровень, а ЛР0.1 - после ЛР1.
+    def _lab_sort_key(lab):
+        digits = re.findall(r"\d+", lab["short_name"] or lab["id"])
+        # Лабы без чисел в названии (например "Тест / КР") - в конец списка.
+        return (0 if digits else 1, [int(d) for d in digits], lab["id"])
+
+    result.sort(key=_lab_sort_key)
     return result
 
 
@@ -1174,10 +1226,10 @@ def _load_lab_for_propagate(course_id: str, lab_id: str) -> tuple[str, str, str]
     course_info = get_course_by_id(course_id)  # raises 404 if course unknown
 
     labs = course_info.get("labs", {})
-    lab_number = parse_lab_id(lab_id)  # raises 400 if lab_id has no number
-    lab_config = labs.get(str(lab_number))
-    if not lab_config:
+    resolved = find_lab_config(labs, lab_id)
+    if not resolved:
         raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+    _lab_key, lab_config = resolved
 
     template_repo = lab_config.get("template-repo")
     repo_provisioning = lab_config.get("repo-provisioning", "template")
