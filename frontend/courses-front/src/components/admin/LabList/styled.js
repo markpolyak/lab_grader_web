@@ -53,6 +53,14 @@ export const TableWrapper = styled.div`
   overflow-x: auto;
 `;
 
+// Таблица предпросмотра прокручивается сама, а не вместе с содержимым диалога:
+// sticky-шапка держится за ближайшего прокручиваемого предка, и без этого
+// строка "Выбрать все" уезжает вверх на курсе в две сотни студентов.
+export const SelectableTableWrapper = styled(TableWrapper)`
+  max-height: 50vh;
+  overflow-y: auto;
+`;
+
 export const StatusChipRow = styled.div`
   display: flex;
   flex-wrap: wrap;

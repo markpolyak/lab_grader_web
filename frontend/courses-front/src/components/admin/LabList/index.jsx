@@ -24,6 +24,7 @@ import {
   PageTitle,
   BackButton,
   TableWrapper,
+  SelectableTableWrapper,
   HintText,
 } from "./styled";
 
@@ -273,8 +274,8 @@ export const LabList = ({ courseId, onBack }) => {
               {notAFork.length > 0 && (
                 <p>{t("adminLabs.dryRun.notAFork", { count: notAFork.length })}</p>
               )}
-              <TableWrapper>
-                <Table size="small">
+              <SelectableTableWrapper>
+                <Table size="small" stickyHeader>
                   <TableHead>
                     <TableRow>
                       <TableCell padding="checkbox">
@@ -323,7 +324,7 @@ export const LabList = ({ courseId, onBack }) => {
                     ))}
                   </TableBody>
                 </Table>
-              </TableWrapper>
+              </SelectableTableWrapper>
             </>
           ) : null}
         </DialogContent>
