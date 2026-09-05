@@ -1,0 +1,175 @@
+---
+# Configuration file for lab-grader
+
+course:
+    name: Машинное обучение
+    alt-names: 
+        - Машинное обучение
+        - МО
+        - Machine learning
+        - ML
+    semester: Осень 2026
+    university: ИТМО
+    email: mdpoliak@itmo.ru
+    timezone: UTC+3
+    github:
+        organization: itmo-ml-2026
+        teachers:
+            - "Mark Polyak"
+            - markpolyak
+    google:
+        spreadsheet: 1zIZOW35vWIV0DkoJtpxy_R0o3PudONXlkDxeRNyVzv0
+        info-sheet: График
+        task-id-column: 0
+        student-name-column: 1
+        lab-column-offset: 1
+    staff:
+        - name: Поляк Марк Дмитриевич
+          title: преп. практики
+          status: лектор
+        - name: Поляк Марк Дмитриевич
+          title: преп. практики
+          status: лабораторные работы
+        - name: Шаврин Андрей Андреевич
+          title: ассистент
+          status: лабораторные работы
+        - name: Сениченкова Яна Олеговна
+          title: инженер
+          status: лабораторные работы
+    labs:
+        "0":
+            github-prefix: ml-lab0
+            template-repo: itmo-ml-2026/github-starter-course
+            repo-provisioning: fork
+            short-name: ЛР0
+            penalty-max: 5
+            ignore-task-id: True
+            ci:
+                - workflows
+            files:
+                - goals.md
+                - info.md
+                - report.pdf
+            moss:
+                language: c
+            report:
+                - Задание
+                - Результат
+            validation:
+                commits:
+                    -
+                        filter: console
+                        min-count: 1
+        "1":
+            github-prefix: ml-lab1
+            template-repo: itmo-ml-2026/lab1-eda
+            repo-provisioning: fork
+            short-name: ЛР1
+            taskid-max: 8
+            # ignore-task-id: True
+            penalty-max: 2
+            ci:
+                workflows:
+                    - run-autograding-tests
+                    - Test python scripts
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 1000
+                local-path: lab1
+            report:
+                - Цель работы
+                - Индивидуальное задание
+                - Описание входных данных
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+        "2":
+            github-prefix: ml-lab2
+            template-repo: itmo-ml-2026/lab2-linreg-sgd
+            repo-provisioning: fork
+            short-name: ЛР2
+            taskid-max: 7
+            # ignore-task-id: True
+            penalty-max: 2
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 1000
+                local-path: lab2
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Результат выполнения работы
+                - Выводы
+        "3":
+            github-prefix: ml-lab3
+            template-repo: itmo-ml-2026/lab3-binary-classification
+            repo-provisioning: fork
+            short-name: ЛР3
+            taskid-max: 5
+            # ignore-task-id: True
+            penalty-max: 2
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 1000
+                local-path: lab3
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Результат выполнения работы
+                - Выводы
+        "4":
+            github-prefix: ml-lab4
+            template-repo:
+            repo-provisioning: fork
+            short-name: ЛР4
+            # taskid-max: 20
+            # ignore-task-id: True
+            penalty-max: 2
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 1000
+                local-path: lab4
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Результат выполнения работы
+                - Выводы
+        "5":
+            github-prefix: ml-lab5
+            template-repo: itmo-ml-2026/lab5-backprop
+            repo-provisioning: fork
+            short-name: ЛР5
+            taskid-max: 5
+            # ignore-task-id: True
+            penalty-max: 2
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 1000
+                local-path: lab5
+            report:
+                - Цель работы
+                - Задание на лабораторную работу
+                - Результат выполнения работы
+                - Выводы
+misc:
+    requests-timeout: 5
+    
+    

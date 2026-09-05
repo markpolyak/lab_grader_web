@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -6,14 +6,17 @@ import gspread
 import requests
 from oauth2client.service_account import ServiceAccountCredentials
 from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File
 from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
+import json
+import base64
 import logging
 from datetime import datetime
+from urllib.parse import urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -22,6 +25,8 @@ from grading import (
     LabGrader,
     GitHubClient,
     GradeStatus,
+    RepoProvisioner,
+    ProvisionStatus,
     find_student_row,
     find_lab_column_by_name,
     calculate_lab_column,
@@ -32,6 +37,11 @@ from grading import (
     get_decimal_separator,
     format_grade_with_score,
     format_score,
+    PropagateSetupError,
+    dry_run_propagation,
+    try_start_propagate_job,
+    run_propagation,
+    get_propagate_job,
 )
 
 # Configure logging to both file and console
@@ -84,6 +94,20 @@ GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
+
+# GitHub OAuth App for the /join student repo creation flow (see docs/REPO_GENERATION_PLAN.md).
+# Optional: existing deployments that don't use this feature can leave these unset;
+# the /join endpoints then respond with a clear 503 instead of the app failing to start.
+GITHUB_OAUTH_CLIENT_ID = os.getenv("GITHUB_OAUTH_CLIENT_ID")
+GITHUB_OAUTH_CLIENT_SECRET = os.getenv("GITHUB_OAUTH_CLIENT_SECRET")
+# Explicit override for the OAuth callback URL registered with the OAuth App.
+# Falls back to request.base_url + "join/callback" when unset (see _oauth_redirect_uri).
+GITHUB_OAUTH_CALLBACK_URL = os.getenv("GITHUB_OAUTH_CALLBACK_URL")
+# Where to send the student's browser after the /join/callback finishes (the frontend's
+# /join/:courseId/:labId route, which renders the "after" state from the query params).
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
+# Max age (seconds) for the signed OAuth `state` param - see docs/REPO_GENERATION_PLAN.md §3.3.
+JOIN_STATE_MAX_AGE = 600
 
 # Rate limiting configuration
 limiter = Limiter(key_func=get_remote_address)
@@ -259,21 +283,29 @@ def admin_login(request: Request, data: AuthRequest, response: Response):
         return {"authenticated": True}
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-@app.get("/admin/check-auth")
-@limiter.limit("30/minute")
-def check_auth(request: Request):
+def require_admin(request: Request) -> str:
+    """
+    Reusable auth dependency for admin-only endpoints (see issue #52).
+
+    Same check /admin/check-auth used to do inline - factored out so it can
+    be attached via Depends() to every admin route instead of relying on the
+    frontend's ProtectedRoute alone.
+    """
     cookie = request.cookies.get("admin_session")
     if not cookie:
         raise HTTPException(status_code=401, detail="Нет сессии")
-
     try:
         login = signer.unsign(cookie, max_age=3600).decode()
     except BadSignature:
         raise HTTPException(status_code=401, detail="Невалидная или просроченная сессия")
-
     if login != ADMIN_LOGIN:
         raise HTTPException(status_code=401, detail="Невалидная сессия")
+    return login
 
+
+@app.get("/admin/check-auth")
+@limiter.limit("30/minute")
+def check_auth(request: Request, admin: str = Depends(require_admin)):
     return {"authenticated": True}
 
 @app.post("/admin/logout")
@@ -344,6 +376,46 @@ def parse_lab_id(lab_id: str) -> int:
         raise HTTPException(status_code=400, detail="Некорректный lab_id")
     return int(match.group(0))
 
+
+def find_lab_config(labs: dict, lab_id: str) -> tuple[str, dict] | None:
+    r"""
+    Найти лабораторную по идентификатору, которым её назвал вызывающий.
+
+    Одна и та же лаба адресуется тремя разными способами:
+      - ключом из YAML ("01", "1") - URL /join и админки;
+      - коротким именем ("ЛР0.1", "ЛР1") - интерфейс проверки, потому что
+        GET /courses/{id}/groups/{gid}/labs отдаёт именно short-name;
+      - произвольной строкой с числом ("lab3") - исторические вызовы.
+
+    Сопоставление по одному лишь числу (прежнее `labs[str(parse_lab_id(...))]`)
+    склеивает разные лабы: int("01") == 1 делает ключ "01" недостижимым, а
+    re.search(r"\d+", "ЛР0.1") останавливается на "0", из-за чего ЛР0.1
+    разрешалась в ЛР0 - чужой github-prefix и чужой столбец в таблице.
+
+    Returns:
+        (ключ в конфиге, конфиг лабы) или None, если лаба не найдена
+    """
+    if not isinstance(labs, dict):
+        return None
+
+    if lab_id in labs:
+        return lab_id, labs[lab_id]
+
+    for key, config in labs.items():
+        if isinstance(config, dict) and config.get("short-name") == lab_id:
+            return str(key), config
+
+    # Запасной путь для строк, которые не являются ни ключом, ни коротким
+    # именем ("lab3"). Неоднозначные случаи выше уже разобраны точным
+    # совпадением, так что сюда доходят только однозначные.
+    match = re.search(r"\d+", lab_id)
+    if match:
+        numeric_key = str(int(match.group(0)))
+        if numeric_key in labs:
+            return numeric_key, labs[numeric_key]
+
+    return None
+
 @app.get("/courses/{course_id}")
 @limiter.limit("100/minute")
 def get_course(request: Request, course_id: str):
@@ -364,7 +436,7 @@ def get_course(request: Request, course_id: str):
 
 @app.delete("/courses/{course_id}")
 @limiter.limit("20/minute")
-def delete_course(request: Request, course_id: str):
+def delete_course(request: Request, course_id: str, admin: str = Depends(require_admin)):
     """
     Mark course as hidden in index (soft delete)
     The course file is preserved in repository
@@ -395,7 +467,7 @@ class EditCourseRequest(BaseModel):
 
 @app.get("/courses/{course_id}/edit")
 @limiter.limit("30/minute")
-def edit_course_get(request: Request, course_id: str):
+def edit_course_get(request: Request, course_id: str, admin: str = Depends(require_admin)):
     """Получить YAML содержимое курса для редактирования"""
     course_info = get_course_by_id(course_id)
     filename = course_info["_meta"]["filename"]
@@ -412,7 +484,7 @@ def edit_course_get(request: Request, course_id: str):
 
 @app.put("/courses/{course_id}/edit")
 @limiter.limit("20/minute")
-def edit_course_put(request: Request, course_id: str, data: EditCourseRequest):
+def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, admin: str = Depends(require_admin)):
     """Сохранить изменения в YAML файле курса"""
     course_info = get_course_by_id(course_id)
     filename = course_info["_meta"]["filename"]
@@ -581,12 +653,6 @@ def register_student(request: Request, course_id: str, group_id: str, student: S
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 
-def normalize_lab_id(lab_id: str) -> str:
-    """Возвращает нормализованную строку вида ЛР1, ЛР2 и т.д."""
-    number = parse_lab_id(lab_id)
-    return f"ЛР{number}"
-
-
 class GradeRequest(BaseModel):
     github: str = Field(..., min_length=1)
 
@@ -614,11 +680,14 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
 
         labs = course_info.get("labs", {})
-        lab_number = parse_lab_id(lab_id)
-        lab_config_dict = labs.get(str(lab_number), {})
+        # lab_id приходит из интерфейса как short-name ("ЛР0.1"), а из прочих
+        # вызовов - как ключ конфига. Разбор по числу выбирал не ту лабу,
+        # см. find_lab_config.
+        resolved = find_lab_config(labs, lab_id)
+        lab_key, lab_config_dict = resolved if resolved else (None, {})
         repo_prefix = lab_config_dict.get("github-prefix")
 
-        logger.debug(f"Looking for lab config with key '{lab_number}', found: {bool(lab_config_dict)}")
+        logger.debug(f"Looking for lab config by '{lab_id}', resolved key: {lab_key!r}, found: {bool(lab_config_dict)}")
 
         if not all([org, spreadsheet_id, repo_prefix]):
             logger.error(f"Missing course configuration for {course_id}: org={org}, spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}")
@@ -709,6 +778,8 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         else:
             logger.warning(f"Lab config for '{lab_id}' is missing 'short-name', using offset calculation")
             lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
+            # Номер берём из ключа конфига: строка клиента может быть short-name.
+            lab_number = parse_lab_id(lab_key or lab_id)
             lab_col = calculate_lab_column(lab_number, lab_offset)
             logger.info(f"Calculated lab column using offset: {lab_offset} + {lab_number} = {lab_col}")
 
@@ -826,11 +897,426 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 
+# ---------------------------------------------------------------------------
+# /join: automatic student repo creation (replaces GitHub Classroom)
+# See docs/REPO_GENERATION_PLAN.md for the full design.
+# ---------------------------------------------------------------------------
+
+# Valid values of a lab's `repo-provisioning` config field (see docs/COURSE_CONFIG.md).
+# "template" is the default (backward-compatible) - GitHub's `generate` API.
+# "fork" creates a real fork of template-repo instead (issue #51).
+REPO_PROVISIONING_MODES = {"template", "fork"}
+
+
+def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
+    """
+    Load course/lab config needed by the /join flow.
+
+    Returns:
+        (course_info, lab_config, github_organization)
+
+    Raises:
+        HTTPException: 404 for unknown course/lab, 400 if the lab has no
+        `template-repo` configured, has an unrecognized `repo-provisioning`
+        value, or the course has no GitHub organization.
+    """
+    course_info = get_course_by_id(course_id)  # raises 404 if course unknown
+
+    labs = course_info.get("labs", {})
+    resolved = find_lab_config(labs, lab_id)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+    _lab_key, lab_config = resolved
+
+    template_repo = lab_config.get("template-repo")
+    if not template_repo:
+        raise HTTPException(
+            status_code=400,
+            detail="Для этой лабораторной работы не настроено автоматическое создание репозитория (template-repo)",
+        )
+
+    repo_provisioning = lab_config.get("repo-provisioning", "template")
+    if repo_provisioning not in REPO_PROVISIONING_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Некорректное значение repo-provisioning: '{repo_provisioning}' "
+                f"(допустимо: {', '.join(sorted(REPO_PROVISIONING_MODES))})"
+            ),
+        )
+
+    org = course_info.get("github", {}).get("organization")
+    if not org:
+        raise HTTPException(status_code=400, detail="Для курса не настроена GitHub организация")
+
+    return course_info, lab_config, org
+
+
+def _oauth_redirect_uri(request: Request) -> str:
+    """Authorization callback URL - must exactly match the one registered with the OAuth App."""
+    if GITHUB_OAUTH_CALLBACK_URL:
+        return GITHUB_OAUTH_CALLBACK_URL
+    return f"{str(request.base_url).rstrip('/')}/join/callback"
+
+
+def _build_join_state(course_id: str, lab_id: str) -> str:
+    """
+    Build a signed `state` param carrying course_id/lab_id, using the same
+    itsdangerous signer already used for admin_session (see §3.3 of the plan).
+    """
+    payload = json.dumps({"course_id": course_id, "lab_id": lab_id}).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload).decode("ascii")
+    return signer.sign(payload_b64.encode("ascii")).decode("ascii")
+
+
+def _parse_join_state(state: str | None) -> dict:
+    """
+    Verify and decode a `state` param built by _build_join_state.
+
+    Raises:
+        HTTPException(400): if the state is missing, malformed, unsigned, or expired
+    """
+    try:
+        payload_b64 = signer.unsign(state, max_age=JOIN_STATE_MAX_AGE).decode("ascii")
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+    except (BadSignature, ValueError, TypeError, KeyError):
+        raise HTTPException(
+            status_code=400,
+            detail="Невалидная или просроченная ссылка. Запросите ссылку на подключение заново",
+        )
+
+    if not isinstance(payload, dict) or "course_id" not in payload or "lab_id" not in payload:
+        raise HTTPException(status_code=400, detail="Невалидная ссылка")
+
+    return payload
+
+
+def _join_result_redirect(course_id: str, lab_id: str, status: str, **extra) -> str:
+    """Build the frontend result URL (/join/:courseId/:labId) the student's browser lands on."""
+    params = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
+    base = FRONTEND_URL.rstrip("/")
+    return f"{base}/join/{course_id}/{lab_id}?{urlencode(params)}"
+
+
+def _join_error_redirect(reason: str) -> str:
+    """Результат для случая, когда course_id/lab_id ещё неизвестны (битый state)."""
+    return f"{FRONTEND_URL.rstrip('/')}/join/error?{urlencode({'status': 'error', 'reason': reason})}"
+
+
+def _exchange_code_for_username(code: str, redirect_uri: str) -> str | None:
+    """
+    Exchange an OAuth `code` for the confirmed GitHub username of the student.
+
+    This is the ONLY source of truth for the student's identity (see §3.2 of
+    the plan) - the student's access token obtained here is used for exactly
+    one request (GET /user) and is never logged, stored, or returned.
+
+    Returns:
+        The confirmed GitHub login, or None if any step of the exchange failed
+    """
+    try:
+        token_resp = requests.post(
+            "https://github.com/login/oauth/access_token",
+            headers={"Accept": "application/json"},
+            data={
+                "client_id": GITHUB_OAUTH_CLIENT_ID,
+                "client_secret": GITHUB_OAUTH_CLIENT_SECRET,
+                "code": code,
+                "redirect_uri": redirect_uri,
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        logger.error(f"OAuth token exchange request failed: {e}")
+        return None
+
+    if token_resp.status_code != 200:
+        logger.error(f"OAuth token exchange failed with status {token_resp.status_code}")
+        return None
+
+    access_token = token_resp.json().get("access_token")
+    if not access_token:
+        logger.error("OAuth token exchange response had no access_token")
+        return None
+
+    try:
+        user_resp = requests.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/vnd.github+json",
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        logger.error(f"GitHub /user request failed: {e}")
+        return None
+
+    if user_resp.status_code != 200:
+        logger.error(f"GitHub /user returned status {user_resp.status_code}")
+        return None
+
+    username = user_resp.json().get("login")
+    if not username:
+        logger.error("GitHub /user response had no 'login' field")
+        return None
+
+    return username
+
+
+@app.get("/join/{course_id}/{lab_id}")
+@limiter.limit("30/minute")
+def join_lab_info(request: Request, course_id: str, lab_id: str):
+    """Публичная информация для лендинга страницы присоединения к лабе (без аутентификации)."""
+    course_info, lab_config, _org = _load_lab_for_join(course_id, lab_id)
+    return {
+        "course_id": course_id,
+        "lab_id": lab_id,
+        "course_name": course_info.get("name", "Unknown"),
+        "lab_short_name": lab_config.get("short-name", lab_id),
+    }
+
+
+@app.get("/join/{course_id}/{lab_id}/start")
+@limiter.limit("20/minute")
+def join_lab_start(request: Request, course_id: str, lab_id: str):
+    """Начинает GitHub OAuth Web Application Flow (см. §3 плана)."""
+    _load_lab_for_join(course_id, lab_id)  # validate config before sending the student to GitHub
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Вход через GitHub временно недоступен: OAuth App не настроен")
+
+    state = _build_join_state(course_id, lab_id)
+    params = {
+        "client_id": GITHUB_OAUTH_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri(request),
+        "scope": "read:user",
+        "state": state,
+    }
+    logger.info(f"Redirecting to GitHub OAuth for join {course_id}/{lab_id}")
+    return RedirectResponse(url=f"https://github.com/login/oauth/authorize?{urlencode(params)}")
+
+
+@app.get("/join/callback")
+@limiter.limit("20/minute")
+def join_callback(
+    request: Request,
+    code: str | None = None,
+    state: str | None = None,
+    error: str | None = None,
+):
+    """
+    Обрабатывает колбэк GitHub OAuth: проверяет state, получает подтверждённый
+    username, создаёт репозиторий из шаблона и чинит доступ студента (§4 плана).
+    """
+    # course_id/lab_id are unknown until state is decoded, so a missing/invalid/
+    # expired state can't redirect to the (unknown) frontend course/lab page -
+    # it goes to the course/lab-agnostic /join/error page instead.
+    try:
+        payload = _parse_join_state(state)
+    except HTTPException:
+        return RedirectResponse(url=_join_error_redirect("invalid_state"))
+    course_id = payload["course_id"]
+    lab_id = payload["lab_id"]
+
+    if error:
+        logger.info(f"Student declined GitHub OAuth for join {course_id}/{lab_id}: {error}")
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="access_denied"))
+
+    if not code:
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="missing_code"))
+
+    try:
+        course_info, lab_config, org = _load_lab_for_join(course_id, lab_id)
+    except HTTPException:
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="config"))
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_not_configured"))
+
+    username = _exchange_code_for_username(code, _oauth_redirect_uri(request))
+    if username is None:
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_exchange_failed"))
+
+    logger.info(f"Confirmed GitHub username '{username}' for join {course_id}/{lab_id}")
+
+    github_prefix = lab_config.get("github-prefix")
+    template_repo = lab_config.get("template-repo")
+    repo_provisioning = lab_config.get("repo-provisioning", "template")
+
+    try:
+        # Server-side token, never the student's OAuth token (see §3.2/§6 of the plan).
+        github_client = GitHubClient(GITHUB_TOKEN)
+        provisioner = RepoProvisioner(github_client)
+        result = provisioner.provision(org, github_prefix, template_repo, username, repo_provisioning)
+    except Exception:
+        logger.exception(f"Unexpected error provisioning repo for {username} in {course_id}/{lab_id}")
+        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="provision_failed"))
+
+    if result.status != ProvisionStatus.OK:
+        logger.warning(f"Provisioning failed for {username} in {course_id}/{lab_id}: {result.error_code}")
+        return RedirectResponse(
+            url=_join_result_redirect(course_id, lab_id, "error", reason=result.error_code or "provision_failed")
+        )
+
+    logger.info(f"Provisioned {result.repo_url} for {username} ({course_id}/{lab_id})")
+    return RedirectResponse(
+        url=_join_result_redirect(course_id, lab_id, "success", repo_url=result.repo_url, username=username)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Admin: propagate template repository updates to student repos via fork PRs
+# (issue #52). Only meaningful for labs with repo-provisioning: fork - a real
+# fork network is what lets GitHub build the cross-repo PR.
+# ---------------------------------------------------------------------------
+
+
+@app.get("/admin/courses/{course_id}/labs")
+@limiter.limit("30/minute")
+def admin_list_course_labs(request: Request, course_id: str, admin: str = Depends(require_admin)):
+    """Labs of a course with the fields the admin lab list page needs."""
+    course_info = get_course_by_id(course_id)
+    labs = course_info.get("labs", {})
+
+    result = []
+    for lab_number, lab_config in labs.items():
+        repo_provisioning = lab_config.get("repo-provisioning", "template")
+        template_repo = lab_config.get("template-repo")
+        result.append({
+            "id": lab_number,
+            "short_name": lab_config.get("short-name", lab_number),
+            "github_prefix": lab_config.get("github-prefix"),
+            "template_repo": template_repo,
+            "repo_provisioning": repo_provisioning,
+            "can_propagate": bool(template_repo) and repo_provisioning == "fork",
+        })
+
+    # Порядок как у преподавателя в таблице: ЛР0, ЛР0.1, ЛР1... Сортировка по
+    # одному числу ставила бы "01" и "1" вровень, а ЛР0.1 - после ЛР1.
+    def _lab_sort_key(lab):
+        digits = re.findall(r"\d+", lab["short_name"] or lab["id"])
+        # Лабы без чисел в названии (например "Тест / КР") - в конец списка.
+        return (0 if digits else 1, [int(d) for d in digits], lab["id"])
+
+    result.sort(key=_lab_sort_key)
+    return result
+
+
+def _load_lab_for_propagate(course_id: str, lab_id: str) -> tuple[str, str, str]:
+    """
+    Load the config needed to propagate a template update for a lab.
+
+    Returns:
+        (org, github_prefix, template_repo)
+
+    Raises:
+        HTTPException: 404 for unknown course/lab, 400 if the lab isn't
+        `repo-provisioning: fork` with a `template-repo` set, or the course
+        has no GitHub organization / the lab has no github-prefix
+    """
+    course_info = get_course_by_id(course_id)  # raises 404 if course unknown
+
+    labs = course_info.get("labs", {})
+    resolved = find_lab_config(labs, lab_id)
+    if not resolved:
+        raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+    _lab_key, lab_config = resolved
+
+    template_repo = lab_config.get("template-repo")
+    repo_provisioning = lab_config.get("repo-provisioning", "template")
+    if not template_repo or repo_provisioning != "fork":
+        raise HTTPException(
+            status_code=400,
+            detail="Обновление шаблона доступно только для лаб с repo-provisioning: fork",
+        )
+
+    org = course_info.get("github", {}).get("organization")
+    if not org:
+        raise HTTPException(status_code=400, detail="Для курса не настроена GitHub организация")
+
+    github_prefix = lab_config.get("github-prefix")
+    if not github_prefix:
+        raise HTTPException(status_code=400, detail="Для лабы не настроен github-prefix")
+
+    return org, github_prefix, template_repo
+
+
+class PropagateRequest(BaseModel):
+    dry_run: bool = True
+    # Кому именно рассылать: имена репозиториев из сводки dry-run. None -
+    # всем найденным форкам лабы (прежнее поведение). Позволяет обновить
+    # только часть репозиториев, например созданные после перехода на fork.
+    repos: list[str] | None = None
+
+
+@app.post("/admin/courses/{course_id}/labs/{lab_id}/propagate-template-update")
+@limiter.limit("10/minute")
+def propagate_template_update(
+    request: Request,
+    course_id: str,
+    lab_id: str,
+    background_tasks: BackgroundTasks,
+    body: PropagateRequest = PropagateRequest(),
+    admin: str = Depends(require_admin),
+):
+    """
+    Preview (dry_run=true, default) or start (dry_run=false) sending PR
+    proposals with the template's latest code to every student fork.
+
+    dry_run runs synchronously (read-only) and returns 200 with the summary.
+    A real run returns 202 with a job_id to poll via GET
+    /admin/propagate-jobs/{job_id}; only one run per (course_id, lab_id) at
+    a time - a second POST while one is in flight gets HTTP 409.
+    """
+    org, github_prefix, template_repo = _load_lab_for_propagate(course_id, lab_id)
+
+    try:
+        template_owner, template_name = template_repo.split("/", 1)
+    except ValueError:
+        raise HTTPException(
+            status_code=400,
+            detail="Некорректно настроен template-repo лабы (ожидается формат 'owner/repo')",
+        )
+
+    github_client = GitHubClient(GITHUB_TOKEN)
+
+    if body.dry_run:
+        try:
+            summary = dry_run_propagation(github_client, org, github_prefix, template_owner, template_name)
+        except PropagateSetupError as e:
+            logger.error(f"Dry-run propagate failed for {course_id}/{lab_id}: {e}")
+            raise HTTPException(status_code=502, detail=str(e))
+        return summary
+
+    job = try_start_propagate_job(course_id, lab_id)
+    if job is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Рассылка обновлений для этой лабораторной уже выполняется",
+        )
+
+    logger.info(f"Starting propagate job {job.job_id} for {course_id}/{lab_id} (admin={admin})")
+    background_tasks.add_task(
+        run_propagation, job, github_client, org, github_prefix, template_repo, body.repos
+    )
+    return JSONResponse(status_code=202, content={"job_id": job.job_id})
+
+
+@app.get("/admin/propagate-jobs/{job_id}")
+@limiter.limit("60/minute")
+def get_propagate_job_status(request: Request, job_id: str, admin: str = Depends(require_admin)):
+    job = get_propagate_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Работа не найдена")
+    return job.to_dict()
 
 
 @app.post("/courses/upload")
 @limiter.limit("10/minute")
-async def upload_course(request: Request, file: UploadFile = File(...)):
+async def upload_course(request: Request, file: UploadFile = File(...), admin: str = Depends(require_admin)):
     """
     Upload a new course file and add it to index
 

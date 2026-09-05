@@ -3,6 +3,7 @@ Unit tests for grading/github_client.py
 
 Tests GitHub API client with mocked HTTP responses.
 """
+import json
 import pytest
 import responses
 import sys
@@ -15,6 +16,7 @@ from grading.github_client import (
     CommitInfo,
     check_forbidden_modifications,
     get_default_forbidden_patterns,
+    is_rate_limited,
 )
 
 
@@ -260,6 +262,256 @@ class TestGitHubClientGetCheckRuns:
         assert runs == []
 
 
+class TestGitHubClientForkRepo:
+    """Tests for fork_repo method."""
+
+    @responses.activate
+    def test_fork_repo_posts_organization_and_name(self):
+        call = responses.add(
+            responses.POST,
+            "https://api.github.com/repos/owner/template/forks",
+            json={},
+            status=202,
+        )
+        client = GitHubClient("test_token")
+        resp = client.fork_repo("owner", "template", "org", "os-task1-student1")
+
+        assert resp.status_code == 202
+        assert call.call_count == 1
+        assert json.loads(call.calls[0].request.body) == {
+            "organization": "org",
+            "name": "os-task1-student1",
+        }
+
+
+class TestGitHubClientGetRepo:
+    """Tests for get_repo method."""
+
+    @responses.activate
+    def test_get_repo_returns_json(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo",
+            json={"full_name": "org/repo", "private": True},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        repo = client.get_repo("org", "repo")
+        assert repo == {"full_name": "org/repo", "private": True}
+
+    @responses.activate
+    def test_get_repo_not_found_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+        assert client.get_repo("org", "repo") is None
+
+
+class TestGitHubClientUpdateRepo:
+    """Tests for update_repo method."""
+
+    @responses.activate
+    def test_update_repo_patches_payload(self):
+        call = responses.add(
+            responses.PATCH,
+            "https://api.github.com/repos/org/repo",
+            json={},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        resp = client.update_repo("org", "repo", {"is_template": False})
+
+        assert resp.status_code == 200
+        assert json.loads(call.calls[0].request.body) == {"is_template": False}
+
+
+class TestGitHubClientEnableActions:
+    """Tests for enable_actions method."""
+
+    @responses.activate
+    def test_enable_actions_puts_enabled_true(self):
+        call = responses.add(
+            responses.PUT,
+            "https://api.github.com/repos/org/repo/actions/permissions",
+            status=204,
+        )
+        client = GitHubClient("test_token")
+        resp = client.enable_actions("org", "repo")
+
+        assert resp.status_code == 204
+        assert json.loads(call.calls[0].request.body) == {"enabled": True}
+
+
+class TestGitHubClientListForks:
+    """Tests for list_forks method."""
+
+    @responses.activate
+    def test_lists_forks_across_two_pages(self):
+        """per_page defaults to 30 on GitHub's side - without paging through,
+        a course with 200 students would silently lose most of the forks (issue #52)."""
+        page1 = [{"name": f"os-task1-student{i}"} for i in range(100)]
+        page2 = [{"name": "os-task1-student100"}]
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/owner/template/forks",
+            json=page1,
+            status=200,
+            match=[responses.matchers.query_param_matcher({"per_page": "100", "page": "1"})],
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/owner/template/forks",
+            json=page2,
+            status=200,
+            match=[responses.matchers.query_param_matcher({"per_page": "100", "page": "2"})],
+        )
+        client = GitHubClient("test_token")
+        forks = client.list_forks("owner", "template")
+        assert len(forks) == 101
+        assert forks[-1]["name"] == "os-task1-student100"
+
+    @responses.activate
+    def test_list_forks_error_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/owner/template/forks",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+        assert client.list_forks("owner", "template") is None
+
+
+class TestGitHubClientListOrgRepos:
+    """Tests for list_org_repos method."""
+
+    @responses.activate
+    def test_lists_org_repos_across_two_pages(self):
+        page1 = [{"name": f"repo{i}"} for i in range(100)]
+        page2 = [{"name": "repo100"}]
+        responses.add(
+            responses.GET,
+            "https://api.github.com/orgs/test-org/repos",
+            json=page1,
+            status=200,
+            match=[responses.matchers.query_param_matcher({"per_page": "100", "page": "1"})],
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/orgs/test-org/repos",
+            json=page2,
+            status=200,
+            match=[responses.matchers.query_param_matcher({"per_page": "100", "page": "2"})],
+        )
+        client = GitHubClient("test_token")
+        repos = client.list_org_repos("test-org")
+        assert len(repos) == 101
+
+    @responses.activate
+    def test_single_short_page_stops_after_one_request(self):
+        call = responses.add(
+            responses.GET,
+            "https://api.github.com/orgs/test-org/repos",
+            json=[{"name": "repo1"}],
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        repos = client.list_org_repos("test-org")
+        assert len(repos) == 1
+        assert call.call_count == 1
+
+
+class TestGitHubClientCreatePullRequest:
+    """Tests for create_pull_request method."""
+
+    @responses.activate
+    def test_posts_head_base_title_body(self):
+        call = responses.add(
+            responses.POST,
+            "https://api.github.com/repos/org/os-task1-student1/pulls",
+            json={"html_url": "https://github.com/org/os-task1-student1/pull/1"},
+            status=201,
+        )
+        client = GitHubClient("test_token")
+        resp = client.create_pull_request(
+            "org", "os-task1-student1",
+            head="template-owner:main", base="main",
+            title="Обновление стартового кода", body="body text",
+        )
+
+        assert resp.status_code == 201
+        assert json.loads(call.calls[0].request.body) == {
+            "head": "template-owner:main",
+            "base": "main",
+            "title": "Обновление стартового кода",
+            "body": "body text",
+        }
+
+
+class TestGitHubClientListPullRequests:
+    """Tests for list_pull_requests method."""
+
+    @responses.activate
+    def test_filters_by_head_and_state(self):
+        call = responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/os-task1-student1/pulls",
+            json=[{"html_url": "https://github.com/org/os-task1-student1/pull/1"}],
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        prs = client.list_pull_requests("org", "os-task1-student1", head="template-owner:main", state="open")
+
+        assert len(prs) == 1
+        request_params = call.calls[0].request.params
+        assert request_params["head"] == "template-owner:main"
+        assert request_params["state"] == "open"
+
+    @responses.activate
+    def test_error_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/repo/pulls",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+        assert client.list_pull_requests("org", "repo") is None
+
+
+class TestIsRateLimited:
+    """Tests for the shared is_rate_limited helper."""
+
+    @responses.activate
+    def test_retry_after_header_means_rate_limited(self):
+        responses.add(
+            responses.POST,
+            "https://api.github.com/repos/org/repo/pulls",
+            json={"message": "secondary rate limit"},
+            status=403,
+            headers={"Retry-After": "30"},
+        )
+        client = GitHubClient("test_token")
+        resp = client.create_pull_request("org", "repo", head="a:b", base="main", title="t", body="b")
+        assert is_rate_limited(resp) is True
+
+    @responses.activate
+    def test_permission_denied_is_not_rate_limited(self):
+        responses.add(
+            responses.POST,
+            "https://api.github.com/repos/org/repo/pulls",
+            json={"message": "Must have admin rights"},
+            status=403,
+        )
+        client = GitHubClient("test_token")
+        resp = client.create_pull_request("org", "repo", head="a:b", base="main", title="t", body="b")
+        assert is_rate_limited(resp) is False
+
+
 class TestCheckForbiddenModifications:
     """Tests for check_forbidden_modifications function."""
 
@@ -338,3 +590,62 @@ class TestGetDefaultForbiddenPatterns:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestGitHubClientRefs:
+    """Tests for get_ref / create_ref / update_ref (issue #52)."""
+
+    @responses.activate
+    def test_get_ref_returns_object_sha(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/template/git/ref/heads/master",
+            json={"ref": "refs/heads/master", "object": {"sha": "abc123"}},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+
+        assert client.get_ref("org", "template", "heads/master")["object"]["sha"] == "abc123"
+
+    @responses.activate
+    def test_get_ref_missing_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/template/git/ref/heads/nope",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+
+        assert client.get_ref("org", "template", "heads/nope") is None
+
+    @responses.activate
+    def test_create_ref_posts_full_ref_and_sha(self):
+        call = responses.add(
+            responses.POST,
+            "https://api.github.com/repos/org/os-task1-student1/git/refs",
+            json={"ref": "refs/heads/template-update"},
+            status=201,
+        )
+        client = GitHubClient("test_token")
+        resp = client.create_ref("org", "os-task1-student1", "refs/heads/template-update", "abc123")
+
+        assert resp.status_code == 201
+        assert json.loads(call.calls[0].request.body) == {
+            "ref": "refs/heads/template-update",
+            "sha": "abc123",
+        }
+
+    @responses.activate
+    def test_update_ref_patches_with_force(self):
+        call = responses.add(
+            responses.PATCH,
+            "https://api.github.com/repos/org/os-task1-student1/git/refs/heads/template-update",
+            json={"ref": "refs/heads/template-update"},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+        resp = client.update_ref("org", "os-task1-student1", "heads/template-update", "abc123")
+
+        assert resp.status_code == 200
+        assert json.loads(call.calls[0].request.body) == {"sha": "abc123", "force": True}

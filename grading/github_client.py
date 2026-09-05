@@ -30,10 +30,34 @@ class GitHubClientError(Exception):
     pass
 
 
+def is_rate_limited(resp: requests.Response) -> bool:
+    """
+    Detect a GitHub rate-limit response hiding behind a 403.
+
+    GitHub answers both "you don't have permission" and "you hit a
+    (secondary) rate limit" with HTTP 403 - distinguishing them matters
+    because only the second one should be reported as retryable. Shared
+    between grading/repo_provisioning.py and grading/propagate.py (issue #52
+    asked for this to live in one place instead of being duplicated).
+    """
+    if resp.headers.get("Retry-After"):
+        return True
+    if resp.headers.get("X-RateLimit-Remaining") == "0":
+        return True
+    try:
+        message = resp.json().get("message", "")
+    except ValueError:
+        message = ""
+    return "rate limit" in message.lower()
+
+
 class GitHubClient:
     """Client for GitHub API operations."""
 
     BASE_URL = "https://api.github.com"
+    # Used by the /join repo-provisioning calls below, to match the timeout already
+    # used for the OAuth requests in main.py (avoids a hung worker if api.github.com stalls).
+    DEFAULT_TIMEOUT = 10
 
     def __init__(self, token: str):
         """
@@ -175,6 +199,391 @@ class GitHubClient:
             return None
 
         return resp.json().get("check_runs", [])
+
+    def repo_exists(self, org: str, repo: str) -> bool:
+        """
+        Check if a repository exists.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+
+        Returns:
+            True if the repository exists, False otherwise
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        return resp.status_code == 200
+
+    def create_repo_from_template(
+        self,
+        template_owner: str,
+        template_repo: str,
+        owner: str,
+        name: str,
+        private: bool = True,
+    ) -> requests.Response:
+        """
+        Create a repository from a template repository.
+
+        See https://docs.github.com/en/rest/repos/repos#create-a-repository-using-a-template
+
+        Args:
+            template_owner: Owner of the template repository
+            template_repo: Name of the template repository
+            owner: Organization (or user) that will own the new repository
+            name: Name of the new repository
+            private: Whether the new repository should be private
+
+        Returns:
+            The raw requests.Response (caller inspects status_code, since
+            different non-2xx codes need different handling upstream)
+        """
+        url = f"{self.BASE_URL}/repos/{template_owner}/{template_repo}/generate"
+        headers = {**self.headers, "Accept": "application/vnd.github+json"}
+        payload = {"owner": owner, "name": name, "private": private}
+        return requests.post(url, headers=headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
+    def fork_repo(self, owner: str, repo: str, org: str, name: str) -> requests.Response:
+        """
+        Fork a repository into an organization under a chosen name.
+
+        See https://docs.github.com/en/rest/repos/forks#create-a-fork
+        Passing `name` lets several forks of the same template repository
+        coexist in one organization (the "one fork per account" limit that
+        applies without it does not apply once `name` is given).
+
+        Args:
+            owner: Owner of the repository being forked (the template)
+            repo: Name of the repository being forked (the template)
+            org: Organization that will own the new fork
+            name: Name of the new fork
+
+        Returns:
+            The raw requests.Response (expected success is 202 Accepted -
+            fork creation is asynchronous on GitHub's side)
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/forks"
+        payload = {"organization": org, "name": name}
+        return requests.post(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
+    def get_repo(self, owner: str, repo: str) -> dict | None:
+        """
+        Get repository details.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+
+        Returns:
+            Repository dict from the GitHub API, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
+    def update_repo(self, owner: str, repo: str, payload: dict) -> requests.Response:
+        """
+        Update repository settings.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            payload: Fields to update, e.g. {"is_template": False}
+
+        Returns:
+            The raw requests.Response
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}"
+        return requests.patch(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
+    def enable_actions(self, owner: str, repo: str) -> requests.Response:
+        """
+        Enable GitHub Actions for a repository.
+
+        Forks have Actions disabled by default and the disabled state isn't
+        visible through the API (GET .../actions/permissions reports
+        enabled=True even while the "workflows aren't being run" banner is
+        still up), so callers must call this unconditionally after forking
+        rather than checking first.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+
+        Returns:
+            The raw requests.Response
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/actions/permissions"
+        return requests.put(url, headers=self.headers, json={"enabled": True}, timeout=self.DEFAULT_TIMEOUT)
+
+    def _get_all_pages(self, url: str, params: dict | None = None) -> list[dict[str, Any]] | None:
+        """
+        Follow GitHub's `per_page`/page pagination and collect every item.
+
+        GitHub defaults to 30 items per page - without paging through, a
+        course with 200 students would silently lose most of the forks/repos
+        (see issue #52). Stops once a page comes back with fewer than
+        `per_page` items (the standard "last page" signal).
+
+        Returns:
+            All items across every page, or None if any page request failed
+        """
+        per_page = 100
+        items: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            resp = requests.get(
+                url,
+                headers=self.headers,
+                params={**(params or {}), "per_page": per_page, "page": page},
+                timeout=self.DEFAULT_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                return None
+            page_items = resp.json()
+            items.extend(page_items)
+            if len(page_items) < per_page:
+                return items
+            page += 1
+
+    def list_forks(self, owner: str, repo: str) -> list[dict[str, Any]] | None:
+        """
+        List all forks of a repository (all pages).
+
+        See https://docs.github.com/en/rest/repos/forks#list-forks
+
+        Args:
+            owner: Owner of the (template) repository
+            repo: Name of the (template) repository
+
+        Returns:
+            List of fork repo dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/forks"
+        return self._get_all_pages(url)
+
+    def list_org_repos(self, org: str) -> list[dict[str, Any]] | None:
+        """
+        List all repositories owned by an organization (all pages).
+
+        See https://docs.github.com/en/rest/repos/repos#list-organization-repositories
+
+        Args:
+            org: Organization name
+
+        Returns:
+            List of repo dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/orgs/{org}/repos"
+        return self._get_all_pages(url)
+
+    def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        head: str,
+        base: str,
+        title: str,
+        body: str,
+    ) -> requests.Response:
+        """
+        Open a pull request in a repository.
+
+        See https://docs.github.com/en/rest/pulls/pulls#create-a-pull-request
+
+        Args:
+            owner: Organization (or user) that owns the repository the PR is opened in
+            repo: Name of the repository the PR is opened in
+            head: Branch to merge from, as "owner:branch" for a cross-repo PR
+                (e.g. the template's owner:default_branch when opening into a fork)
+            base: Branch to merge into (the target repo's default branch)
+            title: PR title
+            body: PR body
+
+        Returns:
+            The raw requests.Response (caller inspects status_code - 201 is
+            success, 422 covers both "up to date" and "PR already exists",
+            see grading/propagate.py)
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/pulls"
+        payload = {"head": head, "base": base, "title": title, "body": body}
+        return requests.post(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
+    def list_pull_requests(
+        self,
+        owner: str,
+        repo: str,
+        head: str | None = None,
+        state: str = "open",
+    ) -> list[dict[str, Any]] | None:
+        """
+        List pull requests in a repository (all pages).
+
+        See https://docs.github.com/en/rest/pulls/pulls#list-pull-requests
+
+        Args:
+            owner: Organization (or user) that owns the repository
+            repo: Repository name
+            head: Optional filter, as "owner:branch" (see create_pull_request)
+            state: PR state filter ("open", "closed", or "all")
+
+        Returns:
+            List of pull request dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/pulls"
+        params: dict[str, Any] = {"state": state}
+        if head is not None:
+            params["head"] = head
+        return self._get_all_pages(url, params=params)
+
+    def get_ref(self, owner: str, repo: str, ref: str) -> dict[str, Any] | None:
+        """
+        Read a single git reference.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            ref: Reference without the "refs/" prefix, e.g. "heads/master"
+
+        Returns:
+            The reference dict (its `object.sha` is the branch tip), or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/git/ref/{ref}"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
+    def create_ref(self, owner: str, repo: str, ref: str, sha: str) -> requests.Response:
+        """
+        Create a git reference pointing at an existing commit.
+
+        Used to place the template's tip commit into a student fork as a
+        branch: repositories in one fork network share object storage, so a
+        commit that only exists in the template can be referenced from the
+        fork (issue #52). For a repo created with `generate` instead of a
+        fork, the object isn't there and GitHub answers 422 "Object does
+        not exist".
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            ref: Full reference name, e.g. "refs/heads/template-update"
+            sha: Commit the reference should point at
+
+        Returns:
+            The raw requests.Response (201 on success, 422 if the reference
+            already exists or the object is unknown)
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/git/refs"
+        payload = {"ref": ref, "sha": sha}
+        return requests.post(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
+    def update_ref(
+        self,
+        owner: str,
+        repo: str,
+        ref: str,
+        sha: str,
+        force: bool = True,
+    ) -> requests.Response:
+        """
+        Move an existing git reference to another commit.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            ref: Reference without the "refs/" prefix, e.g. "heads/template-update"
+            sha: Commit the reference should point at
+            force: Allow a non-fast-forward update
+
+        Returns:
+            The raw requests.Response (200 on success)
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/git/refs/{ref}"
+        payload = {"sha": sha, "force": force}
+        return requests.patch(url, headers=self.headers, json=payload, timeout=self.DEFAULT_TIMEOUT)
+
+    def is_direct_collaborator(self, org: str, repo: str, username: str) -> bool:
+        """
+        Check whether a user already has direct collaborator access to a repository.
+
+        Note: GitHub's docs don't document an `affiliation` param for this
+        single-user "check collaborator" endpoint (only for the list-collaborators
+        one) - it's used here anyway per docs/REPO_GENERATION_PLAN.md §4, which
+        specifies this exact call. It's harmless for the current one-student-one-repo
+        model; a future team-lab variant relying on "direct only" here should
+        double check GitHub's actual behavior first.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            username: GitHub username to check
+
+        Returns:
+            True if the user is a collaborator (204 response)
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators/{username}"
+        resp = requests.get(
+            url, headers=self.headers, params={"affiliation": "direct"}, timeout=self.DEFAULT_TIMEOUT
+        )
+        return resp.status_code == 204
+
+    def list_invitations(self, org: str, repo: str) -> list[dict[str, Any]] | None:
+        """
+        List pending repository invitations.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+
+        Returns:
+            List of invitation dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/invitations"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
+    def delete_invitation(self, org: str, repo: str, invitation_id: int) -> bool:
+        """
+        Cancel a pending repository invitation.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            invitation_id: ID of the invitation to delete
+
+        Returns:
+            True if the invitation was deleted
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/invitations/{invitation_id}"
+        resp = requests.delete(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        return resp.status_code == 204
+
+    def add_collaborator(self, org: str, repo: str, username: str) -> requests.Response:
+        """
+        Invite (or directly add) a user as a repository collaborator.
+
+        A fresh PUT after deleting a stale pending invitation is what actually
+        re-sends the GitHub notification email - re-PUTting without deleting
+        the old invitation first is a no-op for the notification.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            username: GitHub username to invite
+
+        Returns:
+            The raw requests.Response (201 = invitation created,
+            204 = user already had access and was added directly)
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators/{username}"
+        return requests.put(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
     def get_job_logs(self, org: str, repo: str, job_id: int) -> str | None:
         """

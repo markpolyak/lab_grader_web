@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
 import { Select, MenuItem } from "@mui/material";
@@ -33,6 +34,7 @@ import {
 
 export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   const { t, i18n } = useTranslation();
+  const navigate = useNavigate();
 
   const [courses, setCourses] = useState([]);
   const [courseStatus, setCourseStatus] = useState("active"); // "active", "archived", "all"
@@ -470,6 +472,13 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                     style={{ backgroundColor: colors.edit, color: "#fff" }}
                   >
                     {t("edit")}
+                  </Button>
+
+                  <Button
+                    onClick={() => navigate(`/admin/courses/${course.id}/labs`)}
+                    style={{ backgroundColor: colors.buttonBackground, color: "#fff" }}
+                  >
+                    {t("manageLabs")}
                   </Button>
 
                   <Button
