@@ -653,12 +653,6 @@ def register_student(request: Request, course_id: str, group_id: str, student: S
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
 
-def normalize_lab_id(lab_id: str) -> str:
-    """Возвращает нормализованную строку вида ЛР1, ЛР2 и т.д."""
-    number = parse_lab_id(lab_id)
-    return f"ЛР{number}"
-
-
 class GradeRequest(BaseModel):
     github: str = Field(..., min_length=1)
 
