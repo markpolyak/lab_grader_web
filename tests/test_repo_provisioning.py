@@ -2,6 +2,7 @@
 Tests for grading.repo_provisioning.RepoProvisioner (student repo creation,
 see docs/REPO_GENERATION_PLAN.md §4 and §10).
 """
+import json
 import sys
 import os
 from unittest.mock import patch
@@ -652,6 +653,46 @@ class TestCreateFromFork:
 
         assert result.status == ProvisionStatus.ERROR
         assert result.error_code == "ACTIONS_ENABLE_FAILED"
+
+    @responses.activate
+    def test_fork_repair_clears_template_flag_and_forbids_forking(self):
+        """Студент, форкнувший свой репозиторий в личный аккаунт, дальше пушил бы
+        туда, а grade_lab смотрит только на {org}/{prefix}-{username} - работа
+        выглядела бы несданной. Обе настройки уходят одним PATCH."""
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.POST, urls["forks"], json={}, status=202)
+        responses.add(responses.GET, urls["repo"], status=200)
+        responses.add(responses.PUT, urls["actions"], status=204)
+        patch_call = responses.add(responses.PATCH, urls["repo"], json={}, status=200)
+        add_access_mocks(urls)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK
+        assert patch_call.call_count == 1
+        assert json.loads(patch_call.calls[0].request.body) == {
+            "is_template": False,
+            "allow_forking": False,
+        }
+
+    @responses.activate
+    def test_existing_fork_also_gets_forking_disabled(self):
+        """Повторный заход студента чинит и уже существующий репозиторий."""
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=200)  # уже существует
+        responses.add(
+            responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
+        )
+        responses.add(responses.PUT, urls["actions"], status=204)
+        patch_call = responses.add(responses.PATCH, urls["repo"], json={}, status=200)
+        add_access_mocks(urls, existing=True)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK
+        assert json.loads(patch_call.calls[0].request.body)["allow_forking"] is False
 
     @responses.activate
     def test_is_template_clear_failure_is_not_fatal(self):

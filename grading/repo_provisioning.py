@@ -357,7 +357,7 @@ class RepoProvisioner:
 
     def _repair_fork(self, org: str, repo_name: str) -> ProvisionResult | None:
         """
-        Fix the two fork side-effects that would otherwise break grading.
+        Bring a fork into the shape grading expects.
 
         Runs for every fork the flow touches, freshly created or pre-existing:
         the enabled state of Actions isn't readable through the API, so there
@@ -380,12 +380,20 @@ class RepoProvisioner:
                 error_code="ACTIONS_ENABLE_FAILED",
             )
 
-        # Clearing the inherited "template repository" flag is cosmetic only -
-        # log and move on rather than failing an otherwise-working repo over it.
-        update_resp = self.github.update_repo(org, repo_name, {"is_template": False})
+        # Two settings in one PATCH:
+        #   is_template - the fork inherits the template flag, cosmetic but confusing;
+        #   allow_forking - a student forking their own repository into their personal
+        #     account would push there, and grade_lab only ever looks at
+        #     {org}/{prefix}-{username}, so the work would look undone. Applies to
+        #     private repositories, which fork mode guarantees (the template must be
+        #     private, and a fork inherits its visibility).
+        # Neither is worth failing an otherwise-working repository over - log and move on.
+        update_resp = self.github.update_repo(
+            org, repo_name, {"is_template": False, "allow_forking": False}
+        )
         if update_resp.status_code != 200:
             logger.error(
-                f"Failed to clear is_template flag on {org}/{repo_name}: "
+                f"Failed to clear is_template / allow_forking on {org}/{repo_name}: "
                 f"{update_resp.status_code} {update_resp.text[:500]}"
             )
 
