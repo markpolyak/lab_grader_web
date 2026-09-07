@@ -34,6 +34,11 @@ ADMIN_PASSWORD=...        # Admin panel password
 SECRET_KEY=...            # Cookie signing key
 LOG_DIR=/app/logs         # Log directory (optional)
 LOG_LEVEL=INFO            # Logging level (optional)
+
+# Optional: only needed for /join/... (student repo auto-creation, see docs/REPO_GENERATION_PLAN.md)
+GITHUB_OAUTH_CLIENT_ID=...
+GITHUB_OAUTH_CLIENT_SECRET=...
+FRONTEND_URL=http://localhost:8080
 ```
 
 ## Key Conventions
@@ -95,6 +100,23 @@ labs:
 - Output format matches Google Sheets locale (e.g., `10.5` for en_US, `10,5` for ru_RU)
 - If score patterns configured but not found in logs → error
 - If score patterns not configured → no score extraction (backward compatible)
+
+## Student Repo Auto-Creation (`/join/...`)
+
+Replaces GitHub Classroom's "assignment link" flow (see `docs/REPO_GENERATION_PLAN.md` for full design):
+`GET /join/{course_id}/{lab_id}` lands the student on a page with a "Sign in with GitHub" button;
+`/join/{course_id}/{lab_id}/start` and `/join/callback` drive a GitHub OAuth Web Application Flow
+(username is only ever taken from the verified `GET /user` response, never from the frontend) and then
+create the student's repo from the lab's `template-repo` and fix up collaborator access, using the
+server's `GITHUB_TOKEN` - not the student's OAuth token. Orchestration lives in
+`grading/repo_provisioning.py` (`RepoProvisioner`), mirroring `grading/grader.py`'s `LabGrader`.
+Requires a GitHub OAuth App registered by the teacher (not the student) - see `.env.example`.
+
+Labs with `repo-provisioning: fork` (see `docs/COURSE_CONFIG.md`) can later have template updates propagated
+to every student fork as pull requests, from the admin lab list page (`/admin/courses/{course_id}/labs`).
+Orchestration lives in `grading/propagate.py` (in-memory job state, single-worker backend required - see
+`docs/PROJECT_DESCRIPTION.md`). All `/admin/...` and course-management routes require the `require_admin`
+FastAPI dependency in `main.py`, not just the frontend's `ProtectedRoute`.
 
 ## CI/CD
 

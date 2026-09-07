@@ -23,5 +23,98 @@
   "information": "Information",
   "activeCourses": "Active Courses",
   "archivedCourses": "Archived Courses",
-  "allCourses": "All Courses"
+  "allCourses": "All Courses",
+  "manageLabs": "Labs",
+  "adminLabs": {
+    "back": "← Back to courses",
+    "title": "Course labs",
+    "loading": "Loading labs…",
+    "errorLoadingLabs": "Could not load the list of labs",
+    "columns": {
+      "number": "#",
+      "shortName": "Name",
+      "githubPrefix": "github-prefix",
+      "templateRepo": "template-repo",
+      "provisioning": "Repository creation",
+      "actions": "Actions"
+    },
+    "provisioningTemplate": "template",
+    "provisioningFork": "fork",
+    "updateButton": "Update student repositories",
+    "disabledReason": "Only available for labs with repo-provisioning: fork and a template-repo set",
+    "dryRun": {
+      "title": "Preview update rollout",
+      "summary": "{{count}} student repositories will receive an update proposal",
+      "notAFork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected",
+      "selectAll": "Select all",
+      "selectedCount": "Selected {{selected}} of {{total}}",
+      "cancel": "Cancel",
+      "confirm": "Send the update ({{count}})",
+      "statusWillProcess": "will be processed",
+      "statusNotAFork": "not a template fork"
+    },
+    "progress": {
+      "title": "Update rollout",
+      "inProgress": "Processed {{processed}} of {{total}}",
+      "done": "Rollout finished",
+      "failed": "Rollout failed",
+      "close": "Close",
+      "columns": {
+        "repo": "Repository",
+        "status": "Status",
+        "link": "Link"
+      },
+      "openPr": "Open PR",
+      "statuses": {
+        "pr_created": "PR created",
+        "up_to_date": "already up to date",
+        "pr_exists": "PR already open",
+        "not_a_fork": "not a template fork",
+        "error": "error"
+      }
+    },
+    "errors": {
+      "dryRunFailed": "Could not load the rollout preview. Please try again.",
+      "startFailed": "Could not start the update rollout. Please try again.",
+      "alreadyRunning": "An update rollout for this lab is already running."
+    }
+  },
+  "join": {
+    "back": "← Back",
+    "language": "Interface language",
+    "title": "Get your lab repository",
+    "loading": "Loading lab settings…",
+    "course": "Course",
+    "lab": "Lab",
+    "description": "Sign in with GitHub. The service will create a private repository from the template or restore access to an existing repository.",
+    "signIn": "Sign in with GitHub",
+    "redirecting": "Redirecting to GitHub…",
+    "successTitle": "Your repository is ready",
+    "successDescription": "Open the repository. If the invitation is still pending, GitHub will offer to accept it on that page.",
+    "usernameLabel": "GitHub",
+    "openRepository": "Open repository",
+    "errorTitle": "Could not prepare the repository",
+    "errors": {
+      "oauthDenied": "You cancelled GitHub authorization. You can try again.",
+      "oauthFailed": "GitHub could not confirm the sign-in. Start authorization again.",
+      "oauthNotConfigured": "The teacher has not configured GitHub sign-in for this service yet.",
+      "oauthStateExpired": "The GitHub sign-in has expired. Return to the lab link and try again.",
+      "notFound": "The course or lab was not found. Check the link.",
+      "notConfigured": "A template repository has not been configured for this lab.",
+      "templateUnavailable": "The template repository is not accessible to the server. Contact the teacher.",
+      "repositoryFailed": "The repository could not be created or checked. Please try again.",
+      "createForbidden": "Not enough permissions to create the repository. Please contact your teacher.",
+      "accessFailed": "The repository is ready, but its current invitation could not be checked. Please try again.",
+      "invitationFailed": "The repository invitation could not be sent. Try later or contact the teacher.",
+      "rateLimit": "GitHub temporarily limited requests or invitations. Please try again later.",
+      "githubUnavailable": "GitHub could not be reached. Check the connection and try again.",
+      "invalidRepositoryLink": "The server returned an invalid repository link. Start again.",
+      "templateMustBePrivate": "The template repository is misconfigured. Contact the teacher.",
+      "forkTimeout": "GitHub is still creating the repository. Refresh the page in a minute.",
+      "actionsEnableFailed": "Could not enable checks in the repository. Contact the teacher.",
+      "nameTaken": "A repository with this name is already taken. Contact the teacher.",
+      "forkCheckFailed": "Could not verify the repository. Please try again in a few minutes.",
+      "unknown": "An unexpected error occurred. Try again or contact the teacher."
+    }
+  }
 }
