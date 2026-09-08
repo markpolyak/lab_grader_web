@@ -80,8 +80,14 @@ from .repo_provisioning import (
 from .teams import (
     TeamConfig,
     TeamConfigError,
+    TeamInfo,
+    TeamRegistry,
+    TEAMS_CACHE_TTL_SECONDS,
+    TEAM_SLUG_RE,
     is_team_lab,
     parse_team_config,
+    parse_description,
+    reset_teams_state,
 )
 
 from .propagate import (
@@ -177,8 +183,14 @@ __all__ = [
     # teams
     "TeamConfig",
     "TeamConfigError",
+    "TeamInfo",
+    "TeamRegistry",
+    "TEAMS_CACHE_TTL_SECONDS",
+    "TEAM_SLUG_RE",
     "is_team_lab",
     "parse_team_config",
+    "parse_description",
+    "reset_teams_state",
     # propagate
     "PropagateJob",
     "PropagateResult",

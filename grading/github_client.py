@@ -572,9 +572,10 @@ class GitHubClient:
         Note: GitHub's docs don't document an `affiliation` param for this
         single-user "check collaborator" endpoint (only for the list-collaborators
         one) - it's used here anyway per docs/REPO_GENERATION_PLAN.md §4, which
-        specifies this exact call. It's harmless for the current one-student-one-repo
-        model; a future team-lab variant relying on "direct only" here should
-        double check GitHub's actual behavior first.
+        specifies this exact call. Team labs deliberately do NOT count a roster
+        with it: list_collaborators below takes the documented `affiliation`
+        param, and this one stays what it always was - a quick "does this user
+        already have access" check before issuing an invitation.
 
         Args:
             org: Organization or user name
@@ -589,6 +590,32 @@ class GitHubClient:
             url, headers=self.headers, params={"affiliation": "direct"}, timeout=self.DEFAULT_TIMEOUT
         )
         return resp.status_code == 204
+
+    def list_collaborators(
+        self,
+        org: str,
+        repo: str,
+        affiliation: str = "direct",
+    ) -> list[dict[str, Any]] | None:
+        """
+        List a repository's collaborators (all pages).
+
+        See https://docs.github.com/en/rest/collaborators/collaborators
+        Used to read a team's roster: `affiliation` is documented for this
+        endpoint (unlike the single-user check above), and each entry carries
+        a `permissions` object, which is what separates students (push) from
+        organization owners (admin).
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            affiliation: "direct" (default), "outside" or "all"
+
+        Returns:
+            List of collaborator dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators"
+        return self._get_all_pages(url, params={"affiliation": affiliation})
 
     def list_invitations(self, org: str, repo: str) -> list[dict[str, Any]] | None:
         """

@@ -497,3 +497,203 @@ class TestJoinSession:
         with pytest.raises(HTTPException) as exc_info:
             main_module.require_join_session(self._request_with_cookie(cookie), "test-course", "1")
         assert exc_info.value.status_code == 401
+
+
+@pytest.fixture
+def team_course_config(join_course_config):
+    """join_course_config with lab '1' turned into a team lab."""
+    join_course_config["labs"]["1"]["team"] = {"size-max": 3, "count-max": 2}
+    join_course_config["github"]["teachers"] = ["Mark Polyak", "teacher1"]
+    return join_course_config
+
+
+@pytest.fixture(autouse=True)
+def clean_teams_state():
+    from grading.teams import reset_teams_state
+
+    reset_teams_state()
+    yield
+    reset_teams_state()
+
+
+def _session_request(username="student1", course_id="test-course", lab_id="1"):
+    """A Request carrying a valid join_session cookie."""
+    from starlette.requests import Request
+
+    cookie = main_module._build_join_session(username, course_id, lab_id)
+    scope = {
+        "type": "http", "method": "GET", "path": "/join",
+        "headers": [(b"cookie", f"join_session={cookie}".encode())],
+        "client": ("127.0.0.1", 12345),
+    }
+    request = Request(scope, lambda: None)
+    request.state.view_rate_limit = None
+    return request
+
+
+def _team_repo_responses(org="test-org", prefix="test-task1"):
+    """Register org repos plus a roster for two teams."""
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/orgs/{org}/repos",
+        json=[
+            {"name": f"{prefix}-team-1", "description": "Пингвины — учим планировщик"},
+            {"name": f"{prefix}-team-2", "description": "Тюлени"},
+            {"name": f"{prefix}-student9", "description": "личный репозиторий"},
+        ],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{org}/{prefix}-team-1/collaborators",
+        json=[
+            {"login": "alice", "permissions": {"push": True, "admin": False}},
+            {"login": "teacher1", "permissions": {"push": True, "admin": True}},
+        ],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{org}/{prefix}-team-1/invitations",
+        json=[{"id": 1, "invitee": {"login": "carol"}}],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{org}/{prefix}-team-2/collaborators",
+        json=[{"login": "student1", "permissions": {"push": True, "admin": False}}],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{org}/{prefix}-team-2/invitations",
+        json=[],
+        status=200,
+    )
+
+
+class TestJoinLabTeams:
+    """GET /join/{course}/{lab}/teams (§8.2 of the team plan)."""
+
+    @responses.activate
+    def test_lists_teams_with_rosters(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert data["username"] == "student1"
+        assert data["size_max"] == 3 and data["count_max"] == 2
+        assert [team["slug"] for team in data["teams"]] == ["team-1", "team-2"]
+
+        first = data["teams"][0]
+        assert first["title"] == "Пингвины"
+        assert first["description"] == "учим планировщик"
+        # The organization owner (admin) and the teacher stay out of the roster
+        assert first["members"] == ["alice"]
+        assert first["pending"] == ["carol"]
+        assert first["size"] == 2
+
+    @responses.activate
+    def test_repo_url_only_for_my_own_team(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert data["my_team"] == "team-2"
+        assert data["teams"][0]["repo_url"] is None
+        assert data["teams"][0]["is_mine"] is False
+        assert data["teams"][1]["repo_url"] == "https://github.com/test-org/test-task1-team-2"
+        assert data["teams"][1]["is_mine"] is True
+
+    @responses.activate
+    def test_member_of_a_team_cannot_create_another(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request(), "test-course", "1")
+        assert data["can_create"] is False
+
+    @responses.activate
+    def test_count_max_closes_creation(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request("dave"), "test-course", "1")
+
+        assert data["my_team"] is None
+        # count-max is 2 and two teams already exist
+        assert data["can_create"] is False
+
+    @responses.activate
+    def test_stranger_can_create_while_below_count_max(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request("dave"), "test-course", "1")
+        assert data["can_create"] is True
+
+    @responses.activate
+    def test_is_full_reflects_size_max(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["size-max"] = 2
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request("dave"), "test-course", "1")
+
+        assert data["teams"][0]["is_full"] is True   # alice + pending carol
+        assert data["teams"][1]["is_full"] is False
+
+    @responses.activate
+    def test_repeat_request_within_ttl_does_not_hit_github_again(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            main_module.join_lab_teams(_session_request(), "test-course", "1")
+            calls_after_first = len(responses.calls)
+            main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert len(responses.calls) == calls_after_first
+
+    @responses.activate
+    def test_unavailable_org_repos_return_502(self, team_course_config):
+        responses.add(responses.GET, "https://api.github.com/orgs/test-org/repos", status=500)
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail == "TEAMS_UNAVAILABLE"
+
+    def test_without_a_session_returns_401(self, team_course_config, mock_request):
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_teams(mock_request, "test-course", "1")
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "SESSION_REQUIRED"
+
+    def test_session_of_another_lab_returns_401(self, team_course_config):
+        request = _session_request(lab_id="2")
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_teams(request, "test-course", "1")
+
+        assert exc_info.value.status_code == 401
+
+    def test_individual_lab_returns_not_a_team_lab(self, join_course_config):
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "NOT_A_TEAM_LAB"
+
+    @responses.activate
+    def test_teams_count_appears_in_the_public_info_after_a_read(
+        self, team_course_config, mock_request
+    ):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            before = main_module.join_lab_info(mock_request, "test-course", "1")
+            assert before["team"]["teams_count"] is None
+
+            main_module.join_lab_teams(_session_request(), "test-course", "1")
+            after = main_module.join_lab_info(mock_request, "test-course", "1")
+
+        assert after["team"]["teams_count"] == 2

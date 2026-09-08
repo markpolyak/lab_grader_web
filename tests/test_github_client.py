@@ -741,3 +741,46 @@ class TestGitHubClientRefs:
 
         assert resp.status_code == 200
         assert json.loads(call.calls[0].request.body) == {"sha": "abc123", "force": True}
+
+
+class TestListCollaborators:
+    """Roster reading for team labs (docs/TEAM_ASSIGNMENTS_PLAN.md §9.2)."""
+
+    @responses.activate
+    def test_returns_collaborators_with_permissions(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/os-task5-team-1/collaborators",
+            json=[
+                {"login": "alice", "permissions": {"push": True, "admin": False}},
+                {"login": "owner", "permissions": {"push": True, "admin": True}},
+            ],
+            status=200,
+        )
+        client = GitHubClient("test_token")
+
+        result = client.list_collaborators("test-org", "os-task5-team-1")
+
+        assert [entry["login"] for entry in result] == ["alice", "owner"]
+        assert responses.calls[0].request.params["affiliation"] == "direct"
+
+    @responses.activate
+    def test_affiliation_is_passed_through(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/repo/collaborators",
+            json=[],
+            status=200,
+        )
+        GitHubClient("test_token").list_collaborators("test-org", "repo", affiliation="all")
+
+        assert responses.calls[0].request.params["affiliation"] == "all"
+
+    @responses.activate
+    def test_error_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/repo/collaborators",
+            status=404,
+        )
+        assert GitHubClient("test_token").list_collaborators("test-org", "repo") is None

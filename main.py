@@ -51,6 +51,8 @@ from grading import (
     run_bulk_grading,
     TeamConfig,
     TeamConfigError,
+    TeamInfo,
+    TeamRegistry,
     is_team_lab,
     parse_team_config,
 )
@@ -1149,7 +1151,16 @@ def _exchange_code_for_username(code: str, redirect_uri: str) -> str | None:
 @limiter.limit("30/minute")
 def join_lab_info(request: Request, course_id: str, lab_id: str):
     """Публичная информация для лендинга страницы присоединения к лабе (без аутентификации)."""
-    course_info, lab_config, _org, team_config = _load_lab_for_join(course_id, lab_id)
+    course_info, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
+
+    teams_count = None
+    if team_config is not None:
+        # Read from the cache only, never fetching: this endpoint is public
+        # and unauthenticated, and the count is decorative - the authenticated
+        # /teams endpoint below is what actually collects the teams (§8.1).
+        cached = _team_registry().cached_teams(org, lab_config.get("github-prefix", ""))
+        teams_count = len(cached) if cached is not None else None
+
     return {
         "course_id": course_id,
         "lab_id": lab_id,
@@ -1161,7 +1172,7 @@ def join_lab_info(request: Request, course_id: str, lab_id: str):
             "enabled": team_config is not None,
             "size_max": team_config.size_max if team_config else None,
             "count_max": team_config.count_max if team_config else None,
-            "teams_count": None,
+            "teams_count": teams_count,
         },
     }
 
@@ -1264,6 +1275,140 @@ def join_callback(
     return RedirectResponse(
         url=_join_result_redirect(course_id, lab_id, "success", repo_url=result.repo_url, username=username)
     )
+
+
+# ---------------------------------------------------------------------------
+# /join: team (group) lab assignments - one repository per team
+# See docs/TEAM_ASSIGNMENTS_PLAN.md for the full design.
+# ---------------------------------------------------------------------------
+
+
+def _team_registry() -> TeamRegistry:
+    """TeamRegistry on the server's token - never the student's OAuth token."""
+    return TeamRegistry(GitHubClient(GITHUB_TOKEN))
+
+
+def _course_teachers(course_info: dict) -> list[str]:
+    """`course.github.teachers` - a mixed list of names and GitHub logins."""
+    teachers = course_info.get("github", {}).get("teachers") or []
+    return [str(entry) for entry in teachers if entry]
+
+
+def _load_team_lab(course_id: str, lab_id: str) -> tuple[dict, dict, str, TeamConfig]:
+    """
+    Like _load_lab_for_join, but only for a lab that really is a team lab.
+
+    Raises:
+        HTTPException(400): NOT_A_TEAM_LAB for an individual lab, or
+        LAB_NOT_CONFIGURED when the lab has no github-prefix to build team
+        repository names from
+    """
+    course_info, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
+    if team_config is None:
+        raise HTTPException(status_code=400, detail="NOT_A_TEAM_LAB")
+    if not lab_config.get("github-prefix"):
+        raise HTTPException(status_code=400, detail="LAB_NOT_CONFIGURED")
+    return course_info, lab_config, org, team_config
+
+
+# Provisioning failures that a student can retry (GitHub-side or transient)
+# answer 502; the rest are configuration mistakes and answer 400.
+_TEAM_GATEWAY_ERROR_CODES = {
+    "TEAMS_UNAVAILABLE",
+    "RATE_LIMITED",
+    "CREATE_FAILED",
+    "FORK_TIMEOUT",
+    "FORK_CHECK_FAILED",
+    "ACTIONS_ENABLE_FAILED",
+    "INVITATIONS_FETCH_FAILED",
+    "REINVITE_DELETE_FAILED",
+    "INVITE_FAILED",
+    "PROVISION_FAILED",
+}
+
+# Codes with an HTTP status of their own (§8.3 of the plan).
+_TEAM_ERROR_STATUS = {
+    "NOT_A_TEAM_LAB": 400,
+    "INVALID_TITLE": 400,
+    "LAB_NOT_CONFIGURED": 400,
+    "TEAM_LIMIT_REACHED": 403,
+    "TEAM_NOT_FOUND": 404,
+    "ALREADY_IN_TEAM": 409,
+    "TEAM_FULL": 409,
+    "TITLE_TAKEN": 409,
+    "SLUG_RACE": 409,
+}
+
+
+def _team_error_status(error_code: str | None) -> int:
+    if error_code in _TEAM_ERROR_STATUS:
+        return _TEAM_ERROR_STATUS[error_code]
+    return 502 if error_code in _TEAM_GATEWAY_ERROR_CODES else 400
+
+
+def _team_payload(team: TeamInfo, is_mine: bool, size_max: int | None) -> dict:
+    """
+    One team as the student's picker sees it.
+
+    `repo_url` is only filled in for the student's own team: a link to a
+    private repository they have no access to is useless and misleading.
+    Member logins are shown - they are public GitHub identifiers, and they are
+    how a student recognizes their groupmates' team. Full names are not: the
+    /join flow does not know the student's group and never opens the
+    spreadsheet.
+    """
+    return {
+        "slug": team.slug,
+        "title": team.title,
+        "description": team.description,
+        "members": list(team.members),
+        "pending": list(team.pending),
+        "size": team.size,
+        "is_full": size_max is not None and team.size >= size_max,
+        "is_mine": is_mine,
+        "members_unknown": team.members_unknown,
+        "repo_url": team.repo_url if is_mine else None,
+    }
+
+
+@app.get("/join/{course_id}/{lab_id}/teams")
+@limiter.limit("30/minute")
+def join_lab_teams(request: Request, course_id: str, lab_id: str):
+    """Список команд лабы, команда студента и лимиты (см. §8.2 плана)."""
+    course_info, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    username = require_join_session(request, course_id, lab_id)
+
+    registry = _team_registry()
+    teams = registry.list_teams(
+        org, lab_config["github-prefix"], _course_teachers(course_info)
+    )
+    if teams is None:
+        raise HTTPException(status_code=502, detail="TEAMS_UNAVAILABLE")
+
+    my_team = registry.find_member_team(teams, username)
+
+    return {
+        "course_id": course_id,
+        "lab_id": lab_id,
+        "course_name": course_info.get("name", "Unknown"),
+        "lab_short_name": lab_config.get("short-name", lab_id),
+        "username": username,
+        "size_max": team_config.size_max,
+        "count_max": team_config.count_max,
+        "can_create": (
+            my_team is None
+            and (team_config.count_max is None or len(teams) < team_config.count_max)
+        ),
+        "my_team": my_team.slug if my_team else None,
+        "teams": [
+            _team_payload(
+                team,
+                is_mine=my_team is not None and team.slug == my_team.slug,
+                size_max=team_config.size_max,
+            )
+            for team in teams
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------
