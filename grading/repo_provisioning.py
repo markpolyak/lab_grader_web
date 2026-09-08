@@ -60,24 +60,31 @@ class RepoProvisioner:
         template_repo: str,
         repo_suffix: str,
         mode: str = "template",
+        access_username: str | None = None,
     ) -> ProvisionResult:
         """
         Ensure `{github_prefix}-{repo_suffix}` exists in `org` (created from
         `template_repo` if missing) and that the student has collaborator
         access to it.
 
-        `repo_suffix` is named generically (not `username`) so that a future
-        team-lab variant could pass a team name instead - the algorithm below
-        always handles exactly one suffix per call either way (see
-        docs/REPO_GENERATION_PLAN.md §9).
+        `repo_suffix` is named generically (not `username`) because a team lab
+        passes a team slug here instead - the algorithm below always handles
+        exactly one suffix per call either way (see
+        docs/REPO_GENERATION_PLAN.md §9). For an individual lab the suffix and
+        the student's username are the same value, which is why
+        `access_username` is optional and defaults to the suffix; a team lab
+        passes the two separately (docs/TEAM_ASSIGNMENTS_PLAN.md §9.1).
 
         Args:
             org: GitHub organization that owns student repositories
             github_prefix: Repo name prefix from lab config
             template_repo: Template repository as "owner/repo"
-            repo_suffix: Suffix identifying the student (their GitHub username)
+            repo_suffix: Suffix identifying the repository - the student's
+                GitHub username, or a team slug like "team-3"
             mode: "template" (default, current behavior - GitHub's `generate`
                 API) or "fork" (a real fork of the template, see issue #51)
+            access_username: Student to grant access to. Defaults to
+                `repo_suffix`, preserving the individual-lab behavior.
 
         Returns:
             ProvisionResult describing success or the specific failure
@@ -97,7 +104,7 @@ class RepoProvisioner:
         if create_error:
             return create_error
 
-        access_error = self._ensure_access(org, repo_name, repo_suffix)
+        access_error = self._ensure_access(org, repo_name, access_username or repo_suffix)
         if access_error:
             return access_error
 

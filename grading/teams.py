@@ -21,9 +21,10 @@ import re
 import threading
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 
 from .github_client import GitHubClient
-from .repo_provisioning import RepoProvisioner
+from .repo_provisioning import RepoProvisioner, ProvisionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,12 @@ TEAM_SLUG_RE = re.compile(r"^team-\d+$")
 # group of 30 students opening the picker page at once then costs one set of
 # GitHub requests instead of thirty.
 TEAMS_CACHE_TTL_SECONDS = 30
+
+# Title/description limits (docs/TEAM_ASSIGNMENTS_PLAN.md §3.4). The composed
+# string stays well below GitHub's 350-character limit on `description`.
+TITLE_MIN_LENGTH = 3
+TITLE_MAX_LENGTH = 60
+DESCRIPTION_MAX_LENGTH = 200
 
 # Separates the title from the description inside the repository description.
 # Space, em dash (U+2014), space.
@@ -111,6 +118,64 @@ def parse_team_config(lab_config: dict) -> TeamConfig | None:
 # Team title and description
 # ---------------------------------------------------------------------------
 
+class TeamTitleError(Exception):
+    """Team title or description failed validation (§3.4 of the plan)."""
+
+
+def _clean_text(value: str | None) -> str:
+    """Strip, drop control characters and collapse whitespace runs."""
+    if not value:
+        return ""
+    # Whitespace (a newline included) survives as a separator and is collapsed
+    # below; every other non-printable character is dropped outright.
+    without_controls = "".join(ch for ch in value if ch.isspace() or ch.isprintable())
+    return " ".join(without_controls.split())
+
+
+def clean_team_title(title: str | None) -> str:
+    """
+    Validate and normalize a team title.
+
+    Raises:
+        TeamTitleError: empty, too short, too long, or containing the
+        title/description separator (which would break parsing back apart)
+    """
+    cleaned = _clean_text(title)
+    if len(cleaned) < TITLE_MIN_LENGTH:
+        raise TeamTitleError(
+            f"Название команды должно содержать не меньше {TITLE_MIN_LENGTH} символов"
+        )
+    if len(cleaned) > TITLE_MAX_LENGTH:
+        raise TeamTitleError(
+            f"Название команды не должно быть длиннее {TITLE_MAX_LENGTH} символов"
+        )
+    if DESCRIPTION_SEPARATOR in cleaned:
+        raise TeamTitleError("Название команды не должно содержать « — »")
+    return cleaned
+
+
+def clean_team_description(description: str | None) -> str:
+    """
+    Validate and normalize an optional team description.
+
+    Raises:
+        TeamTitleError: longer than DESCRIPTION_MAX_LENGTH after cleaning
+    """
+    cleaned = _clean_text(description)
+    if len(cleaned) > DESCRIPTION_MAX_LENGTH:
+        raise TeamTitleError(
+            f"Описание команды не должно быть длиннее {DESCRIPTION_MAX_LENGTH} символов"
+        )
+    return cleaned
+
+
+def compose_description(title: str, description: str) -> str:
+    """Build the repository `description` field out of title and description."""
+    if description:
+        return f"{title}{DESCRIPTION_SEPARATOR}{description}"
+    return title
+
+
 def parse_description(raw: str | None) -> tuple[str, str]:
     """
     Split a repository description back into (title, description).
@@ -156,6 +221,31 @@ class TeamInfo:
         return any(
             login.casefold() == target for login in (*self.members, *self.pending)
         )
+
+
+class TeamActionStatus(Enum):
+    OK = "ok"
+    ERROR = "error"
+
+
+@dataclass
+class TeamActionResult:
+    """Outcome of creating or joining a team."""
+    status: TeamActionStatus
+    team: TeamInfo | None = None
+    repo_url: str | None = None
+    message: str = ""
+    error_code: str | None = None
+
+
+def _error(code: str, message: str, team: TeamInfo | None = None) -> TeamActionResult:
+    return TeamActionResult(
+        status=TeamActionStatus.ERROR,
+        error_code=code,
+        message=message,
+        team=team,
+        repo_url=team.repo_url if team else None,
+    )
 
 
 # Module-level, exactly like the job stores in propagate.py / bulk.py: a
@@ -361,3 +451,190 @@ class TeamRegistry:
         while number in used:
             number += 1
         return number
+
+    # -- mutations --------------------------------------------------------
+
+    def create_team(
+        self,
+        course_id: str,
+        lab_id: str,
+        org: str,
+        github_prefix: str,
+        template_repo: str,
+        username: str,
+        title: str | None,
+        description: str | None = None,
+        mode: str = "template",
+        teachers: tuple[str, ...] | list[str] = (),
+        team_config: TeamConfig | None = None,
+    ) -> TeamActionResult:
+        """
+        Create a team repository and make its creator a collaborator (§7.3).
+
+        The whole sequence runs under the lab's lock and re-reads the team
+        list with fresh=True inside it, so two students cannot take the same
+        number or the same title.
+        """
+        config = team_config or TeamConfig()
+
+        try:
+            clean_title = clean_team_title(title)
+            clean_description = clean_team_description(description)
+        except TeamTitleError as e:
+            return _error("INVALID_TITLE", str(e))
+
+        with lab_lock(course_id, lab_id):
+            teams = self.list_teams(org, github_prefix, teachers, fresh=True)
+            if teams is None:
+                return _error("TEAMS_UNAVAILABLE", "Не удалось получить список команд")
+
+            existing = self.find_member_team(teams, username)
+            if existing is not None:
+                return _error(
+                    "ALREADY_IN_TEAM",
+                    "Вы уже состоите в команде этой лабораторной работы",
+                    team=existing,
+                )
+
+            if config.count_max is not None and len(teams) >= config.count_max:
+                return _error(
+                    "TEAM_LIMIT_REACHED",
+                    "Достигнуто максимальное число команд для этой лабораторной работы",
+                )
+
+            if any(team.title.casefold() == clean_title.casefold() for team in teams):
+                return _error("TITLE_TAKEN", "Команда с таким названием уже существует")
+
+            slug = f"team-{self.next_team_number(teams)}"
+            repo_name = f"{github_prefix}-{slug}"
+            if self.github.repo_exists(org, repo_name):
+                # The organization listing lagged behind reality, or the name
+                # belongs to an unrelated repository. Either way, retrying
+                # picks the next free number.
+                logger.warning(f"{org}/{repo_name} already exists while creating a team")
+                return _error("SLUG_RACE", "Не удалось занять имя репозитория, повторите попытку")
+
+            logger.info(
+                f"Student {username} creates team {slug} ({clean_title!r}) in {course_id}/{lab_id}"
+            )
+            provision = self.provisioner.provision(
+                org, github_prefix, template_repo, slug,
+                mode=mode, access_username=username,
+            )
+            if provision.status != ProvisionStatus.OK:
+                self.invalidate(org, github_prefix)
+                return _error(
+                    provision.error_code or "PROVISION_FAILED",
+                    provision.message or "Не удалось создать репозиторий команды",
+                )
+
+            # `generate` does not set a description, and a fork inherits the
+            # template's - both need replacing with the team's name. A failure
+            # here is logged but does not undo a working repository.
+            composed = compose_description(clean_title, clean_description)
+            resp = self.github.update_repo(org, repo_name, {"description": composed})
+            if resp.status_code != 200:
+                logger.error(
+                    f"Could not set the description of {org}/{repo_name}: "
+                    f"{resp.status_code} {resp.text[:500]}"
+                )
+
+            team = TeamInfo(
+                slug=slug,
+                number=int(slug.removeprefix("team-")),
+                repo_name=repo_name,
+                repo_url=provision.repo_url or f"https://github.com/{org}/{repo_name}",
+                title=clean_title,
+                description=clean_description,
+                members=[],
+                # The invitation has just been issued, so the creator is
+                # pending in the common case. The cache is dropped right
+                # below, so the next read reports the real roster anyway.
+                pending=[username],
+            )
+            self.invalidate(org, github_prefix)
+            return TeamActionResult(
+                status=TeamActionStatus.OK,
+                team=team,
+                repo_url=team.repo_url,
+                message="Команда создана",
+            )
+
+    def join_team(
+        self,
+        course_id: str,
+        lab_id: str,
+        org: str,
+        github_prefix: str,
+        template_repo: str,
+        username: str,
+        slug: str,
+        mode: str = "template",
+        teachers: tuple[str, ...] | list[str] = (),
+        team_config: TeamConfig | None = None,
+    ) -> TeamActionResult:
+        """
+        Add a student to an existing team, or repair their access to the team
+        they are already in (§7.4).
+
+        The repository name is always assembled by the server from the lab's
+        prefix and a slug matching TEAM_SLUG_RE - a repository name is never
+        accepted from the request.
+        """
+        config = team_config or TeamConfig()
+
+        if not TEAM_SLUG_RE.match(slug or ""):
+            return _error("TEAM_NOT_FOUND", "Команда не найдена")
+
+        with lab_lock(course_id, lab_id):
+            teams = self.list_teams(org, github_prefix, teachers, fresh=True)
+            if teams is None:
+                return _error("TEAMS_UNAVAILABLE", "Не удалось получить список команд")
+
+            team = next((candidate for candidate in teams if candidate.slug == slug), None)
+            if team is None:
+                return _error("TEAM_NOT_FOUND", "Команда не найдена")
+
+            current = self.find_member_team(teams, username)
+            if current is not None and current.slug != team.slug:
+                return _error(
+                    "ALREADY_IN_TEAM",
+                    "Вы уже состоите в другой команде этой лабораторной работы",
+                    team=current,
+                )
+
+            already_in_this_team = current is not None
+            if not already_in_this_team:
+                if team.members_unknown:
+                    return _error(
+                        "TEAMS_UNAVAILABLE",
+                        "Не удалось прочитать состав команды. Попробуйте ещё раз позже",
+                        team=team,
+                    )
+                if config.size_max is not None and team.size >= config.size_max:
+                    return _error("TEAM_FULL", "В команде нет свободных мест", team=team)
+
+            logger.info(
+                f"Student {username} joins team {slug} in {course_id}/{lab_id} "
+                f"(access repair: {already_in_this_team})"
+            )
+            # The repository already exists, so this is effectively
+            # _ensure_access (plus _repair_fork in fork mode).
+            provision = self.provisioner.provision(
+                org, github_prefix, template_repo, slug,
+                mode=mode, access_username=username,
+            )
+            if provision.status != ProvisionStatus.OK:
+                return _error(
+                    provision.error_code or "PROVISION_FAILED",
+                    provision.message or "Не удалось предоставить доступ к репозиторию команды",
+                    team=team,
+                )
+
+            self.invalidate(org, github_prefix)
+            return TeamActionResult(
+                status=TeamActionStatus.OK,
+                team=team,
+                repo_url=team.repo_url,
+                message="Доступ к репозиторию команды выдан",
+            )

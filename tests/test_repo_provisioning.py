@@ -710,3 +710,79 @@ class TestCreateFromFork:
         result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
 
         assert result.status == ProvisionStatus.OK
+
+
+class TestAccessUsername:
+    """
+    Team labs name the repository after the team but grant access to one
+    student, so the two values separate (docs/TEAM_ASSIGNMENTS_PLAN.md §9.1).
+    """
+
+    @responses.activate
+    def test_repo_is_named_after_the_suffix_and_access_goes_to_the_student(self):
+        slug = "team-3"
+        repo_name = f"{GITHUB_PREFIX}-{slug}"
+        repo_url = f"https://api.github.com/repos/{ORG}/{repo_name}"
+
+        responses.add(responses.GET, repo_url, status=404)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-template/generate",
+            json={}, status=201,
+        )
+        responses.add(responses.GET, f"{repo_url}/collaborators/{USERNAME}", status=404)
+        responses.add(responses.GET, f"{repo_url}/invitations", json=[], status=200)
+        invite = responses.add(
+            responses.PUT, f"{repo_url}/collaborators/{USERNAME}", status=201
+        )
+
+        result = make_provisioner().provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, slug, access_username=USERNAME,
+        )
+
+        assert result.status == ProvisionStatus.OK
+        assert result.repo_name == repo_name
+        assert invite.call_count == 1
+        # Nothing was ever addressed to a repository named after the student
+        assert not any(f"{GITHUB_PREFIX}-{USERNAME}" in call.request.url for call in responses.calls)
+
+    @responses.activate
+    def test_omitting_it_keeps_the_individual_lab_behaviour(self):
+        """The suffix is the username for an individual lab - unchanged."""
+        repo_url = f"https://api.github.com/repos/{ORG}/{REPO_NAME}"
+        responses.add(responses.GET, repo_url, status=200)
+        responses.add(responses.GET, f"{repo_url}/collaborators/{USERNAME}", status=204)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME)
+
+        assert result.status == ProvisionStatus.OK
+        assert result.repo_name == REPO_NAME
+
+    @responses.activate
+    def test_repairs_access_on_an_existing_team_repository(self):
+        """Joining an existing team is effectively _ensure_access."""
+        slug = "team-1"
+        repo_name = f"{GITHUB_PREFIX}-{slug}"
+        repo_url = f"https://api.github.com/repos/{ORG}/{repo_name}"
+
+        responses.add(responses.GET, repo_url, status=200)
+        generate = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/os-task1-template/generate",
+            json={}, status=201,
+        )
+        responses.add(responses.GET, f"{repo_url}/collaborators/dave", status=404)
+        responses.add(
+            responses.GET, f"{repo_url}/invitations",
+            json=[{"id": 5, "invitee": {"login": "dave"}}], status=200,
+        )
+        responses.add(responses.DELETE, f"{repo_url}/invitations/5", status=204)
+        responses.add(responses.PUT, f"{repo_url}/collaborators/dave", status=201)
+
+        result = make_provisioner().provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, slug, access_username="dave",
+        )
+
+        assert result.status == ProvisionStatus.OK
+        assert generate.call_count == 0
+        assert any(call.request.method == "DELETE" for call in responses.calls)

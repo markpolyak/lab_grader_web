@@ -8,6 +8,7 @@ mocked with `responses`.
 
 See docs/REPO_GENERATION_PLAN.md §7, §10, §11 (stage 2/3/4 acceptance).
 """
+import json
 import sys
 import os
 import time
@@ -697,3 +698,254 @@ class TestJoinLabTeams:
             after = main_module.join_lab_info(mock_request, "test-course", "1")
 
         assert after["team"]["teams_count"] == 2
+
+
+def _created_team_responses(username="dave", org="test-org", prefix="test-task1", slug="team-3"):
+    """GitHub calls made while creating a team from a template."""
+    repo = f"{prefix}-{slug}"
+    responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo}", status=404)
+    responses.add(
+        responses.POST,
+        f"https://api.github.com/repos/{org}/os-task1-template/generate",
+        json={}, status=201,
+    )
+    responses.add(
+        responses.GET, f"https://api.github.com/repos/{org}/{repo}/collaborators/{username}",
+        status=404,
+    )
+    responses.add(
+        responses.GET, f"https://api.github.com/repos/{org}/{repo}/invitations",
+        json=[], status=200,
+    )
+    responses.add(
+        responses.PUT, f"https://api.github.com/repos/{org}/{repo}/collaborators/{username}",
+        status=201,
+    )
+    responses.add(responses.PATCH, f"https://api.github.com/repos/{org}/{repo}", status=200)
+
+
+class TestCreateJoinTeam:
+    """POST /join/{course}/{lab}/teams."""
+
+    @responses.activate
+    def test_creates_a_team_and_returns_its_repository(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        _created_team_responses()
+        body = main_module.CreateTeamRequest(title="Моржи", description="третья команда")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.create_join_team(
+                _session_request("dave"), "test-course", "1", body,
+            )
+
+        assert data["status"] == "ok"
+        assert data["slug"] == "team-3"
+        assert data["repo_url"] == "https://github.com/test-org/test-task1-team-3"
+
+        patches = [
+            call for call in responses.calls
+            if call.request.method == "PATCH"
+            and call.request.url.endswith("/test-task1-team-3")
+        ]
+        assert json.loads(patches[0].request.body)["description"] == "Моржи — третья команда"
+
+    @responses.activate
+    def test_invalid_title_returns_400_with_a_stable_code(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        body = main_module.CreateTeamRequest(title="ab")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.create_join_team(
+                _session_request("dave"), "test-course", "1", body,
+            )
+
+        assert response.status_code == 400
+        assert json.loads(response.body)["detail"] == "INVALID_TITLE"
+
+    @responses.activate
+    def test_count_max_returns_403(self, team_course_config):
+        _team_repo_responses()  # two teams already exist, count-max is 2
+        body = main_module.CreateTeamRequest(title="Моржи")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.create_join_team(
+                _session_request("dave"), "test-course", "1", body,
+            )
+
+        assert response.status_code == 403
+        assert json.loads(response.body)["detail"] == "TEAM_LIMIT_REACHED"
+
+    @responses.activate
+    def test_member_of_a_team_gets_409_with_their_team(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        body = main_module.CreateTeamRequest(title="Моржи")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.create_join_team(
+                _session_request("student1"), "test-course", "1", body,
+            )
+
+        assert response.status_code == 409
+        payload = json.loads(response.body)
+        assert payload["detail"] == "ALREADY_IN_TEAM"
+        assert payload["my_team"] == "team-2"
+
+    def test_without_a_session_returns_401(self, team_course_config, mock_request):
+        body = main_module.CreateTeamRequest(title="Моржи")
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.create_join_team(mock_request, "test-course", "1", body)
+        assert exc_info.value.status_code == 401
+
+    def test_the_request_body_has_no_username_field(self):
+        """The identity comes from the cookie only, so there is nothing to forge."""
+        assert "username" not in main_module.CreateTeamRequest.model_fields
+        body = main_module.CreateTeamRequest(title="Моржи", username="victim")
+        assert not hasattr(body, "username")
+
+    @responses.activate
+    def test_access_is_granted_to_the_session_user_only(self, team_course_config):
+        """Whatever the body says, the invitation goes to the cookie's user."""
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        _created_team_responses(username="dave")
+        body = main_module.CreateTeamRequest(title="Моржи")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.create_join_team(
+                _session_request("dave"), "test-course", "1", body,
+            )
+
+        assert data["status"] == "ok"
+        invited = [
+            call for call in responses.calls
+            if call.request.method == "PUT" and "/collaborators/" in call.request.url
+        ]
+        assert invited and invited[0].request.url.endswith("/collaborators/dave")
+
+
+class TestJoinJoinTeam:
+    """POST /join/{course}/{lab}/teams/{slug}/join."""
+
+    def _access_responses(self, org="test-org", repo="test-task1-team-1", username="dave"):
+        responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo}", status=200)
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo}/collaborators/{username}",
+            status=404,
+        )
+        responses.add(
+            responses.GET, f"https://api.github.com/repos/{org}/{repo}/invitations",
+            json=[], status=200,
+        )
+        responses.add(
+            responses.PUT,
+            f"https://api.github.com/repos/{org}/{repo}/collaborators/{username}",
+            status=201,
+        )
+
+    @responses.activate
+    def test_joins_a_team(self, team_course_config):
+        _team_repo_responses()
+        self._access_responses()
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_join_team(
+                _session_request("dave"), "test-course", "1", "team-1",
+            )
+
+        assert data["status"] == "ok"
+        assert data["repo_url"] == "https://github.com/test-org/test-task1-team-1"
+
+    @responses.activate
+    def test_full_team_returns_409(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["size-max"] = 2
+        _team_repo_responses()
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.join_join_team(
+                _session_request("dave"), "test-course", "1", "team-1",
+            )
+
+        assert response.status_code == 409
+        assert json.loads(response.body)["detail"] == "TEAM_FULL"
+
+    @responses.activate
+    def test_unknown_slug_returns_404(self, team_course_config):
+        _team_repo_responses()
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.join_join_team(
+                _session_request("dave"), "test-course", "1", "team-9",
+            )
+
+        assert response.status_code == 404
+        assert json.loads(response.body)["detail"] == "TEAM_NOT_FOUND"
+
+    def test_slug_outside_the_pattern_never_reaches_github(self, team_course_config):
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.join_join_team(
+                _session_request("dave"), "test-course", "1", "../os-task1-student9",
+            )
+
+        assert response.status_code == 404
+        assert json.loads(response.body)["detail"] == "TEAM_NOT_FOUND"
+
+    @responses.activate
+    def test_own_team_repairs_access(self, team_course_config):
+        """The "restore access" button re-issues a stale invitation."""
+        _team_repo_responses()
+        responses.add(
+            responses.GET, "https://api.github.com/repos/test-org/test-task1-team-2", status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-team-2/collaborators/student1",
+            status=404,
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-team-2/invitations",
+            json=[{"id": 7, "invitee": {"login": "student1"}}], status=200,
+        )
+        responses.add(
+            responses.DELETE,
+            "https://api.github.com/repos/test-org/test-task1-team-2/invitations/7",
+            status=204,
+        )
+        responses.add(
+            responses.PUT,
+            "https://api.github.com/repos/test-org/test-task1-team-2/collaborators/student1",
+            status=201,
+        )
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_join_team(
+                _session_request("student1"), "test-course", "1", "team-2",
+            )
+
+        assert data["status"] == "ok"
+        assert any(call.request.method == "DELETE" for call in responses.calls)
+
+    @responses.activate
+    def test_member_of_another_team_returns_409(self, team_course_config):
+        _team_repo_responses()
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.join_join_team(
+                _session_request("alice"), "test-course", "1", "team-2",
+            )
+
+        assert response.status_code == 409
+        payload = json.loads(response.body)
+        assert payload["detail"] == "ALREADY_IN_TEAM"
+        assert payload["my_team"] == "team-1"
+
+    def test_without_a_session_returns_401(self, team_course_config, mock_request):
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_join_team(mock_request, "test-course", "1", "team-1")
+        assert exc_info.value.status_code == 401

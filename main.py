@@ -49,6 +49,7 @@ from grading import (
     get_bulk_job,
     request_bulk_job_cancel,
     run_bulk_grading,
+    TeamActionStatus,
     TeamConfig,
     TeamConfigError,
     TeamInfo,
@@ -1409,6 +1410,89 @@ def join_lab_teams(request: Request, course_id: str, lab_id: str):
             for team in teams
         ],
     }
+
+
+class CreateTeamRequest(BaseModel):
+    """
+    Body of POST /join/{course_id}/{lab_id}/teams.
+
+    There is deliberately no `username` field: the student's identity comes
+    from the signed join_session cookie and nowhere else (§6 of the plan).
+    Title validation is done by hand in grading/teams.py rather than by a
+    pydantic validator - FastAPI would answer its own 422 with a list of
+    errors instead of the stable INVALID_TITLE code the frontend translates.
+    """
+    title: str | None = None
+    description: str | None = None
+
+
+def _team_action_response(result, status_code: int = 200) -> JSONResponse | dict:
+    """Turn a TeamActionResult into an HTTP response (§8.3)."""
+    if result.status == TeamActionStatus.OK:
+        return {
+            "status": "ok",
+            "slug": result.team.slug if result.team else None,
+            "repo_url": result.repo_url,
+            "message": result.message,
+        }
+
+    payload = {"detail": result.error_code or "PROVISION_FAILED"}
+    if result.team is not None:
+        # ALREADY_IN_TEAM is actionable only if the student is told which team
+        # is theirs, so the slug and the link travel next to the stable code.
+        payload["my_team"] = result.team.slug
+        payload["repo_url"] = result.repo_url
+    return JSONResponse(status_code=_team_error_status(result.error_code), content=payload)
+
+
+@app.post("/join/{course_id}/{lab_id}/teams")
+@limiter.limit("10/minute")
+def create_join_team(request: Request, course_id: str, lab_id: str, body: CreateTeamRequest):
+    """Создаёт команду и выдаёт доступ к её репозиторию создателю (§7.3 плана)."""
+    course_info, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    username = require_join_session(request, course_id, lab_id)
+
+    result = _team_registry().create_team(
+        course_id=course_id,
+        lab_id=lab_id,
+        org=org,
+        github_prefix=lab_config["github-prefix"],
+        template_repo=lab_config["template-repo"],
+        username=username,
+        title=body.title,
+        description=body.description,
+        mode=lab_config.get("repo-provisioning", "template"),
+        teachers=_course_teachers(course_info),
+        team_config=team_config,
+    )
+    return _team_action_response(result)
+
+
+@app.post("/join/{course_id}/{lab_id}/teams/{slug}/join")
+@limiter.limit("10/minute")
+def join_join_team(request: Request, course_id: str, lab_id: str, slug: str):
+    """
+    Присоединяет студента к команде либо чинит его доступ, если он уже в ней.
+
+    Имя репозитория собирается сервером из префикса лабы и slug'а, прошедшего
+    TEAM_SLUG_RE; из запроса имя репозитория не принимается никогда (§7.4).
+    """
+    course_info, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    username = require_join_session(request, course_id, lab_id)
+
+    result = _team_registry().join_team(
+        course_id=course_id,
+        lab_id=lab_id,
+        org=org,
+        github_prefix=lab_config["github-prefix"],
+        template_repo=lab_config["template-repo"],
+        username=username,
+        slug=slug,
+        mode=lab_config.get("repo-provisioning", "template"),
+        teachers=_course_teachers(course_info),
+        team_config=team_config,
+    )
+    return _team_action_response(result)
 
 
 # ---------------------------------------------------------------------------

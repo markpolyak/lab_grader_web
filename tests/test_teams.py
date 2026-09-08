@@ -14,12 +14,20 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from grading.repo_provisioning import ProvisionResult, ProvisionStatus
 from grading.teams import (
+    DESCRIPTION_MAX_LENGTH,
     TEAMS_CACHE_TTL_SECONDS,
+    TITLE_MAX_LENGTH,
+    TeamActionStatus,
     TeamConfig,
     TeamConfigError,
     TeamInfo,
     TeamRegistry,
+    TeamTitleError,
+    clean_team_description,
+    clean_team_title,
+    compose_description,
     is_team_lab,
     parse_description,
     parse_team_config,
@@ -390,3 +398,329 @@ class TestTeamsCache:
 
     def test_cached_teams_is_empty_before_the_first_read(self):
         assert TeamRegistry(FakeGitHub()).cached_teams("o", "os-task5") is None
+
+
+class TestCleanTeamTitle:
+    """Title validation (§3.4). Manual, so the error code stays stable."""
+
+    def test_plain_title(self):
+        assert clean_team_title("Пингвины") == "Пингвины"
+
+    def test_strips_and_collapses_whitespace(self):
+        assert clean_team_title("  Весёлые   пингвины  ") == "Весёлые пингвины"
+
+    def test_newline_becomes_a_space(self):
+        assert clean_team_title("Пингвины\nи тюлени") == "Пингвины и тюлени"
+
+    def test_empty_is_rejected(self):
+        with pytest.raises(TeamTitleError):
+            clean_team_title("")
+        with pytest.raises(TeamTitleError):
+            clean_team_title("   ")
+        with pytest.raises(TeamTitleError):
+            clean_team_title(None)
+
+    def test_too_short_is_rejected(self):
+        with pytest.raises(TeamTitleError):
+            clean_team_title("ab")
+
+    def test_too_long_is_rejected(self):
+        with pytest.raises(TeamTitleError):
+            clean_team_title("я" * (TITLE_MAX_LENGTH + 1))
+
+    def test_maximum_length_is_accepted(self):
+        assert len(clean_team_title("я" * TITLE_MAX_LENGTH)) == TITLE_MAX_LENGTH
+
+    def test_separator_in_the_title_is_rejected(self):
+        """It would make the stored description unparseable."""
+        with pytest.raises(TeamTitleError):
+            clean_team_title("Пингвины — лучшие")
+
+    def test_control_characters_are_dropped(self):
+        assert clean_team_title("Пинг\x00вины") == "Пингвины"
+
+
+class TestCleanTeamDescription:
+    def test_optional(self):
+        assert clean_team_description(None) == ""
+        assert clean_team_description("") == ""
+
+    def test_collapses_whitespace(self):
+        assert clean_team_description(" учим\n планировщик ") == "учим планировщик"
+
+    def test_too_long_is_rejected(self):
+        with pytest.raises(TeamTitleError):
+            clean_team_description("я" * (DESCRIPTION_MAX_LENGTH + 1))
+
+    def test_separator_is_allowed_in_the_description(self):
+        assert clean_team_description("первый — второй") == "первый — второй"
+
+
+class TestComposeDescription:
+    def test_with_description(self):
+        assert compose_description("Пингвины", "учим планировщик") == (
+            "Пингвины — учим планировщик"
+        )
+
+    def test_without_description(self):
+        assert compose_description("Пингвины", "") == "Пингвины"
+
+    def test_round_trip(self):
+        composed = compose_description("Пингвины", "учим планировщик")
+        assert parse_description(composed) == ("Пингвины", "учим планировщик")
+
+
+class FakeProvisioner:
+    """Records provision() calls instead of talking to GitHub."""
+
+    def __init__(self, result=None):
+        self.calls = []
+        self.result = result
+
+    def provision(self, org, github_prefix, template_repo, repo_suffix,
+                  mode="template", access_username=None):
+        self.calls.append({
+            "org": org, "github_prefix": github_prefix, "template_repo": template_repo,
+            "repo_suffix": repo_suffix, "mode": mode, "access_username": access_username,
+        })
+        if self.result is not None:
+            return self.result
+        repo_name = f"{github_prefix}-{repo_suffix}"
+        return ProvisionResult(
+            status=ProvisionStatus.OK,
+            repo_name=repo_name,
+            repo_url=f"https://github.com/{org}/{repo_name}",
+        )
+
+
+def _registry(github, provisioner=None):
+    return TeamRegistry(github, provisioner or FakeProvisioner())
+
+
+LAB = dict(course_id="c", lab_id="5", org="test-org",
+           github_prefix="os-task5", template_repo="test-org/os-task5-template")
+
+
+class TestCreateTeam:
+    """Creating a team (§7.3)."""
+
+    def test_first_team_gets_team_1(self):
+        github = FakeGitHub(repos=[])
+        provisioner = FakeProvisioner()
+        result = _registry(github, provisioner).create_team(
+            **LAB, username="alice", title="Пингвины", description="учим планировщик",
+        )
+
+        assert result.status == TeamActionStatus.OK
+        assert result.team.slug == "team-1"
+        assert result.repo_url == "https://github.com/test-org/os-task5-team-1"
+        assert provisioner.calls[0]["repo_suffix"] == "team-1"
+        assert provisioner.calls[0]["access_username"] == "alice"
+
+    def test_next_team_gets_the_following_number(self):
+        github = FakeGitHub(repos=[_repo("os-task5-team-1", "Пингвины")])
+        result = _registry(github).create_team(**LAB, username="dave", title="Тюлени")
+        assert result.team.slug == "team-2"
+
+    def test_title_and_description_are_written_to_the_repository(self):
+        github = FakeGitHub(repos=[])
+        _registry(github).create_team(
+            **LAB, username="alice", title="Пингвины", description="учим планировщик",
+        )
+        assert github.updated == [
+            ("os-task5-team-1", {"description": "Пингвины — учим планировщик"})
+        ]
+
+    def test_description_is_just_the_title_when_empty(self):
+        github = FakeGitHub(repos=[])
+        _registry(github).create_team(**LAB, username="alice", title="Пингвины")
+        assert github.updated == [("os-task5-team-1", {"description": "Пингвины"})]
+
+    def test_fork_mode_is_passed_through(self):
+        provisioner = FakeProvisioner()
+        _registry(FakeGitHub(repos=[]), provisioner).create_team(
+            **LAB, username="alice", title="Пингвины", mode="fork",
+        )
+        assert provisioner.calls[0]["mode"] == "fork"
+
+    def test_invalid_title_creates_nothing(self):
+        provisioner = FakeProvisioner()
+        result = _registry(FakeGitHub(repos=[]), provisioner).create_team(
+            **LAB, username="alice", title="ab",
+        )
+        assert result.error_code == "INVALID_TITLE"
+        assert provisioner.calls == []
+
+    def test_duplicate_title_is_refused(self):
+        github = FakeGitHub(repos=[_repo("os-task5-team-1", "Пингвины")])
+        result = _registry(github).create_team(**LAB, username="dave", title="  пингвины ")
+        assert result.error_code == "TITLE_TAKEN"
+
+    def test_count_max_blocks_creation(self):
+        github = FakeGitHub(repos=[
+            _repo("os-task5-team-1", "Пингвины"), _repo("os-task5-team-2", "Тюлени"),
+        ])
+        result = _registry(github).create_team(
+            **LAB, username="dave", title="Моржи", team_config=TeamConfig(count_max=2),
+        )
+        assert result.error_code == "TEAM_LIMIT_REACHED"
+
+    def test_student_already_in_a_team_cannot_create_another(self):
+        github = FakeGitHub(
+            repos=[_repo("os-task5-team-1", "Пингвины")],
+            collaborators={"os-task5-team-1": [_collaborator("alice")]},
+        )
+        result = _registry(github).create_team(**LAB, username="ALICE", title="Моржи")
+
+        assert result.error_code == "ALREADY_IN_TEAM"
+        assert result.team.slug == "team-1"
+        assert result.repo_url == "https://github.com/test-org/os-task5-team-1"
+
+    def test_pending_invitation_also_blocks_creating_another_team(self):
+        github = FakeGitHub(
+            repos=[_repo("os-task5-team-1", "Пингвины")],
+            invitations={"os-task5-team-1": [_invitation("carol")]},
+        )
+        result = _registry(github).create_team(**LAB, username="carol", title="Моржи")
+        assert result.error_code == "ALREADY_IN_TEAM"
+
+    def test_existing_repository_name_is_a_race(self):
+        """The organization listing lagged behind, or the name is taken."""
+        github = FakeGitHub(repos=[])
+        github.existing_repos.add("os-task5-team-1")
+        provisioner = FakeProvisioner()
+
+        result = _registry(github, provisioner).create_team(
+            **LAB, username="alice", title="Пингвины",
+        )
+        assert result.error_code == "SLUG_RACE"
+        assert provisioner.calls == []
+
+    def test_unavailable_org_repos(self):
+        result = _registry(FakeGitHub(repos=None)).create_team(
+            **LAB, username="alice", title="Пингвины",
+        )
+        assert result.error_code == "TEAMS_UNAVAILABLE"
+
+    def test_provisioning_failure_is_passed_through(self):
+        provisioner = FakeProvisioner(result=ProvisionResult(
+            status=ProvisionStatus.ERROR,
+            message="Репозиторий-шаблон не найден",
+            error_code="TEMPLATE_NOT_FOUND",
+        ))
+        result = _registry(FakeGitHub(repos=[]), provisioner).create_team(
+            **LAB, username="alice", title="Пингвины",
+        )
+        assert result.error_code == "TEMPLATE_NOT_FOUND"
+
+    def test_the_cache_is_dropped_after_creation(self):
+        github = FakeGitHub(repos=[])
+        registry = _registry(github)
+        registry.list_teams("test-org", "os-task5")
+        registry.create_team(**LAB, username="alice", title="Пингвины")
+
+        assert registry.cached_teams("test-org", "os-task5") is None
+
+    def test_reads_the_team_list_fresh_under_the_lock(self):
+        """A stale cache must not decide the number or the title check."""
+        github = FakeGitHub(repos=[])
+        registry = _registry(github)
+        registry.list_teams("test-org", "os-task5")
+        calls_before = github.org_repo_calls
+
+        registry.create_team(**LAB, username="alice", title="Пингвины")
+        assert github.org_repo_calls == calls_before + 1
+
+
+class TestJoinTeam:
+    """Joining a team, or repairing access to one's own (§7.4)."""
+
+    def _github(self):
+        return FakeGitHub(
+            repos=[_repo("os-task5-team-1", "Пингвины"), _repo("os-task5-team-2", "Тюлени")],
+            collaborators={"os-task5-team-1": [_collaborator("alice")]},
+            invitations={"os-task5-team-1": [_invitation("carol")]},
+        )
+
+    def test_joins_an_existing_team(self):
+        provisioner = FakeProvisioner()
+        result = _registry(self._github(), provisioner).join_team(
+            **LAB, username="dave", slug="team-1",
+        )
+
+        assert result.status == TeamActionStatus.OK
+        assert result.repo_url == "https://github.com/test-org/os-task5-team-1"
+        assert provisioner.calls[0]["repo_suffix"] == "team-1"
+        assert provisioner.calls[0]["access_username"] == "dave"
+
+    def test_full_team_is_refused(self):
+        result = _registry(self._github()).join_team(
+            **LAB, username="dave", slug="team-1", team_config=TeamConfig(size_max=2),
+        )
+        assert result.error_code == "TEAM_FULL"
+
+    def test_pending_invitation_occupies_a_place(self):
+        """alice is a member and carol is invited - two of two places."""
+        github = self._github()
+        result = _registry(github).join_team(
+            **LAB, username="dave", slug="team-1", team_config=TeamConfig(size_max=2),
+        )
+        assert result.error_code == "TEAM_FULL"
+
+    def test_own_team_only_repairs_access_even_when_full(self):
+        provisioner = FakeProvisioner()
+        result = _registry(self._github(), provisioner).join_team(
+            **LAB, username="ALICE", slug="team-1", team_config=TeamConfig(size_max=2),
+        )
+
+        assert result.status == TeamActionStatus.OK
+        assert provisioner.calls[0]["access_username"] == "ALICE"
+
+    def test_member_of_another_team_is_refused(self):
+        result = _registry(self._github()).join_team(**LAB, username="alice", slug="team-2")
+
+        assert result.error_code == "ALREADY_IN_TEAM"
+        assert result.team.slug == "team-1"
+
+    def test_unknown_slug(self):
+        result = _registry(self._github()).join_team(**LAB, username="dave", slug="team-9")
+        assert result.error_code == "TEAM_NOT_FOUND"
+
+    def test_slug_not_matching_the_pattern_is_rejected_before_any_call(self):
+        """The repository name is assembled by the server, never accepted."""
+        github = self._github()
+        provisioner = FakeProvisioner()
+        for bad in ("../../secret", "team-1/../x", "student1", "TEAM-1", ""):
+            result = _registry(github, provisioner).join_team(
+                **LAB, username="dave", slug=bad,
+            )
+            assert result.error_code == "TEAM_NOT_FOUND", bad
+        assert provisioner.calls == []
+        assert github.org_repo_calls == 0
+
+    def test_unreadable_roster_blocks_joining(self):
+        github = self._github()
+        github.list_collaborators = lambda org, repo, affiliation="direct": None
+        result = _registry(github).join_team(
+            **LAB, username="dave", slug="team-1", team_config=TeamConfig(size_max=4),
+        )
+        assert result.error_code == "TEAMS_UNAVAILABLE"
+
+    def test_provisioning_failure_is_passed_through(self):
+        provisioner = FakeProvisioner(result=ProvisionResult(
+            status=ProvisionStatus.ERROR,
+            message="Не удалось предоставить доступ",
+            error_code="INVITE_FAILED",
+        ))
+        result = _registry(self._github(), provisioner).join_team(
+            **LAB, username="dave", slug="team-1",
+        )
+        assert result.error_code == "INVITE_FAILED"
+
+    def test_the_cache_is_dropped_after_joining(self):
+        github = self._github()
+        registry = _registry(github)
+        registry.list_teams("test-org", "os-task5")
+        registry.join_team(**LAB, username="dave", slug="team-1")
+
+        assert registry.cached_teams("test-org", "os-task5") is None
