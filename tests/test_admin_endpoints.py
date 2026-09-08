@@ -12,7 +12,7 @@ Two styles, matching the existing test suite:
 import sys
 import os
 import yaml
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 import responses
@@ -24,7 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main as main_module
 from main import app
+from grading.grader import CIEvaluation, GradeResult, GradeStatus
 from grading.propagate import _jobs, _running_lab_keys
+from grading.bulk import _jobs as _bulk_jobs, _running_keys as _bulk_running_keys
 
 
 @pytest.fixture(autouse=True)
@@ -41,9 +43,13 @@ def disable_real_rate_limiting(monkeypatch):
 def clean_job_store():
     _jobs.clear()
     _running_lab_keys.clear()
+    _bulk_jobs.clear()
+    _bulk_running_keys.clear()
     yield
     _jobs.clear()
     _running_lab_keys.clear()
+    _bulk_jobs.clear()
+    _bulk_running_keys.clear()
 
 
 @pytest.fixture
@@ -89,6 +95,13 @@ PROTECTED_ROUTES = [
         {"json": {"dry_run": True}},
     ),
     ("GET", "/admin/propagate-jobs/does-not-exist", {}),
+    (
+        "POST",
+        "/admin/courses/test-course/groups/P3300/labs/1/bulk-grade",
+        {"json": {"dry_run": True}},
+    ),
+    ("GET", "/admin/bulk-grade-jobs/does-not-exist", {}),
+    ("POST", "/admin/bulk-grade-jobs/does-not-exist/cancel", {}),
 ]
 
 
@@ -155,6 +168,16 @@ class TestRequireAdminAllowsValidSession:
         response = client.get("/admin/courses/test-course/labs")
         assert response.status_code == 200
         assert response.json() == []
+
+    def test_bulk_grade_job_status_returns_404_for_unknown_job_not_401(self, client):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.get("/admin/bulk-grade-jobs/does-not-exist")
+        assert response.status_code == 404
+
+    def test_bulk_grade_job_cancel_returns_404_for_unknown_job_not_401(self, client):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.post("/admin/bulk-grade-jobs/does-not-exist/cancel")
+        assert response.status_code == 404
 
     def test_propagate_job_status_returns_404_for_unknown_job_not_401(self, client):
         client.cookies.set("admin_session", valid_cookie())
@@ -340,3 +363,136 @@ class TestPropagateTemplateUpdateEndpoint:
         with pytest.raises(HTTPException) as exc_info:
             main_module.get_propagate_job_status(mock_request, "does-not-exist", admin="admin")
         assert exc_info.value.status_code == 404
+
+
+class TestBulkGradeEndpoint:
+    """The bulk grading endpoint itself: config checks, 202 + job, 409."""
+
+    @pytest.fixture
+    def bulk_course_config(self, sample_course_config):
+        sample_course_config["google"]["spreadsheet"] = "sheet-id"
+        return sample_course_config
+
+    @pytest.fixture
+    def mock_worksheet(self):
+        """Patch the Sheets connection the endpoint opens before starting a job."""
+        worksheet = MagicMock()
+        worksheet.get_all_values.return_value = [
+            ["№", "ФИО", "GitHub", ""],
+            ["", "", "", "ЛР1"],
+            ["1", "Иванов Иван", "student1", ""],
+        ]
+        spreadsheet = MagicMock()
+        spreadsheet.fetch_sheet_metadata.return_value = {"properties": {"locale": "en_US"}}
+        with patch.object(main_module, "_open_group_worksheet", return_value=(spreadsheet, worksheet)):
+            yield worksheet
+
+    def test_missing_spreadsheet_config_is_400(self, mock_request, sample_course_config):
+        sample_course_config["google"].pop("spreadsheet", None)
+        with patch("main.get_course_by_id", return_value=sample_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.start_bulk_grade(
+                    mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                    body=main_module.BulkGradeRequest(), admin="admin",
+                )
+        assert exc_info.value.status_code == 400
+
+    def test_unknown_lab_is_400(self, mock_request, bulk_course_config):
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.start_bulk_grade(
+                    mock_request, "test-course", "P3300", "ЛР42", BackgroundTasks(),
+                    body=main_module.BulkGradeRequest(), admin="admin",
+                )
+        assert exc_info.value.status_code == 400
+
+    def test_returns_202_and_runs_the_job(self, mock_request, bulk_course_config, mock_worksheet):
+        import json
+
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            bg = BackgroundTasks()
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "ЛР1", bg,
+                body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
+            )
+            assert response.status_code == 202
+            job_id = json.loads(response.body)["job_id"]
+
+            job = main_module.get_bulk_job(job_id)
+            assert job.mode == "by_sheet"
+            assert job.dry_run is True
+
+            with patch.object(main_module.LabGrader, "check_repository", return_value=None), \
+                 patch.object(main_module.LabGrader, "check_forbidden_files", return_value=None), \
+                 patch.object(main_module.LabGrader, "_evaluate_ci_internal") as evaluate:
+                evaluate.return_value = CIEvaluation(
+                    grade_result=GradeResult(
+                        status=GradeStatus.UPDATED, result="v",
+                        message="Результат CI: ✅ Все проверки пройдены", passed="1/1",
+                    ),
+                    ci_passed=True,
+                )
+                run_background_tasks(bg)
+
+        assert job.status == "done"
+        assert [r.github for r in job.results] == ["student1"]
+        # dry_run: the report is built, the spreadsheet is left alone
+        mock_worksheet.batch_update.assert_not_called()
+
+    def test_name_file_selects_by_file_mode(self, mock_request, bulk_course_config, mock_worksheet):
+        import json
+
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                body=main_module.BulkGradeRequest(name_file="info.md"), admin="admin",
+            )
+
+        job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
+        assert job.mode == "by_file"
+        assert job.name_file == "info.md"
+
+    def test_blank_name_file_falls_back_to_by_sheet_mode(self, mock_request, bulk_course_config, mock_worksheet):
+        import json
+
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                body=main_module.BulkGradeRequest(name_file="   "), admin="admin",
+            )
+
+        job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
+        assert job.mode == "by_sheet"
+        assert job.name_file is None
+
+    def test_second_run_for_same_group_and_lab_is_409(self, mock_request, bulk_course_config, mock_worksheet):
+        from grading.bulk import try_start_bulk_job
+        try_start_bulk_job("test-course", "P3300", "ЛР1", "by_sheet", False, None)
+
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.start_bulk_grade(
+                    mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                    body=main_module.BulkGradeRequest(), admin="admin",
+                )
+        assert exc_info.value.status_code == 409
+
+    def test_other_group_may_start_while_one_runs(self, mock_request, bulk_course_config, mock_worksheet):
+        from grading.bulk import try_start_bulk_job
+        try_start_bulk_job("test-course", "P3300", "ЛР1", "by_sheet", False, None)
+
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3301", "ЛР1", BackgroundTasks(),
+                body=main_module.BulkGradeRequest(), admin="admin",
+            )
+        assert response.status_code == 202
+
+    def test_cancel_marks_a_running_job(self, mock_request):
+        from grading.bulk import try_start_bulk_job
+        job = try_start_bulk_job("test-course", "P3300", "ЛР1", "by_sheet", False, None)
+
+        result = main_module.cancel_bulk_grade_job(mock_request, job.job_id, admin="admin")
+
+        assert result["status"] == "running"
+        assert job.cancel_requested is True
