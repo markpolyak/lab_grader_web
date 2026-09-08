@@ -103,7 +103,8 @@
         "github": "GitHub",
         "status": "状态",
         "grade": "成绩",
-        "message": "信息"
+        "message": "信息",
+        "team": "小组"
       },
       "statuses": {
         "updated": "已评定",
@@ -112,7 +113,8 @@
         "error": "错误",
         "conflict": "用户名冲突",
         "unmatched": "姓名未匹配",
-        "ambiguous": "姓名有歧义"
+        "ambiguous": "姓名有歧义",
+        "no_team": "无小组"
       },
       "errors": {
         "groupsFailed": "加载班级失败",
