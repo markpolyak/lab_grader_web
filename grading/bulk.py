@@ -31,6 +31,7 @@ from .github_client import GitHubClient
 from .grader import LabGrader, GradeStatus
 from .penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
 from .score import format_grade_with_score, format_score
+from .teams import is_team_lab
 from .sheets_client import (
     calculate_lab_column,
     can_overwrite_cell,
@@ -104,8 +105,16 @@ def taskid_column(
 
     Returns:
         1-based column number, or None when the TASKID check does not apply to
-        this lab (no `task-id-column`, no `taskid-max`, or `ignore-task-id`)
+        this lab (a team lab, no `task-id-column`, no `taskid-max`, or
+        `ignore-task-id`)
     """
+    # A variant number is derived from the student's position in the sheet,
+    # and a team has no such position - the check is off for team labs, and
+    # `student_order` is then read by neither the single nor the bulk run
+    # (docs/TEAM_ASSIGNMENTS_PLAN.md §10.3).
+    if is_team_lab(lab_config):
+        return None
+
     column = course_info.get("google", {}).get("task-id-column")
     if column is None:
         return None

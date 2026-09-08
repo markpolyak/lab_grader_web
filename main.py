@@ -49,6 +49,10 @@ from grading import (
     get_bulk_job,
     request_bulk_job_cancel,
     run_bulk_grading,
+    TeamConfig,
+    TeamConfigError,
+    is_team_lab,
+    parse_team_config,
 )
 
 # Configure logging to both file and console
@@ -158,6 +162,36 @@ def load_course_index():
 
     return index_data
 
+def warn_about_team_labs(filename: str, course_info: dict) -> None:
+    """
+    Log config problems of team labs that are not fatal on their own.
+
+    A malformed `team` section is reported by /join for that lab (see
+    _load_lab_for_join); here it only makes it into the startup log, together
+    with `taskid-max`, which a team lab ignores - the variant number is
+    derived from the student's position in the sheet and a team has none
+    (docs/TEAM_ASSIGNMENTS_PLAN.md §4, §10.3).
+    """
+    labs = course_info.get("labs", {})
+    if not isinstance(labs, dict):
+        return
+
+    for lab_key, lab_config in labs.items():
+        if not is_team_lab(lab_config):
+            continue
+
+        try:
+            parse_team_config(lab_config)
+        except TeamConfigError as e:
+            logger.warning(f"{filename}: лаба '{lab_key}' - {e}")
+
+        if lab_config.get("taskid-max") is not None:
+            logger.warning(
+                f"{filename}: лаба '{lab_key}' - командная, поэтому taskid-max игнорируется "
+                "(проверка варианта для командных лаб не выполняется)"
+            )
+
+
 def validate_course_index():
     """Validate that index.yaml is synchronized with course files"""
     try:
@@ -204,6 +238,7 @@ def validate_course_index():
                 if not isinstance(data, dict) or "course" not in data:
                     print(f"❌ ERROR: Invalid course structure in {entry['file']}")
                     return False
+                warn_about_team_labs(entry["file"], data["course"])
         except Exception as e:
             print(f"❌ ERROR: Failed to load {entry['file']}: {e}")
             return False
@@ -856,17 +891,20 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
 REPO_PROVISIONING_MODES = {"template", "fork"}
 
 
-def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
+def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str, TeamConfig | None]:
     """
     Load course/lab config needed by the /join flow.
 
     Returns:
-        (course_info, lab_config, github_organization)
+        (course_info, lab_config, github_organization, team_config). The last
+        element is None for an individual lab and a TeamConfig for a team one
+        (docs/TEAM_ASSIGNMENTS_PLAN.md §4).
 
     Raises:
         HTTPException: 404 for unknown course/lab, 400 if the lab has no
         `template-repo` configured, has an unrecognized `repo-provisioning`
-        value, or the course has no GitHub organization.
+        value, has a malformed `team` section, or the course has no GitHub
+        organization.
     """
     course_info = get_course_by_id(course_id)  # raises 404 if course unknown
 
@@ -893,11 +931,18 @@ def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
             ),
         )
 
+    try:
+        team_config = parse_team_config(lab_config)
+    except TeamConfigError as e:
+        # Same treatment as an unknown repo-provisioning value: a config
+        # mistake answers with a clear 400, never a 500.
+        raise HTTPException(status_code=400, detail=f"Некорректная настройка команд: {e}")
+
     org = course_info.get("github", {}).get("organization")
     if not org:
         raise HTTPException(status_code=400, detail="Для курса не настроена GitHub организация")
 
-    return course_info, lab_config, org
+    return course_info, lab_config, org, team_config
 
 
 def _oauth_redirect_uri(request: Request) -> str:
@@ -1016,12 +1061,20 @@ def _exchange_code_for_username(code: str, redirect_uri: str) -> str | None:
 @limiter.limit("30/minute")
 def join_lab_info(request: Request, course_id: str, lab_id: str):
     """Публичная информация для лендинга страницы присоединения к лабе (без аутентификации)."""
-    course_info, lab_config, _org = _load_lab_for_join(course_id, lab_id)
+    course_info, lab_config, _org, team_config = _load_lab_for_join(course_id, lab_id)
     return {
         "course_id": course_id,
         "lab_id": lab_id,
         "course_name": course_info.get("name", "Unknown"),
         "lab_short_name": lab_config.get("short-name", lab_id),
+        # Rosters are deliberately absent - this endpoint is public. Only the
+        # fact that the lab is a team one, and its limits.
+        "team": {
+            "enabled": team_config is not None,
+            "size_max": team_config.size_max if team_config else None,
+            "count_max": team_config.count_max if team_config else None,
+            "teams_count": None,
+        },
     }
 
 
@@ -1076,7 +1129,7 @@ def join_callback(
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="missing_code"))
 
     try:
-        course_info, lab_config, org = _load_lab_for_join(course_id, lab_id)
+        course_info, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
     except HTTPException:
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="config"))
 

@@ -256,6 +256,11 @@ class TestTaskidColumn:
     def test_ignore_task_id(self):
         assert taskid_column(self.COURSE, {"taskid-max": 20, "ignore-task-id": True}) is None
 
+    def test_team_lab_never_checks_taskid(self):
+        """A team has no position in the sheet to derive a variant from."""
+        assert taskid_column(self.COURSE, {"taskid-max": 20, "team": {}}) is None
+        assert taskid_column(self.COURSE, {"taskid-max": 20, "team": None}) is None
+
 
 class TestRepoNameFor:
     def test_builds_conventional_name(self):

@@ -92,6 +92,36 @@ class TestJoinInfo:
             data = main_module.join_lab_info(mock_request, "test-course", "1")
         assert data["course_name"] == "Test Course"
 
+    def test_individual_lab_reports_teams_disabled(self, mock_request, mock_get_course_by_id):
+        data = main_module.join_lab_info(mock_request, "test-course", "1")
+        assert data["team"]["enabled"] is False
+        assert data["team"]["size_max"] is None
+        assert data["team"]["count_max"] is None
+
+    def test_team_lab_reports_its_limits(self, mock_request, join_course_config):
+        join_course_config["labs"]["1"]["team"] = {"size-max": 4, "count-max": 8}
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            data = main_module.join_lab_info(mock_request, "test-course", "1")
+        assert data["team"]["enabled"] is True
+        assert data["team"]["size_max"] == 4
+        assert data["team"]["count_max"] == 8
+
+    def test_invalid_team_limit_returns_400(self, mock_request, join_course_config):
+        """A bad limit must be a clear config error, not a 500 (stage 1 checklist)."""
+        join_course_config["labs"]["1"]["team"] = {"size-max": 0}
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_info(mock_request, "test-course", "1")
+        assert exc_info.value.status_code == 400
+        assert "size-max" in exc_info.value.detail
+
+    def test_team_limit_of_wrong_type_returns_400(self, mock_request, join_course_config):
+        join_course_config["labs"]["1"]["team"] = {"count-max": "восемь"}
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_info(mock_request, "test-course", "1")
+        assert exc_info.value.status_code == 400
+
 
 class TestJoinStart:
     def test_redirects_to_github_authorize_with_signed_state(self, mock_request, mock_get_course_by_id):

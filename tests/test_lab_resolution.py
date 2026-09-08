@@ -155,11 +155,11 @@ class TestJoinResolvesFractionalLab:
         }
         monkeypatch.setattr(main_module, "get_course_by_id", lambda _cid: course)
 
-        _course, lab_config, _org = main_module._load_lab_for_join("os", "01")
+        _course, lab_config, _org, _team = main_module._load_lab_for_join("os", "01")
         assert lab_config["short-name"] == "ЛР0.1"
         assert lab_config["template-repo"] == "org/t01"
 
-        _course, lab_config, _org = main_module._load_lab_for_join("os", "1")
+        _course, lab_config, _org, _team = main_module._load_lab_for_join("os", "1")
         assert lab_config["short-name"] == "ЛР1"
 
     def test_unknown_lab_still_404(self, monkeypatch):
