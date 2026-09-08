@@ -141,3 +141,128 @@ export const Spinner = styled.span`
   border-radius: 50%;
   animation: ${rotate} 0.8s linear infinite;
 `;
+
+
+// --- Командные лабораторные работы ---
+
+export const TeamBadge = styled.span`
+  align-self: flex-start;
+  padding: 4px 10px;
+  border-radius: 100px;
+  border: 1px solid ${colors.buttonHover};
+  background: rgba(60, 60, 67, 0.06);
+  color: ${colors.textSecondary};
+  font-size: 12px;
+`;
+
+export const SectionTitle = styled.h2`
+  margin: 0;
+  color: ${colors.textPrimary};
+  font-size: 16px;
+  line-height: 1.4;
+`;
+
+export const TeamCards = styled.ul`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+`;
+
+export const TeamCard = styled.li`
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid ${colors.buttonHover};
+  border-radius: 12px;
+  background: ${({ $mine }) => ($mine ? "rgba(34, 195, 142, 0.06)" : "#fff")};
+  border-color: ${({ $mine }) => ($mine ? colors.save : colors.buttonHover)};
+`;
+
+export const TeamHeader = styled.div`
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+`;
+
+export const TeamName = styled.div`
+  color: ${colors.textPrimary};
+  font-size: 15px;
+  font-weight: 600;
+`;
+
+export const TeamCount = styled.span`
+  flex: 0 0 auto;
+  color: ${colors.textSecondary};
+  font-size: 12px;
+`;
+
+export const TeamMembers = styled.ul`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+`;
+
+export const MemberChip = styled.li`
+  padding: 3px 9px;
+  border-radius: 100px;
+  border: 1px dashed ${({ $pending }) => ($pending ? colors.cancel : "transparent")};
+  background: ${({ $pending }) => ($pending ? "transparent" : colors.buttonHover)};
+  color: ${({ $pending }) => ($pending ? colors.textSecondary : colors.textPrimary)};
+  font-size: 12px;
+`;
+
+export const SecondaryButton = styled(ActionButton)`
+  width: auto;
+  align-self: flex-start;
+  background: transparent;
+  color: ${colors.textPrimary};
+  border: 1px solid ${colors.buttonBorder};
+
+  &:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+  }
+`;
+
+export const TeamForm = styled.form`
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid ${colors.buttonHover};
+  border-radius: 12px;
+`;
+
+export const TextInput = styled.input`
+  ${textStyles}
+  width: 100%;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid ${colors.buttonHover};
+  border-radius: 8px;
+  color: ${colors.textPrimary};
+  font-size: 14px;
+
+  &:focus-visible {
+    outline: 2px solid ${colors.buttonBackground};
+    outline-offset: 1px;
+  }
+`;
+
+export const FieldHint = styled.span`
+  color: ${colors.textSecondary};
+  font-size: 12px;
+`;
+
+export const InlineError = styled.span`
+  color: ${colors.error};
+  font-size: 12px;
+`;

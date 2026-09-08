@@ -3,8 +3,12 @@ import test from "node:test";
 
 import {
   ERROR_TRANSLATION_KEYS,
+  cleanTeamText,
+  findMyTeam,
   getSafeRepositoryUrl,
+  resolveJoinView,
   shouldShowJoinAction,
+  validateTeamForm,
 } from "./state.js";
 
 
@@ -78,4 +82,120 @@ test("повреждённая ссылка успеха оставляет кн
     false
   );
   assert.equal(shouldShowJoinAction("error", null), true);
+});
+
+
+test("каждый код ошибки командных эндпоинтов имеет ключ локализации", () => {
+  const codes = [
+    "NOT_A_TEAM_LAB",
+    "LAB_NOT_CONFIGURED",
+    "SESSION_REQUIRED",
+    "TEAMS_UNAVAILABLE",
+    "TEAM_NOT_FOUND",
+    "ALREADY_IN_TEAM",
+    "TEAM_FULL",
+    "TEAM_LIMIT_REACHED",
+    "TITLE_TAKEN",
+    "INVALID_TITLE",
+    "SLUG_RACE",
+    "PROVISION_FAILED",
+    "title_too_short",
+    "title_too_long",
+    "title_has_separator",
+    "description_too_long",
+  ];
+
+  for (const code of codes) {
+    assert.equal(
+      typeof ERROR_TRANSLATION_KEYS[code],
+      "string",
+      `код ${code} должен иметь ключ локализации`
+    );
+  }
+});
+
+
+test("состояние экрана выбирается по данным backend, а не по адресной строке", () => {
+  // Индивидуальная лаба - прежний экран
+  assert.equal(
+    resolveJoinView({ teamEnabled: false, teamsData: null, teamsError: null }),
+    "individual"
+  );
+
+  // Пока список команд не пришёл - загрузка
+  assert.equal(
+    resolveJoinView({ teamEnabled: true, teamsData: null, teamsError: null }),
+    "loading"
+  );
+
+  // Нет сессии - лендинг с кнопкой входа, а не ошибка
+  assert.equal(
+    resolveJoinView({ teamEnabled: true, teamsData: null, teamsError: "SESSION_REQUIRED" }),
+    "landing"
+  );
+
+  // Любая другая ошибка - экран ошибки
+  assert.equal(
+    resolveJoinView({ teamEnabled: true, teamsData: null, teamsError: "TEAMS_UNAVAILABLE" }),
+    "error"
+  );
+
+  // Авторизован, команды нет - выбор команды
+  assert.equal(
+    resolveJoinView({
+      teamEnabled: true,
+      teamsData: { my_team: null, teams: [] },
+      teamsError: null,
+    }),
+    "picker"
+  );
+
+  // Авторизован и состоит в команде - карточка своей команды
+  assert.equal(
+    resolveJoinView({
+      teamEnabled: true,
+      teamsData: { my_team: "team-2", teams: [] },
+      teamsError: null,
+    }),
+    "member"
+  );
+});
+
+
+test("своя команда находится по slug из ответа backend", () => {
+  const teamsData = {
+    my_team: "team-2",
+    teams: [
+      { slug: "team-1", title: "Пингвины" },
+      { slug: "team-2", title: "Тюлени" },
+    ],
+  };
+
+  assert.equal(findMyTeam(teamsData).title, "Тюлени");
+  assert.equal(findMyTeam({ my_team: null, teams: teamsData.teams }), null);
+  assert.equal(findMyTeam(null), null);
+  // Ссылка на несуществующую команду не должна ронять страницу
+  assert.equal(findMyTeam({ my_team: "team-9", teams: teamsData.teams }), null);
+});
+
+
+test("клиентская валидация формы создания команды повторяет правила backend", () => {
+  assert.equal(validateTeamForm("Пингвины", ""), null);
+  assert.equal(validateTeamForm("  Пингвины  ", "  учим планировщик "), null);
+
+  assert.equal(validateTeamForm("", ""), "title_too_short");
+  assert.equal(validateTeamForm("ab", ""), "title_too_short");
+  assert.equal(validateTeamForm("я".repeat(61), ""), "title_too_long");
+  assert.equal(validateTeamForm("я".repeat(60), ""), null);
+  assert.equal(validateTeamForm("Пингвины — лучшие", ""), "title_has_separator");
+  assert.equal(validateTeamForm("Пингвины", "я".repeat(201)), "description_too_long");
+  // Разделитель в описании допустим - разбор идёт по первому вхождению
+  assert.equal(validateTeamForm("Пингвины", "первый — второй"), null);
+});
+
+
+test("схлопывание пробелов совпадает с очисткой на backend", () => {
+  assert.equal(cleanTeamText("  Весёлые   пингвины  "), "Весёлые пингвины");
+  assert.equal(cleanTeamText("Пингвины\nи тюлени"), "Пингвины и тюлени");
+  assert.equal(cleanTeamText(null), "");
 });
