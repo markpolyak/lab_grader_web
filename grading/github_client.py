@@ -4,9 +4,14 @@ GitHub API client for lab grading.
 This module provides a client for interacting with GitHub API
 to check repositories, commits, and CI status.
 """
+import base64
+import binascii
 import requests
 from dataclasses import dataclass
 from typing import Any
+
+# Text files above this size are not fetched for content extraction
+MAX_TEXT_FILE_SIZE = 1024 * 1024
 
 
 @dataclass
@@ -101,6 +106,59 @@ class GitHubClient:
         url = f"{self.BASE_URL}/repos/{org}/{repo}/contents/{path}"
         resp = requests.get(url, headers=self.headers)
         return resp.status_code == 200
+
+    def get_file_content(
+        self,
+        org: str,
+        repo: str,
+        path: str,
+        max_size: int = MAX_TEXT_FILE_SIZE,
+    ) -> str | None:
+        """
+        Read a repository file as text.
+
+        Used by bulk grading to pull the student's full name out of the file
+        named by the lab's `student-name-file`.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            path: File path within repository
+            max_size: Skip files larger than this many bytes
+
+        Returns:
+            Decoded text (BOM stripped), or None if the file is missing, too
+            large, a directory, or not valid UTF-8
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/contents/{path}"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+
+        # A directory path comes back as a list of entries, not file content
+        if not isinstance(data, dict) or data.get("type") != "file":
+            return None
+
+        # GitHub omits the body of large files, answering with encoding "none"
+        if data.get("size", 0) > max_size or data.get("encoding") != "base64":
+            return None
+
+        content = data.get("content")
+        if content is None:
+            return None
+
+        try:
+            raw = base64.b64decode(content)
+        except (binascii.Error, ValueError):
+            return None
+
+        try:
+            return raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return None
 
     def check_required_files(
         self,

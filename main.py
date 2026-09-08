@@ -42,6 +42,13 @@ from grading import (
     try_start_propagate_job,
     run_propagation,
     get_propagate_job,
+    SheetContext,
+    evaluate_student,
+    taskid_column,
+    try_start_bulk_job,
+    get_bulk_job,
+    request_bulk_job_cancel,
+    run_bulk_grading,
 )
 
 # Configure logging to both file and console
@@ -662,8 +669,9 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
     """
     Grade a lab submission by checking GitHub repository and CI status.
 
-    Uses the LabGrader orchestrator for GitHub checks and CI evaluation,
-    then updates the grade in Google Sheets.
+    The grading decision itself lives in grading.bulk.evaluate_student, shared
+    with the bulk admin run; this endpoint supplies the spreadsheet context and
+    translates the outcome into an HTTP response.
 
     Flow (preserves original behavior):
     1. GitHub checks (files, workflows, commits, forbidden mods)
@@ -698,203 +706,143 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         grader = LabGrader(github_client)
 
         username = grade_request.github
-        repo_name = f"{repo_prefix}-{username}"
-        logger.info(f"Checking repository: {org}/{repo_name}")
 
-        # Step 1: Check repository (required files, workflows, commits)
-        repo_error = grader.check_repository(org, repo_name, lab_config_dict)
-        if repo_error:
-            logger.warning(f"Repository check failed: {repo_error.message}")
-            # Use 404 for "no commits" to match original behavior
-            status_code = 404 if repo_error.error_code == "NO_COMMITS" else 400
-            raise HTTPException(status_code=status_code, detail=repo_error.message)
+        # Where the grade goes once evaluate_student produces one. Filled in by
+        # load_sheet_context(), which only runs if we get that far.
+        target: dict = {}
 
-        # Step 2: Check forbidden file modifications
-        forbidden_error = grader.check_forbidden_files(org, repo_name, lab_config_dict)
-        if forbidden_error:
-            logger.warning(f"Forbidden modification: {forbidden_error.message}")
-            raise HTTPException(status_code=403, detail=forbidden_error.message)
+        def load_sheet_context() -> SheetContext:
+            """Open the group's sheet and read everything the grading needs from it."""
+            logger.info(f"Connecting to Google Sheets for group {group_id}")
+            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+            creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+            sheets_client = gspread.authorize(creds)
 
-        # Step 3: Evaluate CI results
-        ci_evaluation = grader._evaluate_ci_internal(org, repo_name, lab_config_dict)
+            try:
+                spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+                sheet = spreadsheet.worksheet(group_id)
+                logger.info(f"Successfully opened worksheet '{group_id}'")
+            except Exception as e:
+                logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
+                raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
 
-        # Return early for errors (no Sheets needed)
-        if ci_evaluation.grade_result.status == GradeStatus.ERROR:
-            logger.warning(f"CI error: {ci_evaluation.grade_result.message}")
-            raise HTTPException(status_code=400, detail=ci_evaluation.grade_result.message)
+            # Get decimal separator from spreadsheet locale
+            decimal_separator = get_decimal_separator(spreadsheet)
+            logger.info(f"Using decimal separator: '{decimal_separator}'")
 
-        # Return early for pending (no Sheets needed)
-        if ci_evaluation.grade_result.status == GradeStatus.PENDING:
-            logger.info(f"CI pending: {ci_evaluation.grade_result.message}")
-            return {
-                "status": "pending",
-                "message": ci_evaluation.grade_result.message,
-                "passed": ci_evaluation.grade_result.passed,
-                "checks": ci_evaluation.grade_result.checks
-            }
+            # Find GitHub column and student row
+            header_row = sheet.row_values(1)
+            try:
+                github_col_idx = header_row.index("GitHub") + 1
+            except ValueError:
+                logger.error(f"'GitHub' column not found in spreadsheet headers")
+                raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден")
 
-        # CI evaluation complete - now connect to Sheets for writing result
-        logger.info(f"Connecting to Google Sheets for group {group_id}")
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-        sheets_client = gspread.authorize(creds)
+            github_values = sheet.col_values(github_col_idx)[2:]
+            row_idx = find_student_row(github_values, username)
 
-        try:
-            spreadsheet = sheets_client.open_by_key(spreadsheet_id)
-            sheet = spreadsheet.worksheet(group_id)
-            logger.info(f"Successfully opened worksheet '{group_id}'")
-        except Exception as e:
-            logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
-            raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
+            if row_idx is None:
+                logger.warning(f"GitHub username '{username}' not found in spreadsheet for group {group_id}")
+                raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
 
-        # Get decimal separator from spreadsheet locale
-        decimal_separator = get_decimal_separator(spreadsheet)
-        logger.info(f"Using decimal separator: '{decimal_separator}'")
-
-        # Find GitHub column and student row
-        header_row = sheet.row_values(1)
-        try:
-            github_col_idx = header_row.index("GitHub") + 1
-        except ValueError:
-            logger.error(f"'GitHub' column not found in spreadsheet headers")
-            raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден")
-
-        github_values = sheet.col_values(github_col_idx)[2:]
-        row_idx = find_student_row(github_values, username)
-
-        if row_idx is None:
-            logger.warning(f"GitHub username '{username}' not found in spreadsheet for group {group_id}")
-            raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
-
-        # Find lab column
-        lab_short_name = lab_config_dict.get("short-name")
-        if lab_short_name:
-            lab_col = find_lab_column_by_name(sheet, lab_short_name)
-            if lab_col:
-                logger.info(f"Found lab column '{lab_short_name}' at column {lab_col}")
+            # Find lab column
+            lab_short_name = lab_config_dict.get("short-name")
+            if lab_short_name:
+                lab_col = find_lab_column_by_name(sheet, lab_short_name)
+                if lab_col:
+                    logger.info(f"Found lab column '{lab_short_name}' at column {lab_col}")
+                else:
+                    logger.error(f"Lab column '{lab_short_name}' not found in spreadsheet")
+                    raise HTTPException(status_code=400, detail=f"Столбец '{lab_short_name}' не найден в таблице")
             else:
-                logger.error(f"Lab column '{lab_short_name}' not found in spreadsheet")
-                raise HTTPException(status_code=400, detail=f"Столбец '{lab_short_name}' не найден в таблице")
-        else:
-            logger.warning(f"Lab config for '{lab_id}' is missing 'short-name', using offset calculation")
-            lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
-            # Номер берём из ключа конфига: строка клиента может быть short-name.
-            lab_number = parse_lab_id(lab_key or lab_id)
-            lab_col = calculate_lab_column(lab_number, lab_offset)
-            logger.info(f"Calculated lab column using offset: {lab_offset} + {lab_number} = {lab_col}")
+                logger.warning(f"Lab config for '{lab_id}' is missing 'short-name', using offset calculation")
+                lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
+                # Номер берём из ключа конфига: строка клиента может быть short-name.
+                lab_number = parse_lab_id(lab_key or lab_id)
+                lab_col = calculate_lab_column(lab_number, lab_offset)
+                logger.info(f"Calculated lab column using offset: {lab_offset} + {lab_number} = {lab_col}")
 
-        # Get current cell value for protection check
-        current_value = sheet.cell(row_idx, lab_col).value or ""
-        logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
+            # Get current cell value for protection check
+            current_value = sheet.cell(row_idx, lab_col).value or ""
+            logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
 
-        # Determine final grade
-        final_result = ci_evaluation.grade_result.result  # "v" or "x"
-        final_message = ci_evaluation.grade_result.message
-        score_value = ci_evaluation.score  # Extracted score from logs (if any)
-
-        # Additional checks only if CI passed
-        if ci_evaluation.ci_passed:
-            # Check TASKID if configured
-            task_id_column_config = course_info.get("google", {}).get("task-id-column")
-            taskid_max = lab_config_dict.get("taskid-max")
-            ignore_taskid = lab_config_dict.get("ignore-task-id", False)
-
-            if task_id_column_config is not None and taskid_max is not None and not ignore_taskid:
-                task_id_column = task_id_column_config + 1
+            # Student order is only read when the TASKID check applies to this lab
+            student_order = None
+            task_id_column = taskid_column(course_info, lab_config_dict)
+            if task_id_column is not None:
                 student_order = get_student_order(sheet, row_idx, task_id_column)
 
-                if student_order is not None:
-                    taskid_shift = lab_config_dict.get("taskid-shift", 0)
-                    expected_taskid = calculate_expected_taskid(student_order, taskid_shift, taskid_max)
-                    logger.info(f"Expected TASKID: {expected_taskid} (order={student_order}, shift={taskid_shift}, max={taskid_max})")
-
-                    taskid_error = grader.check_taskid(
-                        org, repo_name,
-                        ci_evaluation.successful_runs,
-                        expected_taskid,
-                    )
-                    if taskid_error:
-                        logger.warning(f"TASKID error: {taskid_error.message}")
-                        raise HTTPException(status_code=400, detail=taskid_error.message)
-
-            # Calculate penalty if deadline configured
-            # Get timezone from course config to apply to deadline from sheet
+            # Deadline for penalty calculation, in the course timezone
             timezone_str = course_info.get("timezone")
             deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1, timezone_str=timezone_str)
-            penalty = 0
-            if deadline and ci_evaluation.latest_success_time:
-                from grading.penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
-                penalty_max = lab_config_dict.get("penalty-max", 0)
-                strategy_name = lab_config_dict.get("penalty-strategy", "weekly")
-                try:
-                    strategy = PenaltyStrategy(strategy_name)
-                except ValueError:
-                    strategy = PenaltyStrategy.WEEKLY
 
-                penalty = calculate_penalty(
-                    completed_at=ci_evaluation.latest_success_time,
-                    deadline=deadline,
-                    penalty_max=penalty_max,
-                    strategy=strategy,
-                )
+            target["sheet"] = sheet
+            target["row"] = row_idx
+            target["col"] = lab_col
 
-                if penalty > 0:
-                    logger.info(f"Calculated penalty: {penalty}")
+            return SheetContext(
+                current_cell_value=current_value,
+                student_order=student_order,
+                deadline=deadline,
+                decimal_separator=decimal_separator,
+            )
 
-            # Format final result with score and penalty
-            if score_value is not None:
-                # Format grade with score (and penalty if present)
-                final_result = format_grade_with_score("v", score_value, penalty, decimal_separator)
-                logger.info(f"Formatted grade with score: {final_result}")
+        outcome = evaluate_student(
+            grader, org, username, lab_config_dict, course_info, load_sheet_context,
+        )
 
-                # Build message
-                formatted_score = format_score(score_value, decimal_separator)
-                if penalty > 0:
-                    final_message = f"Результат CI: ✅ Все проверки пройдены (Баллы: {formatted_score}, штраф: -{penalty})"
-                else:
-                    final_message = f"Результат CI: ✅ Все проверки пройдены (Баллы: {formatted_score})"
-            elif penalty > 0:
-                # No score, but penalty exists
-                from grading.penalty import format_grade_with_penalty
-                final_result = format_grade_with_penalty("v", penalty)
-                final_message = f"Результат CI: ✅ Все проверки пройдены (штраф: -{penalty})"
-                logger.info(f"Applied penalty {penalty} for late submission: {final_result}")
+        if outcome.status == "error":
+            # Use 404 for "no commits" and 403 for forbidden edits, as before
+            if outcome.error_code == "NO_COMMITS":
+                status_code = 404
+            elif outcome.error_code == "FORBIDDEN_MODIFICATION":
+                status_code = 403
+            else:
+                status_code = 400
+            raise HTTPException(status_code=status_code, detail=outcome.message)
 
-        # Check cell protection
-        if not can_overwrite_cell(current_value):
-            logger.warning(f"Update rejected: cell already contains '{current_value}'")
+        if outcome.status == "pending":
+            return {
+                "status": "pending",
+                "message": outcome.message,
+                "passed": outcome.passed,
+                "checks": outcome.checks
+            }
+
+        if outcome.status == "rejected":
             response = {
                 "status": "rejected",
-                "result": current_value,
-                "message": "⚠️ Работа уже была проверена ранее. Обратитесь к преподавателю для пересдачи.",
-                "passed": ci_evaluation.grade_result.passed,
-                "checks": ci_evaluation.grade_result.checks,
-                "current_grade": current_value
+                "result": outcome.current_grade,
+                "message": outcome.message,
+                "passed": outcome.passed,
+                "checks": outcome.checks,
+                "current_grade": outcome.current_grade
             }
-            if score_value is not None:
-                response["score"] = format_score(score_value, decimal_separator)
+            if outcome.score is not None:
+                response["score"] = outcome.score
             return response
 
         # Update Google Sheets with new grade
-        logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{final_result}'")
-        sheet.update_cell(row_idx, lab_col, final_result)
+        logger.info(f"Updating cell at row {target['row']}, column {target['col']} with result '{outcome.cell_value}'")
+        target["sheet"].update_cell(target["row"], target["col"], outcome.cell_value)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
 
         response = {
             "status": "updated",
-            "result": final_result,
-            "message": final_message,
-            "passed": ci_evaluation.grade_result.passed,
-            "checks": ci_evaluation.grade_result.checks
+            "result": outcome.cell_value,
+            "message": outcome.message,
+            "passed": outcome.passed,
+            "checks": outcome.checks
         }
-        if score_value is not None:
-            response["score"] = format_score(score_value, decimal_separator)
+        if outcome.score is not None:
+            response["score"] = outcome.score
         return response
     except HTTPException:
         raise
     except Exception as e:
         logger.exception(f"Unexpected error during grading: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
+
 
 
 # ---------------------------------------------------------------------------
@@ -1192,6 +1140,10 @@ def admin_list_course_labs(request: Request, course_id: str, admin: str = Depend
             "template_repo": template_repo,
             "repo_provisioning": repo_provisioning,
             "can_propagate": bool(template_repo) and repo_provisioning == "fork",
+            # Bulk grading: candidates for the file holding the student's full
+            # name, and the one preselected via `student-name-file`.
+            "files": lab_config.get("files", []),
+            "name_file": lab_config.get("student-name-file"),
         })
 
     # Порядок как у преподавателя в таблице: ЛР0, ЛР0.1, ЛР1... Сортировка по
@@ -1309,6 +1261,136 @@ def propagate_template_update(
 @limiter.limit("60/minute")
 def get_propagate_job_status(request: Request, job_id: str, admin: str = Depends(require_admin)):
     job = get_propagate_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Работа не найдена")
+    return job.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Admin: bulk grading of a whole group's submissions for one lab.
+# Same job machinery as propagate above - a group takes minutes, so the run is
+# backgrounded and polled. See docs/PROJECT_DESCRIPTION.md.
+# ---------------------------------------------------------------------------
+
+
+class BulkGradeRequest(BaseModel):
+    # Файл, из первой строки которого берётся ФИО студента. Задан - обходятся
+    # все репозитории лабы в организации и логины проставляются в таблицу;
+    # пуст - проверяются только студенты с уже указанным логином.
+    name_file: str | None = None
+    # Прогнать все проверки и собрать отчёт, ничего не записывая в таблицу.
+    dry_run: bool = False
+
+
+def _open_group_worksheet(spreadsheet_id: str, group_id: str):
+    """
+    Open a group's worksheet, returning (spreadsheet, worksheet).
+
+    Opened by the endpoint rather than inside the job, so that a wrong group
+    fails the request with 404 instead of a job that dies immediately.
+    """
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+    sheets_client = gspread.authorize(creds)
+
+    try:
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+        worksheet = spreadsheet.worksheet(group_id)
+    except Exception as e:
+        logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
+        raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
+
+    return spreadsheet, worksheet
+
+
+@app.post("/admin/courses/{course_id}/groups/{group_id}/labs/{lab_id}/bulk-grade")
+@limiter.limit("10/minute")
+def start_bulk_grade(
+    request: Request,
+    course_id: str,
+    group_id: str,
+    lab_id: str,
+    background_tasks: BackgroundTasks,
+    body: BulkGradeRequest = BulkGradeRequest(),
+    admin: str = Depends(require_admin),
+):
+    """
+    Start grading a whole group for one lab in the background.
+
+    Every student goes through the same checks as a self-submitted work
+    (grading.bulk.evaluate_student). Unlike propagate's read-only dry run,
+    dry_run here still runs the full CI checks, so it is a background job too;
+    it just writes nothing to the spreadsheet.
+
+    Returns 202 with a job_id to poll via GET /admin/bulk-grade-jobs/{job_id};
+    only one run per (course_id, group_id, lab_id) at a time - a second POST
+    while one is in flight gets HTTP 409.
+    """
+    name_file = (body.name_file or "").strip() or None
+    mode = "by_file" if name_file else "by_sheet"
+
+    course_info = get_course_by_id(course_id)
+    org = course_info.get("github", {}).get("organization")
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+
+    resolved = find_lab_config(course_info.get("labs", {}), lab_id)
+    lab_key, lab_config_dict = resolved if resolved else (None, {})
+    repo_prefix = lab_config_dict.get("github-prefix")
+
+    if not all([org, spreadsheet_id, repo_prefix]):
+        logger.error(
+            f"Missing course configuration for {course_id}: org={org}, "
+            f"spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}"
+        )
+        raise HTTPException(status_code=400, detail="Missing course configuration")
+
+    spreadsheet, worksheet = _open_group_worksheet(spreadsheet_id, group_id)
+
+    job = try_start_bulk_job(course_id, group_id, lab_id, mode, body.dry_run, name_file)
+    if job is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Проверка этой лабораторной для этой группы уже выполняется",
+        )
+
+    logger.info(
+        f"Starting bulk grading job {job.job_id} for {course_id}/{group_id}/{lab_id} "
+        f"(mode={mode}, dry_run={body.dry_run}, admin={admin})"
+    )
+    github_client = GitHubClient(GITHUB_TOKEN)
+    background_tasks.add_task(
+        run_bulk_grading,
+        job,
+        LabGrader(github_client),
+        github_client,
+        worksheet,
+        spreadsheet,
+        course_info,
+        lab_config_dict,
+        parse_lab_id(lab_key or lab_id),
+    )
+    return JSONResponse(status_code=202, content={"job_id": job.job_id})
+
+
+@app.get("/admin/bulk-grade-jobs/{job_id}")
+@limiter.limit("120/minute")
+def get_bulk_grade_job_status(request: Request, job_id: str, admin: str = Depends(require_admin)):
+    job = get_bulk_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Работа не найдена")
+    return job.to_dict()
+
+
+@app.post("/admin/bulk-grade-jobs/{job_id}/cancel")
+@limiter.limit("30/minute")
+def cancel_bulk_grade_job(request: Request, job_id: str, admin: str = Depends(require_admin)):
+    """
+    Ask a running bulk grading job to stop.
+
+    It finishes the student it is on, flushes the grades buffered so far and
+    ends with status "cancelled".
+    """
+    job = request_bulk_job_cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Работа не найдена")
     return job.to_dict()
