@@ -80,6 +80,46 @@
       "dryRunFailed": "无法加载分发预览，请重试。",
       "startFailed": "无法启动更新分发，请重试。",
       "alreadyRunning": "此实验的更新分发正在进行中。"
+    },
+    "bulk": {
+      "button": "填充表格",
+      "title": "批量评定：{{lab}}",
+      "group": "班级",
+      "nameFile": "含学生姓名的文件",
+      "modeByFile": "将遍历课程组织中该实验的所有仓库。姓名取自指定文件的第一行；找到的 GitHub 用户名写入表格，然后进行评定。",
+      "modeBySheet": "文件字段为空：仅评定表格中已填写 GitHub 用户名的学生。",
+      "dryRun": "试运行（不写入表格）",
+      "dryRunBadge": "试运行",
+      "start": "开始评定",
+      "cancelRun": "停止",
+      "close": "关闭",
+      "inProgress": "已处理 {{processed}} / {{total}}",
+      "done": "评定完成",
+      "cancelled": "评定已停止",
+      "failed": "评定失败",
+      "registered": "已记录用户名",
+      "columns": {
+        "student": "姓名",
+        "github": "GitHub",
+        "status": "状态",
+        "grade": "成绩",
+        "message": "信息"
+      },
+      "statuses": {
+        "updated": "已评定",
+        "rejected": "此前已评定",
+        "pending": "CI 运行中",
+        "error": "错误",
+        "conflict": "用户名冲突",
+        "unmatched": "姓名未匹配",
+        "ambiguous": "姓名有歧义"
+      },
+      "errors": {
+        "groupsFailed": "加载班级失败",
+        "startFailed": "启动评定失败，请重试。",
+        "alreadyRunning": "该实验对该班级的评定已在进行中。",
+        "cancelFailed": "停止评定失败"
+      }
     }
   },
   "join": {

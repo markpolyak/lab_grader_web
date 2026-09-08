@@ -55,6 +55,7 @@ FRONTEND_URL=http://localhost:8080
 | Task | Location |
 |------|----------|
 | Add API endpoint | `main.py` |
+| Change grading logic | `grading/bulk.py` (`evaluate_student`, shared by single and bulk grading) |
 | Add React component | `frontend/courses-front/src/components/` |
 | Add/edit course | `courses/` directory + `index.yaml` |
 | Add translation | `frontend/courses-front/src/locales/{en,ru,zh}/` |
@@ -117,6 +118,25 @@ to every student fork as pull requests, from the admin lab list page (`/admin/co
 Orchestration lives in `grading/propagate.py` (in-memory job state, single-worker backend required - see
 `docs/PROJECT_DESCRIPTION.md`). All `/admin/...` and course-management routes require the `require_admin`
 FastAPI dependency in `main.py`, not just the frontend's `ProtectedRoute`.
+
+## Bulk Grading (admin)
+
+Grades a whole group for one lab in a single run, started from the admin lab list page
+(`/admin/courses/{course_id}/labs`) - see `docs/PROJECT_DESCRIPTION.md` for the full behaviour.
+
+- `grading/bulk.py:evaluate_student` holds the grading decision and is shared by `grade_lab` and the
+  bulk run, so the two cannot drift apart. It never touches Sheets: the spreadsheet context arrives
+  through a lazily-invoked provider, which is what lets `grade_lab` still answer repository and CI
+  errors without opening a Sheets connection.
+- Endpoints: `POST /admin/courses/{id}/groups/{g}/labs/{l}/bulk-grade` (202 + `job_id`),
+  `GET /admin/bulk-grade-jobs/{job_id}`, `POST /admin/bulk-grade-jobs/{job_id}/cancel`.
+- Job state mirrors `grading/propagate.py` (in-memory, single-worker backend required, 409 on a
+  second run for the same course/group/lab).
+- With `name_file` set, repos are discovered by the lab's prefix and matched to sheet rows by the
+  first line of that file; without it, only students who already have a username in the sheet are
+  graded. Name matching is exact after normalization - no fuzzy matching, by design.
+- Reads the worksheet once via `get_all_values()` and writes grades in batches of 10: the per-cell
+  helpers spend ~6 Sheets requests per student, over the 60 reads/minute quota for a group of 30.
 
 ## CI/CD
 

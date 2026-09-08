@@ -18,6 +18,7 @@ import {
   Button as MuiButton,
   Checkbox,
 } from "@mui/material";
+import { BulkGradeDialog } from "./BulkGradeDialog";
 import {
   Container,
   Panel,
@@ -75,6 +76,9 @@ export const LabList = ({ courseId, onBack }) => {
 
   const [job, setJob] = useState(null);
   const pollRef = useRef(null);
+
+  // Лаба, для которой открыт диалог массовой проверки (независим от рассылки)
+  const [bulkLab, setBulkLab] = useState(null);
 
   const showSnackbar = (message, severity = "info") => setSnackbar({ open: true, message, severity });
 
@@ -252,6 +256,14 @@ export const LabList = ({ courseId, onBack }) => {
                           </span>
                         </Tooltip>
                       )}
+                      <MuiButton
+                        size="small"
+                        variant="outlined"
+                        sx={{ ml: 1 }}
+                        onClick={() => setBulkLab(lab)}
+                      >
+                        {t("adminLabs.bulk.button")}
+                      </MuiButton>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -400,6 +412,15 @@ export const LabList = ({ courseId, onBack }) => {
           </MuiButton>
         </DialogActions>
       </Dialog>
+
+      {bulkLab && (
+        <BulkGradeDialog
+          courseId={courseId}
+          lab={bulkLab}
+          onClose={() => setBulkLab(null)}
+          onError={(message) => showSnackbar(message, "error")}
+        />
+      )}
 
       <Snackbar
         open={snackbar.open}

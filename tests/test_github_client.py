@@ -425,6 +425,98 @@ class TestGitHubClientListOrgRepos:
         assert call.call_count == 1
 
 
+class TestGitHubClientGetFileContent:
+    """Tests for get_file_content method (used by bulk grading)."""
+
+    URL = "https://api.github.com/repos/test-org/test-repo/contents/info.md"
+
+    def _file_payload(self, text, **overrides):
+        import base64
+        payload = {
+            "type": "file",
+            "encoding": "base64",
+            "size": len(text.encode("utf-8")),
+            "content": base64.b64encode(text.encode("utf-8")).decode(),
+        }
+        payload.update(overrides)
+        return payload
+
+    @responses.activate
+    def test_decodes_utf8(self):
+        """Cyrillic content comes back intact."""
+        responses.add(
+            responses.GET, self.URL,
+            json=self._file_payload("Иванов Иван\nЛР1"),
+            status=200
+        )
+        client = GitHubClient("test_token")
+        assert client.get_file_content("test-org", "test-repo", "info.md") == "Иванов Иван\nЛР1"
+
+    @responses.activate
+    def test_strips_bom(self):
+        """A UTF-8 BOM must not end up glued to the student's surname."""
+        responses.add(
+            responses.GET, self.URL,
+            json=self._file_payload("\ufeffИванов Иван"),
+            status=200
+        )
+        client = GitHubClient("test_token")
+        assert client.get_file_content("test-org", "test-repo", "info.md") == "Иванов Иван"
+
+    @responses.activate
+    def test_missing_file(self):
+        """A missing file returns None."""
+        responses.add(responses.GET, self.URL, json={"message": "Not Found"}, status=404)
+        client = GitHubClient("test_token")
+        assert client.get_file_content("test-org", "test-repo", "info.md") is None
+
+    @responses.activate
+    def test_directory_returns_none(self):
+        """A directory path answers with a list of entries, not content."""
+        responses.add(responses.GET, self.URL, json=[{"name": "a.md"}], status=200)
+        client = GitHubClient("test_token")
+        assert client.get_file_content("test-org", "test-repo", "info.md") is None
+
+    @responses.activate
+    def test_oversized_file_is_skipped(self):
+        """Files above the size limit are not decoded."""
+        responses.add(
+            responses.GET, self.URL,
+            json=self._file_payload("Иванов Иван", size=10 * 1024 * 1024),
+            status=200
+        )
+        client = GitHubClient("test_token")
+        assert client.get_file_content("test-org", "test-repo", "info.md") is None
+
+    @responses.activate
+    def test_unsupported_encoding_returns_none(self):
+        """GitHub omits the body of large files, answering encoding "none"."""
+        responses.add(
+            responses.GET, self.URL,
+            json={"type": "file", "encoding": "none", "size": 4, "content": ""},
+            status=200
+        )
+        client = GitHubClient("test_token")
+        assert client.get_file_content("test-org", "test-repo", "info.md") is None
+
+    @responses.activate
+    def test_non_utf8_content_returns_none(self):
+        """Binary content that is not valid UTF-8 returns None, never raises."""
+        import base64
+        responses.add(
+            responses.GET, self.URL,
+            json={
+                "type": "file",
+                "encoding": "base64",
+                "size": 4,
+                "content": base64.b64encode(b"\xff\xfe\x00\x01").decode(),
+            },
+            status=200
+        )
+        client = GitHubClient("test_token")
+        assert client.get_file_content("test-org", "test-repo", "info.md") is None
+
+
 class TestGitHubClientCreatePullRequest:
     """Tests for create_pull_request method."""
 
