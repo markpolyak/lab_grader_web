@@ -377,6 +377,45 @@ class TestJoinCallback:
         assert generate_call.call_count == 0
 
     @responses.activate
+    def test_team_lab_sets_a_session_and_creates_nothing(self, mock_request, join_course_config):
+        """A team lab needs a dialogue, so the callback only authenticates
+        the student - the repository is created later, by the team endpoints
+        (docs/TEAM_ASSIGNMENTS_PLAN.md §8.1)."""
+        join_course_config["labs"]["1"]["team"] = {"size-max": 4}
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            state = _get_state(mock_request)
+
+            responses.add(
+                responses.POST,
+                "https://github.com/login/oauth/access_token",
+                json={"access_token": "gho_student_token"},
+                status=200,
+            )
+            responses.add(
+                responses.GET, "https://api.github.com/user",
+                json={"login": "student1"}, status=200,
+            )
+            generate_call = responses.add(
+                responses.POST,
+                "https://api.github.com/repos/test-org/os-task1-template/generate",
+                json={}, status=201,
+            )
+
+            resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["authenticated"]
+        assert generate_call.call_count == 0
+
+        cookie = resp.headers["set-cookie"]
+        assert "join_session=" in cookie
+        assert "HttpOnly" in cookie
+        assert "SameSite=lax" in cookie.replace("samesite", "SameSite")
+        assert "Path=/join" in cookie
+        assert f"Max-Age={main_module.JOIN_SESSION_MAX_AGE}" in cookie
+        assert main_module.JOIN_SESSION_MAX_AGE == 1800
+
+    @responses.activate
     def test_student_access_token_is_never_exposed_in_redirect(self, mock_request, mock_get_course_by_id):
         """The student's one-shot OAuth access token must never leak into the final redirect."""
         state = _get_state(mock_request)
@@ -400,3 +439,61 @@ class TestJoinCallback:
         resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
 
         assert "gho_super_secret_token" not in resp.headers["location"]
+
+
+class TestJoinSession:
+    """The signed cookie carrying the confirmed username (§6 of the team plan)."""
+
+    def _request_with_cookie(self, cookie_value):
+        from starlette.requests import Request
+
+        headers = []
+        if cookie_value is not None:
+            headers.append((b"cookie", f"join_session={cookie_value}".encode()))
+        scope = {
+            "type": "http", "method": "GET", "path": "/join",
+            "headers": headers, "client": ("127.0.0.1", 12345),
+        }
+        return Request(scope, lambda: None)
+
+    def test_round_trip(self):
+        cookie = main_module._build_join_session("student1", "test-course", "1")
+        request = self._request_with_cookie(cookie)
+
+        assert main_module.require_join_session(request, "test-course", "1") == "student1"
+
+    def test_missing_cookie_is_401(self):
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(self._request_with_cookie(None), "test-course", "1")
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "SESSION_REQUIRED"
+
+    def test_forged_cookie_is_401(self):
+        request = self._request_with_cookie("not-a-signed-value")
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(request, "test-course", "1")
+        assert exc_info.value.status_code == 401
+
+    def test_expired_cookie_is_401(self):
+        backdated = time.time() - (main_module.JOIN_SESSION_MAX_AGE + 10)
+        with patch("itsdangerous.timed.time.time", return_value=backdated):
+            cookie = main_module._build_join_session("student1", "test-course", "1")
+
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(self._request_with_cookie(cookie), "test-course", "1")
+        assert exc_info.value.status_code == 401
+
+    def test_cookie_of_another_lab_is_rejected(self):
+        """A session obtained for one lab must not act on another."""
+        cookie = main_module._build_join_session("student1", "test-course", "2")
+
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(self._request_with_cookie(cookie), "test-course", "1")
+        assert exc_info.value.status_code == 401
+
+    def test_cookie_of_another_course_is_rejected(self):
+        cookie = main_module._build_join_session("student1", "other-course", "1")
+
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(self._request_with_cookie(cookie), "test-course", "1")
+        assert exc_info.value.status_code == 401

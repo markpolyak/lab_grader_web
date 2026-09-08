@@ -119,6 +119,11 @@ GITHUB_OAUTH_CALLBACK_URL = os.getenv("GITHUB_OAUTH_CALLBACK_URL")
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
 # Max age (seconds) for the signed OAuth `state` param - see docs/REPO_GENERATION_PLAN.md §3.3.
 JOIN_STATE_MAX_AGE = 600
+# Student session issued by /join/callback for team labs, so that the team
+# endpoints can take the confirmed username from a signed cookie and never
+# from the request - see docs/TEAM_ASSIGNMENTS_PLAN.md §6.
+JOIN_SESSION_COOKIE = "join_session"
+JOIN_SESSION_MAX_AGE = 1800
 
 # Rate limiting configuration
 limiter = Limiter(key_func=get_remote_address)
@@ -984,6 +989,89 @@ def _parse_join_state(state: str | None) -> dict:
     return payload
 
 
+def _build_join_session(username: str, course_id: str, lab_id: str) -> str:
+    """
+    Build the signed value of the `join_session` cookie.
+
+    An individual lab finishes inside the OAuth callback, but a team lab needs
+    a dialogue (show the teams, wait for the choice), so the confirmed
+    username is carried in a short-lived session instead
+    (docs/TEAM_ASSIGNMENTS_PLAN.md §6). Same signer and encoding as
+    _build_join_state.
+    """
+    payload = json.dumps({
+        "username": username,
+        "course_id": course_id,
+        "lab_id": lab_id,
+    }).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload).decode("ascii")
+    return signer.sign(payload_b64.encode("ascii")).decode("ascii")
+
+
+def _parse_join_session(cookie: str | None) -> dict | None:
+    """
+    Verify and decode a `join_session` cookie.
+
+    Returns:
+        The payload, or None if the cookie is missing, forged or expired
+    """
+    if not cookie:
+        return None
+    try:
+        payload_b64 = signer.unsign(cookie, max_age=JOIN_SESSION_MAX_AGE).decode("ascii")
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+    except (BadSignature, ValueError, TypeError, KeyError):
+        return None
+
+    if not isinstance(payload, dict) or not payload.get("username"):
+        return None
+    return payload
+
+
+def _set_join_session_cookie(response: Response, username: str, course_id: str, lab_id: str) -> None:
+    """Attach the `join_session` cookie to a response (§6 of the plan)."""
+    response.set_cookie(
+        key=JOIN_SESSION_COOKIE,
+        value=_build_join_session(username, course_id, lab_id),
+        httponly=True,
+        samesite="lax",
+        max_age=JOIN_SESSION_MAX_AGE,
+        path="/join",
+        secure=False,
+    )
+
+
+def require_join_session(request: Request, course_id: str, lab_id: str) -> str:
+    """
+    The confirmed GitHub username of the student behind a team request.
+
+    The username comes from this cookie and from nowhere else - never from the
+    request body, a query parameter or the path. That is the same requirement
+    as §3.2 of docs/REPO_GENERATION_PLAN.md: an identity is only ever
+    established by the server-side `code -> access_token -> GET /user`
+    exchange. Accepting a username from the request would hand out access to a
+    private repository under someone else's login.
+
+    The course and lab in the cookie must match the ones in the path, so a
+    session obtained for one lab cannot act on another.
+
+    Raises:
+        HTTPException(401): with the stable code SESSION_REQUIRED
+    """
+    payload = _parse_join_session(request.cookies.get(JOIN_SESSION_COOKIE))
+    if payload is None:
+        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
+
+    if payload.get("course_id") != course_id or payload.get("lab_id") != lab_id:
+        logger.warning(
+            "join_session for %s/%s presented for %s/%s",
+            payload.get("course_id"), payload.get("lab_id"), course_id, lab_id,
+        )
+        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
+
+    return payload["username"]
+
+
 def _join_result_redirect(course_id: str, lab_id: str, status: str, **extra) -> str:
     """Build the frontend result URL (/join/:courseId/:labId) the student's browser lands on."""
     params = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
@@ -1142,6 +1230,16 @@ def join_callback(
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_exchange_failed"))
 
     logger.info(f"Confirmed GitHub username '{username}' for join {course_id}/{lab_id}")
+
+    if team_config is not None:
+        # A team lab creates nothing here: the student still has to pick or
+        # create a team. The confirmed username is carried onward in the
+        # signed join_session cookie (§8.1 of the team plan).
+        response = RedirectResponse(
+            url=_join_result_redirect(course_id, lab_id, "authenticated", username=username)
+        )
+        _set_join_session_cookie(response, username, course_id, lab_id)
+        return response
 
     github_prefix = lab_config.get("github-prefix")
     template_repo = lab_config.get("template-repo")
