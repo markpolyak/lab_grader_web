@@ -150,6 +150,7 @@ def evaluate_student(
     lab_config: dict[str, Any],
     course_info: dict[str, Any],
     sheet_context: Callable[[], SheetContext],
+    repo_name: str | None = None,
 ) -> StudentOutcome:
     """
     Grade one student's repository.
@@ -171,12 +172,15 @@ def evaluate_student(
         sheet_context: Callable returning the spreadsheet context. Invoked at
             most once, and only after CI evaluation succeeds, so callers may
             defer opening a Sheets connection until then.
+        repo_name: Repository to grade. Defaults to the conventional
+            `{github-prefix}-{username}`; a team lab passes the team's shared
+            repository instead (docs/TEAM_ASSIGNMENTS_PLAN.md §10.1).
 
     Returns:
         StudentOutcome. For status "updated", `cell_value` is what should be
         written to the grade cell; the caller performs the write.
     """
-    repo_name = repo_name_for(lab_config, username)
+    repo_name = repo_name or repo_name_for(lab_config, username)
     logger.info(f"Evaluating repository: {org}/{repo_name}")
 
     # Step 1: Repository checks (required files, workflows, commits)
@@ -524,13 +528,15 @@ def resolve_github_cell(existing: str, username: str) -> tuple[bool, str | None]
 @dataclass
 class BulkResult:
     """Outcome for a single student, as shown in the run report."""
-    status: str  # updated | rejected | pending | error | conflict | unmatched | ambiguous
+    # updated | rejected | pending | error | conflict | unmatched | ambiguous | no_team
+    status: str
     student_name: str | None = None
     github: str | None = None
     repo: str | None = None
     grade: str | None = None
     message: str = ""
     registered: bool = False  # GitHub username was written to the sheet
+    team: str | None = None   # Team title, for team labs
 
     def to_dict(self) -> dict:
         return {
@@ -541,6 +547,7 @@ class BulkResult:
             "grade": self.grade,
             "message": self.message,
             "registered": self.registered,
+            "team": self.team,
         }
 
 
@@ -683,6 +690,7 @@ class _Target:
     student_name: str | None
     repo: str
     registered: bool = False  # Username was queued for writing into the sheet
+    team: str | None = None   # Team title, for team labs
 
 
 def _plan_by_file(
@@ -800,6 +808,114 @@ def _plan_by_sheet(
     return targets
 
 
+def _plan_teams(
+    job: BulkJob,
+    github_client: GitHubClient,
+    org: str,
+    course_info: dict[str, Any],
+    lab_config: dict[str, Any],
+    targets: list[_Target],
+) -> list[list[_Target]]:
+    """
+    Attach every student to their team and group the targets by repository.
+
+    A team's repository is graded once, and the outcome is spread over its
+    members' rows (§10.3). Students who are in no team are finished work: they
+    land in `job.results` with the `no_team` status and are never graded.
+
+    Returns:
+        Groups of targets, one group per team repository
+
+    Raises:
+        BulkGradingError: the organization's repositories are unavailable, so
+        no team can be resolved at all
+    """
+    from .teams import TeamRegistry
+
+    registry = TeamRegistry(github_client)
+    teams = registry.list_teams(
+        org,
+        lab_config.get("github-prefix", ""),
+        course_info.get("github", {}).get("teachers") or [],
+    )
+    if teams is None:
+        raise BulkGradingError("Не удалось получить список команд лабораторной работы")
+
+    index = registry.member_index(teams)
+    logger.info(f"Bulk job {job.job_id}: {len(teams)} team(s), {len(index)} member(s)")
+
+    groups: "OrderedDict[str, list[_Target]]" = OrderedDict()
+    for target in targets:
+        team = index.get(target.username.casefold())
+        if team is None:
+            job.results.append(BulkResult(
+                status="no_team",
+                student_name=target.student_name,
+                github=target.username,
+                message="Студент не состоит ни в одной команде этой лабораторной работы",
+            ))
+            continue
+
+        target.repo = team.repo_name
+        target.team = team.title or team.slug
+        groups.setdefault(team.repo_name, []).append(target)
+
+    return list(groups.values())
+
+
+def _team_member_result(
+    target: _Target,
+    outcome: StudentOutcome,
+    values: list[list[str]],
+    lab_col: int,
+) -> tuple[BulkResult, bool]:
+    """
+    Turn one team-wide outcome into one member's row of the report.
+
+    The team was graded with a synthetic, empty cell value, so the cell
+    protection was not applied there - it is applied here, per member, against
+    that member's own cell (§10.3).
+
+    Returns:
+        (result, should_write)
+    """
+    if outcome.status != "updated":
+        return BulkResult(
+            status=outcome.status,
+            student_name=target.student_name,
+            github=target.username,
+            repo=target.repo,
+            grade=outcome.cell_value if outcome.status == "rejected" else None,
+            message=outcome.message,
+            registered=target.registered,
+            team=target.team,
+        ), False
+
+    current = cell_from_grid(values, target.row, lab_col)
+    if not can_overwrite_cell(current):
+        return BulkResult(
+            status="rejected",
+            student_name=target.student_name,
+            github=target.username,
+            repo=target.repo,
+            grade=current,
+            message=CELL_PROTECTED_MESSAGE,
+            registered=target.registered,
+            team=target.team,
+        ), False
+
+    return BulkResult(
+        status="updated",
+        student_name=target.student_name,
+        github=target.username,
+        repo=target.repo,
+        grade=outcome.cell_value,
+        message=outcome.message,
+        registered=target.registered,
+        team=target.team,
+    ), True
+
+
 def run_bulk_grading(
     job: BulkJob,
     grader: LabGrader,
@@ -875,6 +991,14 @@ def run_bulk_grading(
         )
         task_id_col = taskid_column(course_info, lab_config)
 
+        team_lab = is_team_lab(lab_config)
+        if team_lab and job.mode == "by_file":
+            # One name file per team cannot identify several students; the
+            # endpoint refuses this combination, this is the safety net.
+            raise BulkGradingError(
+                "Для командной лабораторной работы режим сопоставления по файлу с ФИО неприменим"
+            )
+
         if job.mode == "by_file":
             targets, github_writes = _plan_by_file(
                 job, github_client, org, lab_config, job.name_file,
@@ -884,22 +1008,45 @@ def run_bulk_grading(
         else:
             targets = _plan_by_sheet(values, student_col, github_col, lab_config)
 
+        if team_lab:
+            # One group per team repository; students without a team are
+            # already reported and drop out of `targets`.
+            units = _plan_teams(job, github_client, org, course_info, lab_config, targets)
+            targets = [target for unit in units for target in unit]
+        else:
+            units = [[target] for target in targets]
+
         # Rows rejected while planning are already done; count them as processed
         job.total = len(targets) + len(job.results)
         job.processed = len(job.results)
         logger.info(
-            f"Bulk job {job.job_id}: {len(targets)} student(s) to grade, "
-            f"{len(job.results)} rejected while planning"
+            f"Bulk job {job.job_id}: {len(targets)} student(s) to grade in "
+            f"{len(units)} unit(s), {len(job.results)} rejected while planning"
         )
 
         cancelled = False
-        for target in targets:
+        for unit in units:
             if job.cancel_requested:
                 logger.info(f"Bulk job {job.job_id}: cancellation requested")
                 cancelled = True
                 break
 
-            def context_for(target=target) -> SheetContext:
+            # A team's repository is evaluated exactly once, for the whole
+            # unit: the heavy part (files, commits, check-runs, job logs) must
+            # not be repeated per member.
+            first = unit[0]
+
+            def context_for(target=first) -> SheetContext:
+                if team_lab:
+                    # Synthetic context: the cell protection cannot be decided
+                    # for a team, so it is applied per member afterwards, and
+                    # a team has no order number to derive a TASKID from.
+                    return SheetContext(
+                        current_cell_value="",
+                        student_order=None,
+                        deadline=deadline,
+                        decimal_separator=decimal_separator,
+                    )
                 return SheetContext(
                     current_cell_value=cell_from_grid(values, target.row, lab_col),
                     student_order=(
@@ -912,32 +1059,51 @@ def run_bulk_grading(
 
             try:
                 outcome = evaluate_student(
-                    grader, org, target.username, lab_config, course_info, context_for,
+                    grader, org, first.username, lab_config, course_info, context_for,
+                    repo_name=first.repo if team_lab else None,
                 )
-                result = BulkResult(
-                    status=outcome.status,
-                    student_name=target.student_name,
-                    github=target.username,
-                    repo=target.repo,
-                    grade=outcome.cell_value if outcome.status in ("updated", "rejected") else None,
-                    message=outcome.message,
-                    registered=target.registered,
-                )
-                if outcome.status == "updated":
-                    pending.append((target.row, lab_col, outcome.cell_value))
+                unit_results = []
+                for target in unit:
+                    if team_lab:
+                        result, should_write = _team_member_result(
+                            target, outcome, values, lab_col
+                        )
+                    else:
+                        result = BulkResult(
+                            status=outcome.status,
+                            student_name=target.student_name,
+                            github=target.username,
+                            repo=target.repo,
+                            grade=(
+                                outcome.cell_value
+                                if outcome.status in ("updated", "rejected") else None
+                            ),
+                            message=outcome.message,
+                            registered=target.registered,
+                        )
+                        should_write = outcome.status == "updated"
+                    if should_write:
+                        pending.append((target.row, lab_col, outcome.cell_value))
+                    unit_results.append(result)
             except Exception as e:
-                logger.exception(f"Bulk job {job.job_id}: error grading {target.username}")
-                result = BulkResult(
-                    status="error",
-                    student_name=target.student_name,
-                    github=target.username,
-                    repo=target.repo,
-                    message=f"Внутренняя ошибка при проверке: {e}",
-                    registered=target.registered,
+                logger.exception(
+                    f"Bulk job {job.job_id}: error grading {first.username} ({first.repo})"
                 )
+                unit_results = [
+                    BulkResult(
+                        status="error",
+                        student_name=target.student_name,
+                        github=target.username,
+                        repo=target.repo,
+                        message=f"Внутренняя ошибка при проверке: {e}",
+                        registered=target.registered,
+                        team=target.team,
+                    )
+                    for target in unit
+                ]
 
-            job.results.append(result)
-            job.processed += 1
+            job.results.extend(unit_results)
+            job.processed += len(unit_results)
 
             if len(pending) >= WRITE_BATCH_SIZE:
                 flush()

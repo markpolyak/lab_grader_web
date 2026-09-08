@@ -452,6 +452,33 @@ class TestBulkGradeEndpoint:
         assert job.mode == "by_file"
         assert job.name_file == "info.md"
 
+    def test_by_file_mode_is_refused_for_a_team_lab(self, mock_request, bulk_course_config, mock_worksheet):
+        """One name file per team cannot identify several students (§10.3)."""
+        bulk_course_config["labs"]["1"]["team"] = {"size-max": 4}
+
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.start_bulk_grade(
+                    mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                    body=main_module.BulkGradeRequest(name_file="info.md"), admin="admin",
+                )
+
+        assert exc_info.value.status_code == 400
+        assert "ФИО" in exc_info.value.detail
+
+    def test_team_lab_still_runs_in_by_sheet_mode(self, mock_request, bulk_course_config, mock_worksheet):
+        import json
+
+        bulk_course_config["labs"]["1"]["team"] = {"size-max": 4}
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                body=main_module.BulkGradeRequest(), admin="admin",
+            )
+
+        job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
+        assert job.mode == "by_sheet"
+
     def test_blank_name_file_falls_back_to_by_sheet_mode(self, mock_request, bulk_course_config, mock_worksheet):
         import json
 

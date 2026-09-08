@@ -830,8 +830,32 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
                 decimal_separator=decimal_separator,
             )
 
+        # A team lab has one repository per team, not per student: find the
+        # student's team and grade that repository, writing the result only
+        # into this student's own row (docs/TEAM_ASSIGNMENTS_PLAN.md §10.2).
+        team_repo_name = None
+        if is_team_lab(lab_config_dict):
+            registry = TeamRegistry(github_client)
+            teams = registry.list_teams(
+                org, repo_prefix, _course_teachers(course_info)
+            )
+            if teams is None:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Не удалось получить список команд с GitHub. Попробуйте ещё раз позже",
+                )
+            team = registry.find_member_team(teams, username)
+            if team is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Вы ещё не состоите в команде для этой лабораторной работы",
+                )
+            team_repo_name = team.repo_name
+            logger.info(f"Grading team repository {org}/{team_repo_name} for '{username}'")
+
         outcome = evaluate_student(
             grader, org, username, lab_config_dict, course_info, load_sheet_context,
+            repo_name=team_repo_name,
         )
 
         if outcome.status == "error":
@@ -1723,6 +1747,17 @@ def start_bulk_grade(
             f"spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}"
         )
         raise HTTPException(status_code=400, detail="Missing course configuration")
+
+    if mode == "by_file" and is_team_lab(lab_config_dict):
+        # One repository holds one name file for several students, so a name
+        # cannot resolve a row for the whole team (§10.3 of the team plan).
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Для командной лабораторной работы сопоставление по файлу с ФИО неприменимо: "
+                "проверяются студенты с указанным в таблице логином GitHub"
+            ),
+        )
 
     spreadsheet, worksheet = _open_group_worksheet(spreadsheet_id, group_id)
 

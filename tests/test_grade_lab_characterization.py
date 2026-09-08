@@ -564,3 +564,142 @@ class TestParseLabId:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestGradeLabTeamLab:
+    """
+    Single grading of a team lab: the team's repository is graded, and the
+    result goes into the requesting student's own row only
+    (docs/TEAM_ASSIGNMENTS_PLAN.md §10.2).
+    """
+
+    @pytest.fixture(autouse=True)
+    def setup(self, mock_env_vars):
+        from grading.teams import reset_teams_state
+
+        reset_teams_state()
+        yield
+        reset_teams_state()
+
+    @pytest.fixture
+    def team_course_config(self, sample_course_config):
+        sample_course_config["labs"]["1"]["team"] = {"size-max": 4}
+        return sample_course_config
+
+    def _team_responses(self, org, repo_name, members=("testuser", "mate")):
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/orgs/{org}/repos",
+            json=[{"name": repo_name, "description": "Пингвины"}],
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}/collaborators",
+            json=[
+                {"login": login, "permissions": {"push": True, "admin": False}}
+                for login in members
+            ],
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}/invitations",
+            json=[], status=200,
+        )
+
+    def _passing_repo_responses(self, org, repo_name):
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}/contents/test_main.py",
+            json={"name": "test_main.py"}, status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}/contents/.github/workflows",
+            json=[{"name": "test.yml"}], status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}/commits",
+            json=[{"sha": "abc123"}], status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}/commits/abc123",
+            json={"sha": "abc123", "files": []}, status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}/commits/abc123/check-runs",
+            json={"check_runs": [
+                {"name": "test", "conclusion": "success", "html_url": "http://test"}
+            ]},
+            status=200,
+        )
+
+    @responses.activate
+    def test_grades_the_team_repository_into_the_students_row(
+        self, team_course_config, mock_gspread, mock_service_account_creds, mock_request
+    ):
+        org = team_course_config["github"]["organization"]
+        repo_name = "test-task1-team-1"
+        self._team_responses(org, repo_name)
+        self._passing_repo_responses(org, repo_name)
+
+        mock_gspread['worksheet'].row_values.return_value = ["№", "ФИО", "GitHub", "ЛР1"]
+        mock_gspread['worksheet'].col_values.return_value = ["", "", "testuser"]
+
+        from main import grade_lab, GradeRequest
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            result = grade_lab(
+                mock_request, "test-course", "group1", "ЛР1", GradeRequest(github="testuser"),
+            )
+
+        assert result["status"] == "updated"
+        assert result["result"] == "v"
+        # Only the requesting student's row is written - the endpoint is
+        # public and never writes into a groupmate's row.
+        mock_gspread['worksheet'].update_cell.assert_called_once()
+        # The individual repository name was never requested
+        assert not any("test-task1-testuser" in call.request.url for call in responses.calls)
+
+    @responses.activate
+    def test_student_without_a_team_gets_a_clear_message(
+        self, team_course_config, mock_gspread, mock_service_account_creds, mock_request
+    ):
+        org = team_course_config["github"]["organization"]
+        self._team_responses(org, "test-task1-team-1", members=("mate",))
+
+        from main import grade_lab, GradeRequest
+        from fastapi import HTTPException
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                grade_lab(
+                    mock_request, "test-course", "group1", "ЛР1",
+                    GradeRequest(github="testuser"),
+                )
+
+        assert exc_info.value.status_code == 404
+        assert "команде" in exc_info.value.detail
+        mock_gspread['worksheet'].update_cell.assert_not_called()
+
+    @responses.activate
+    def test_unavailable_teams_return_502(
+        self, team_course_config, mock_gspread, mock_service_account_creds, mock_request
+    ):
+        org = team_course_config["github"]["organization"]
+        responses.add(responses.GET, f"https://api.github.com/orgs/{org}/repos", status=500)
+
+        from main import grade_lab, GradeRequest
+        from fastapi import HTTPException
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                grade_lab(
+                    mock_request, "test-course", "group1", "ЛР1",
+                    GradeRequest(github="testuser"),
+                )
+
+        assert exc_info.value.status_code == 502
