@@ -827,8 +827,9 @@ def _plan_teams(
         Groups of targets, one group per team repository
 
     Raises:
-        BulkGradingError: the organization's repositories are unavailable, so
-        no team can be resolved at all
+        BulkGradingError: the organization's repositories are unavailable, or
+        some team's roster could not be read - in both cases a student without
+        a team cannot be told apart from one whose team is simply unreadable
     """
     from .teams import TeamRegistry
 
@@ -840,6 +841,18 @@ def _plan_teams(
     )
     if teams is None:
         raise BulkGradingError("Не удалось получить список команд лабораторной работы")
+
+    unreadable = [team.slug for team in teams if team.members_unknown]
+    if unreadable:
+        # Members of a team whose roster could not be read are indistinguishable
+        # from students who never joined one. Reporting them as "no_team" would
+        # tell the teacher a whole team never registered, so the run stops
+        # instead - the same treatment the unavailable repository list gets.
+        raise BulkGradingError(
+            "Не удалось прочитать состав команд: "
+            + ", ".join(unreadable)
+            + ". Повторите проверку позже"
+        )
 
     index = registry.member_index(teams)
     logger.info(f"Bulk job {job.job_id}: {len(teams)} team(s), {len(index)} member(s)")

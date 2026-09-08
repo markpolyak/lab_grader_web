@@ -478,10 +478,11 @@ class FakeProvisioner:
         self.result = result
 
     def provision(self, org, github_prefix, template_repo, repo_suffix,
-                  mode="template", access_username=None):
+                  mode="template", access_username=None, force_invite=False):
         self.calls.append({
             "org": org, "github_prefix": github_prefix, "template_repo": template_repo,
             "repo_suffix": repo_suffix, "mode": mode, "access_username": access_username,
+            "force_invite": force_invite,
         })
         if self.result is not None:
             return self.result
@@ -497,7 +498,7 @@ def _registry(github, provisioner=None):
     return TeamRegistry(github, provisioner or FakeProvisioner())
 
 
-LAB = dict(course_id="c", lab_id="5", org="test-org",
+LAB = dict(course_id="c", lab_key="5", org="test-org",
            github_prefix="os-task5", template_repo="test-org/os-task5-template")
 
 
@@ -724,3 +725,92 @@ class TestJoinTeam:
         registry.join_team(**LAB, username="dave", slug="team-1")
 
         assert registry.cached_teams("test-org", "os-task5") is None
+
+
+class TestUnreadableRoster:
+    """
+    A roster GitHub refused to hand over is not evidence that the student is
+    in no team - §7.3/§7.4. Regression: it used to read as "teamless" and
+    handed the student a second team with a second repository.
+    """
+
+    def _github(self):
+        return FakeGitHub(
+            repos=[_repo("os-task5-team-1", "Пингвины"), _repo("os-task5-team-2", "Тюлени")],
+            collaborators={
+                "os-task5-team-1": [_collaborator("alice")],
+                # The student may well be in this one - there is no way to tell.
+                "os-task5-team-2": None,
+            },
+        )
+
+    def test_creating_a_team_is_refused(self):
+        provisioner = FakeProvisioner()
+        result = _registry(self._github(), provisioner).create_team(
+            **LAB, username="dave", title="Моржи",
+        )
+
+        assert result.error_code == "TEAMS_UNAVAILABLE"
+        assert provisioner.calls == [], "репозиторий не должен быть создан"
+
+    def test_joining_another_team_is_refused(self):
+        provisioner = FakeProvisioner()
+        result = _registry(self._github(), provisioner).join_team(
+            **LAB, username="dave", slug="team-1",
+        )
+
+        assert result.error_code == "TEAMS_UNAVAILABLE"
+        assert provisioner.calls == []
+
+    def test_repairing_access_in_your_own_team_still_works(self):
+        """alice is readable in team-1, so team-2 being unreadable changes nothing for her."""
+        provisioner = FakeProvisioner()
+        result = _registry(self._github(), provisioner).join_team(
+            **LAB, username="alice", slug="team-1",
+        )
+
+        assert result.status == TeamActionStatus.OK
+        assert provisioner.calls[0]["force_invite"] is False
+
+
+class TestMembershipDefinition:
+    """
+    The roster is the single definition of membership: a student missing from
+    it gets a direct push invitation even if GitHub says they can already
+    reach the repository (read-only access, or write inherited from the
+    organization's base permission).
+    """
+
+    def _github(self):
+        return FakeGitHub(
+            repos=[_repo("os-task5-team-1", "Пингвины")],
+            collaborators={"os-task5-team-1": [_collaborator("alice")]},
+            invitations={"os-task5-team-1": [_invitation("carol")]},
+        )
+
+    def test_a_student_outside_the_roster_is_force_invited(self):
+        provisioner = FakeProvisioner()
+        _registry(self._github(), provisioner).join_team(
+            **LAB, username="dave", slug="team-1",
+        )
+
+        assert provisioner.calls[0]["force_invite"] is True
+        assert provisioner.calls[0]["access_username"] == "dave"
+
+    def test_an_existing_member_is_not_force_invited(self):
+        provisioner = FakeProvisioner()
+        _registry(self._github(), provisioner).join_team(
+            **LAB, username="alice", slug="team-1",
+        )
+
+        assert provisioner.calls[0]["force_invite"] is False
+
+    def test_a_pending_invitee_repairs_access_without_forcing(self):
+        """carol was invited and has not accepted - the re-invite path handles her."""
+        provisioner = FakeProvisioner()
+        result = _registry(self._github(), provisioner).join_team(
+            **LAB, username="carol", slug="team-1",
+        )
+
+        assert result.status == TeamActionStatus.OK
+        assert provisioner.calls[0]["force_invite"] is False

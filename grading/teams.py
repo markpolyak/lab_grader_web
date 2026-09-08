@@ -259,9 +259,19 @@ _lab_locks: dict[tuple[str, str], threading.Lock] = {}
 _lab_locks_mutex = threading.Lock()
 
 
-def lab_lock(course_id: str, lab_id: str) -> threading.Lock:
-    """The mutation lock of one lab, created on first use."""
-    key = (course_id, lab_id)
+def lab_lock(course_id: str, lab_key: str) -> threading.Lock:
+    """
+    The mutation lock of one lab, created on first use.
+
+    `lab_key` must be the lab's canonical key in the course YAML, not the raw
+    lab_id from the URL: find_lab_config resolves "5", "05", "ЛР5" and "lab5"
+    to the same lab, so keying the lock by the raw path segment hands two
+    students two different locks for one lab and lets them pass count-max,
+    size-max, TITLE_TAKEN and ALREADY_IN_TEAM concurrently. Keying it
+    canonically also bounds the size of _lab_locks, which the raw value -
+    an unbounded set of spellings - does not.
+    """
+    key = (course_id, lab_key)
     with _lab_locks_mutex:
         lock = _lab_locks.get(key)
         if lock is None:
@@ -457,7 +467,7 @@ class TeamRegistry:
     def create_team(
         self,
         course_id: str,
-        lab_id: str,
+        lab_key: str,
         org: str,
         github_prefix: str,
         template_repo: str,
@@ -473,7 +483,8 @@ class TeamRegistry:
 
         The whole sequence runs under the lab's lock and re-reads the team
         list with fresh=True inside it, so two students cannot take the same
-        number or the same title.
+        number or the same title. `lab_key` must be the lab's canonical
+        config key - see lab_lock.
         """
         config = team_config or TeamConfig()
 
@@ -483,10 +494,20 @@ class TeamRegistry:
         except TeamTitleError as e:
             return _error("INVALID_TITLE", str(e))
 
-        with lab_lock(course_id, lab_id):
+        with lab_lock(course_id, lab_key):
             teams = self.list_teams(org, github_prefix, teachers, fresh=True)
             if teams is None:
                 return _error("TEAMS_UNAVAILABLE", "Не удалось получить список команд")
+
+            if any(team.members_unknown for team in teams):
+                # Without every roster there is no way to tell whether this
+                # student is already in a team, and guessing "no" hands them a
+                # second team with a second repository that grading then has
+                # to pick between.
+                return _error(
+                    "TEAMS_UNAVAILABLE",
+                    "Не удалось прочитать состав команд. Попробуйте ещё раз позже",
+                )
 
             existing = self.find_member_team(teams, username)
             if existing is not None:
@@ -515,7 +536,7 @@ class TeamRegistry:
                 return _error("SLUG_RACE", "Не удалось занять имя репозитория, повторите попытку")
 
             logger.info(
-                f"Student {username} creates team {slug} ({clean_title!r}) in {course_id}/{lab_id}"
+                f"Student {username} creates team {slug} ({clean_title!r}) in {course_id}/{lab_key}"
             )
             provision = self.provisioner.provision(
                 org, github_prefix, template_repo, slug,
@@ -563,7 +584,7 @@ class TeamRegistry:
     def join_team(
         self,
         course_id: str,
-        lab_id: str,
+        lab_key: str,
         org: str,
         github_prefix: str,
         template_repo: str,
@@ -579,14 +600,15 @@ class TeamRegistry:
 
         The repository name is always assembled by the server from the lab's
         prefix and a slug matching TEAM_SLUG_RE - a repository name is never
-        accepted from the request.
+        accepted from the request. `lab_key` must be the lab's canonical
+        config key - see lab_lock.
         """
         config = team_config or TeamConfig()
 
         if not TEAM_SLUG_RE.match(slug or ""):
             return _error("TEAM_NOT_FOUND", "Команда не найдена")
 
-        with lab_lock(course_id, lab_id):
+        with lab_lock(course_id, lab_key):
             teams = self.list_teams(org, github_prefix, teachers, fresh=True)
             if teams is None:
                 return _error("TEAMS_UNAVAILABLE", "Не удалось получить список команд")
@@ -605,17 +627,22 @@ class TeamRegistry:
 
             already_in_this_team = current is not None
             if not already_in_this_team:
-                if team.members_unknown:
+                # `current is None` only means "not found in the rosters we
+                # could read". Any unreadable roster may be the student's own,
+                # and treating that as "in no team" lets them into a second
+                # one; an unreadable target roster additionally hides how many
+                # seats are taken.
+                if any(candidate.members_unknown for candidate in teams):
                     return _error(
                         "TEAMS_UNAVAILABLE",
-                        "Не удалось прочитать состав команды. Попробуйте ещё раз позже",
+                        "Не удалось прочитать состав команд. Попробуйте ещё раз позже",
                         team=team,
                     )
                 if config.size_max is not None and team.size >= config.size_max:
                     return _error("TEAM_FULL", "В команде нет свободных мест", team=team)
 
             logger.info(
-                f"Student {username} joins team {slug} in {course_id}/{lab_id} "
+                f"Student {username} joins team {slug} in {course_id}/{lab_key} "
                 f"(access repair: {already_in_this_team})"
             )
             # The repository already exists, so this is effectively
@@ -623,6 +650,11 @@ class TeamRegistry:
             provision = self.provisioner.provision(
                 org, github_prefix, template_repo, slug,
                 mode=mode, access_username=username,
+                # The roster read above is the definition of membership here,
+                # so a student missing from it needs a direct push invitation
+                # even when GitHub says they can already reach the repository
+                # - see RepoProvisioner._ensure_access.
+                force_invite=not already_in_this_team,
             )
             if provision.status != ProvisionStatus.OK:
                 return _error(

@@ -949,3 +949,67 @@ class TestJoinJoinTeam:
             with pytest.raises(HTTPException) as exc_info:
                 main_module.join_join_team(mock_request, "test-course", "1", "team-1")
         assert exc_info.value.status_code == 401
+
+
+class TestLabKeyCanonicalization:
+    """
+    One lab is reachable through several spellings of lab_id, and the mutation
+    lock must not depend on which one the student's URL used.
+    """
+
+    def test_load_team_lab_returns_the_canonical_key(self, team_course_config):
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            _course, by_key, _config, _org, _team = main_module._load_team_lab("test-course", "1")
+            _course, by_name, _config, _org, _team = main_module._load_team_lab("test-course", "ЛР1")
+
+        assert by_key == "1"
+        assert by_name == "1"
+
+    @responses.activate
+    def test_both_spellings_take_the_same_lock(self, team_course_config):
+        """
+        Regression: keying the lock by the raw path segment handed "1" and
+        "ЛР1" two different locks, so two students could pass count-max,
+        size-max and ALREADY_IN_TEAM at the same time.
+        """
+        import grading.teams as teams_module
+
+        _team_repo_responses()
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-team-1",
+            json={"name": "test-task1-team-1"},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-team-1/collaborators/dave",
+            status=404,
+        )
+        responses.add(
+            responses.PUT,
+            "https://api.github.com/repos/test-org/test-task1-team-1/collaborators/dave",
+            status=201,
+        )
+        responses.add(
+            responses.DELETE,
+            "https://api.github.com/repos/test-org/test-task1-team-1/invitations/1",
+            status=204,
+        )
+
+        keys = []
+        real_lab_lock = teams_module.lab_lock
+
+        def recording_lab_lock(course_id, lab_key):
+            keys.append((course_id, lab_key))
+            return real_lab_lock(course_id, lab_key)
+
+        with patch("grading.teams.lab_lock", recording_lab_lock), \
+             patch("main.get_course_by_id", return_value=team_course_config):
+            for lab_id in ("1", "ЛР1"):
+                main_module.join_join_team(
+                    _session_request("dave", lab_id=lab_id), "test-course", lab_id, "team-1",
+                )
+
+        assert len(keys) == 2
+        assert keys[0] == keys[1] == ("test-course", "1")

@@ -61,6 +61,7 @@ class RepoProvisioner:
         repo_suffix: str,
         mode: str = "template",
         access_username: str | None = None,
+        force_invite: bool = False,
     ) -> ProvisionResult:
         """
         Ensure `{github_prefix}-{repo_suffix}` exists in `org` (created from
@@ -85,6 +86,10 @@ class RepoProvisioner:
                 API) or "fork" (a real fork of the template, see issue #51)
             access_username: Student to grant access to. Defaults to
                 `repo_suffix`, preserving the individual-lab behavior.
+            force_invite: Skip the "already has access" shortcut and always
+                (re-)issue a direct push invitation. Callers that keep their
+                own definition of membership pass True when the student does
+                not match it - see _ensure_access.
 
         Returns:
             ProvisionResult describing success or the specific failure
@@ -104,7 +109,9 @@ class RepoProvisioner:
         if create_error:
             return create_error
 
-        access_error = self._ensure_access(org, repo_name, access_username or repo_suffix)
+        access_error = self._ensure_access(
+            org, repo_name, access_username or repo_suffix, force_invite=force_invite
+        )
         if access_error:
             return access_error
 
@@ -406,17 +413,34 @@ class RepoProvisioner:
 
         return None
 
-    def _ensure_access(self, org: str, repo_name: str, username: str) -> ProvisionResult | None:
+    def _ensure_access(
+        self,
+        org: str,
+        repo_name: str,
+        username: str,
+        force_invite: bool = False,
+    ) -> ProvisionResult | None:
         """
         Make sure `username` has direct collaborator access to the repo,
         re-issuing a pending invitation if one already exists (a plain PUT
         without deleting the stale invitation first does not resend the
         notification - see docs/REPO_GENERATION_PLAN.md §4).
 
+        The shortcut below answers "can this user reach the repository at
+        all", which is not the question a team lab asks. Read-only access, or
+        write access inherited from the organization's base permission, both
+        answer 204 here while leaving the student out of the roster
+        TeamRegistry builds from direct collaborators with push
+        (docs/TEAM_ASSIGNMENTS_PLAN.md §7.1) - so the student would be told
+        "access granted" on every attempt and still be graded as teamless.
+        Callers that have already consulted that roster pass force_invite=True
+        to skip the shortcut, which leaves the roster as the single definition
+        of membership.
+
         Returns:
             ProvisionResult with an error, or None if access is now in place
         """
-        if self.github.is_direct_collaborator(org, repo_name, username):
+        if not force_invite and self.github.is_direct_collaborator(org, repo_name, username):
             logger.info(f"{username} already has direct access to {org}/{repo_name}")
             return None
 

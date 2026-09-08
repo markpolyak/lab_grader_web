@@ -923,14 +923,17 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
 REPO_PROVISIONING_MODES = {"template", "fork"}
 
 
-def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str, TeamConfig | None]:
+def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, str, dict, str, TeamConfig | None]:
     """
     Load course/lab config needed by the /join flow.
 
     Returns:
-        (course_info, lab_config, github_organization, team_config). The last
-        element is None for an individual lab and a TeamConfig for a team one
-        (docs/TEAM_ASSIGNMENTS_PLAN.md §4).
+        (course_info, lab_key, lab_config, github_organization, team_config).
+        `lab_key` is the lab's canonical key in the course YAML: one lab is
+        reachable through several spellings of lab_id ("5", "05", "ЛР5"), and
+        anything that keys shared state by lab must use this value rather than
+        the raw path segment. team_config is None for an individual lab and a
+        TeamConfig for a team one (docs/TEAM_ASSIGNMENTS_PLAN.md §4).
 
     Raises:
         HTTPException: 404 for unknown course/lab, 400 if the lab has no
@@ -944,7 +947,7 @@ def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str, Te
     resolved = find_lab_config(labs, lab_id)
     if not resolved:
         raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
-    _lab_key, lab_config = resolved
+    lab_key, lab_config = resolved
 
     template_repo = lab_config.get("template-repo")
     if not template_repo:
@@ -974,7 +977,7 @@ def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str, Te
     if not org:
         raise HTTPException(status_code=400, detail="Для курса не настроена GitHub организация")
 
-    return course_info, lab_config, org, team_config
+    return course_info, lab_key, lab_config, org, team_config
 
 
 def _oauth_redirect_uri(request: Request) -> str:
@@ -1176,7 +1179,7 @@ def _exchange_code_for_username(code: str, redirect_uri: str) -> str | None:
 @limiter.limit("30/minute")
 def join_lab_info(request: Request, course_id: str, lab_id: str):
     """Публичная информация для лендинга страницы присоединения к лабе (без аутентификации)."""
-    course_info, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
+    course_info, _lab_key, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
 
     teams_count = None
     if team_config is not None:
@@ -1253,7 +1256,7 @@ def join_callback(
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="missing_code"))
 
     try:
-        course_info, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
+        course_info, _lab_key, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
     except HTTPException:
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="config"))
 
@@ -1319,21 +1322,26 @@ def _course_teachers(course_info: dict) -> list[str]:
     return [str(entry) for entry in teachers if entry]
 
 
-def _load_team_lab(course_id: str, lab_id: str) -> tuple[dict, dict, str, TeamConfig]:
+def _load_team_lab(course_id: str, lab_id: str) -> tuple[dict, str, dict, str, TeamConfig]:
     """
     Like _load_lab_for_join, but only for a lab that really is a team lab.
+
+    Returns:
+        (course_info, lab_key, lab_config, github_organization, team_config).
+        `lab_key` is what the team mutations must lock on - see
+        _load_lab_for_join.
 
     Raises:
         HTTPException(400): NOT_A_TEAM_LAB for an individual lab, or
         LAB_NOT_CONFIGURED when the lab has no github-prefix to build team
         repository names from
     """
-    course_info, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
+    course_info, lab_key, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
     if team_config is None:
         raise HTTPException(status_code=400, detail="NOT_A_TEAM_LAB")
     if not lab_config.get("github-prefix"):
         raise HTTPException(status_code=400, detail="LAB_NOT_CONFIGURED")
-    return course_info, lab_config, org, team_config
+    return course_info, lab_key, lab_config, org, team_config
 
 
 # Provisioning failures that a student can retry (GitHub-side or transient)
@@ -1400,7 +1408,7 @@ def _team_payload(team: TeamInfo, is_mine: bool, size_max: int | None) -> dict:
 @limiter.limit("30/minute")
 def join_lab_teams(request: Request, course_id: str, lab_id: str):
     """Список команд лабы, команда студента и лимиты (см. §8.2 плана)."""
-    course_info, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    course_info, _lab_key, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
     username = require_join_session(request, course_id, lab_id)
 
     registry = _team_registry()
@@ -1473,12 +1481,12 @@ def _team_action_response(result, status_code: int = 200) -> JSONResponse | dict
 @limiter.limit("10/minute")
 def create_join_team(request: Request, course_id: str, lab_id: str, body: CreateTeamRequest):
     """Создаёт команду и выдаёт доступ к её репозиторию создателю (§7.3 плана)."""
-    course_info, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    course_info, lab_key, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
     username = require_join_session(request, course_id, lab_id)
 
     result = _team_registry().create_team(
         course_id=course_id,
-        lab_id=lab_id,
+        lab_key=lab_key,
         org=org,
         github_prefix=lab_config["github-prefix"],
         template_repo=lab_config["template-repo"],
@@ -1501,12 +1509,12 @@ def join_join_team(request: Request, course_id: str, lab_id: str, slug: str):
     Имя репозитория собирается сервером из префикса лабы и slug'а, прошедшего
     TEAM_SLUG_RE; из запроса имя репозитория не принимается никогда (§7.4).
     """
-    course_info, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    course_info, lab_key, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
     username = require_join_session(request, course_id, lab_id)
 
     result = _team_registry().join_team(
         course_id=course_id,
-        lab_id=lab_id,
+        lab_key=lab_key,
         org=org,
         github_prefix=lab_config["github-prefix"],
         template_repo=lab_config["template-repo"],

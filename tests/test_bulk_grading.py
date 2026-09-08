@@ -912,6 +912,30 @@ class TestRunBulkGradingTeamLab:
         assert grader.check_repository.call_count == 1
         assert job.total == 2 and job.processed == 2
 
+    def test_unreadable_roster_fails_the_run_instead_of_reporting_no_team(self, bulk_setup):
+        """
+        Regression: a team whose roster GitHub would not return used to be
+        skipped silently, and its members were reported as never having joined
+        a team - a false statement the teacher had no way to spot.
+        """
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({
+            "team-1": ("Пингвины", ["alice"]),
+            "team-2": ("Тюлени", ["bob"]),
+        })
+        client.list_collaborators.side_effect = lambda org, repo, affiliation="direct": (
+            None if repo == "os-task1-team-2" else
+            [{"login": "alice", "permissions": {"push": True, "admin": False}}]
+        )
+        grader = _passing_grader()
+        job = _job()
+        _run(job, setup, grader=grader, github_client=client)
+
+        assert job.status == "failed"
+        assert "team-2" in job.error
+        assert [r.status for r in job.results] == []
+        assert grader.check_repository.call_count == 0
+
     def test_two_teams_are_graded_separately(self, bulk_setup):
         setup = self._team_setup(bulk_setup)
         client = self._github_client({

@@ -572,10 +572,13 @@ class GitHubClient:
         Note: GitHub's docs don't document an `affiliation` param for this
         single-user "check collaborator" endpoint (only for the list-collaborators
         one) - it's used here anyway per docs/REPO_GENERATION_PLAN.md §4, which
-        specifies this exact call. Team labs deliberately do NOT count a roster
-        with it: list_collaborators below takes the documented `affiliation`
-        param, and this one stays what it always was - a quick "does this user
-        already have access" check before issuing an invitation.
+        specifies this exact call. A 204 therefore means "can reach the
+        repository", not "is a direct collaborator with push": read-only
+        access and write inherited from the organization's base permission
+        both answer 204. Team labs must not decide membership from it - they
+        read the roster through list_collaborators below (documented
+        `affiliation`, plus the `permissions` object) and pass force_invite to
+        RepoProvisioner when a student is missing from it.
 
         Args:
             org: Organization or user name
@@ -650,7 +653,13 @@ class GitHubClient:
         resp = requests.delete(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 204
 
-    def add_collaborator(self, org: str, repo: str, username: str) -> requests.Response:
+    def add_collaborator(
+        self,
+        org: str,
+        repo: str,
+        username: str,
+        permission: str = "push",
+    ) -> requests.Response:
         """
         Invite (or directly add) a user as a repository collaborator.
 
@@ -662,13 +671,20 @@ class GitHubClient:
             org: Organization or user name
             repo: Repository name
             username: GitHub username to invite
+            permission: Access level to grant. Sent explicitly rather than
+                relying on GitHub's default so that an existing collaborator
+                who only has read access is upgraded to push - a team member
+                who cannot push stays invisible to the roster (see
+                RepoProvisioner._ensure_access)
 
         Returns:
             The raw requests.Response (201 = invitation created,
             204 = user already had access and was added directly)
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators/{username}"
-        return requests.put(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        return requests.put(
+            url, headers=self.headers, json={"permission": permission}, timeout=self.DEFAULT_TIMEOUT
+        )
 
     def get_job_logs(self, org: str, repo: str, job_id: int) -> str | None:
         """
