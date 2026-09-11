@@ -56,6 +56,7 @@ FRONTEND_URL=http://localhost:8080
 |------|----------|
 | Add API endpoint | `main.py` |
 | Change grading logic | `grading/bulk.py` (`evaluate_student`, shared by single and bulk grading) |
+| Team lab operations | `grading/teams.py` (`TeamRegistry`) |
 | Add React component | `frontend/courses-front/src/components/` |
 | Add/edit course | `courses/` directory + `index.yaml` |
 | Add translation | `frontend/courses-front/src/locales/{en,ru,zh}/` |
@@ -118,6 +119,29 @@ to every student fork as pull requests, from the admin lab list page (`/admin/co
 Orchestration lives in `grading/propagate.py` (in-memory job state, single-worker backend required - see
 `docs/PROJECT_DESCRIPTION.md`). All `/admin/...` and course-management routes require the `require_admin`
 FastAPI dependency in `main.py`, not just the frontend's `ProtectedRoute`.
+
+## Team (group) Lab Assignments
+
+Labs with a `team` section in their config are done by teams: one repository per team, shared by
+its members (see `docs/TEAM_ASSIGNMENTS_PLAN.md` for the full design and
+`docs/PROJECT_DESCRIPTION.md` for the teacher-facing instructions).
+
+- **A team is a repository.** `{github-prefix}-team-{N}` in the course organization; the roster is
+  its direct collaborators plus pending invitations, and the title/description live in the repo's
+  `description` field as `Название — описание`. No new storage: `grading/teams.py:TeamRegistry`
+  reads GitHub, caches the result for 30 s and mutates under a per-lab lock (single-worker backend
+  required, like `propagate.py`/`bulk.py`). Mutations re-read with `fresh=True` inside the lock.
+- **Username only from the cookie.** The team endpoints take the student's GitHub login from the
+  signed `join_session` cookie (`require_join_session` in `main.py`) and never from the body, query
+  or path - anything else hands out access to a private repo under someone else's login. The
+  callback issues that cookie for a team lab instead of creating a repository.
+- **`provision(access_username=...)`** separates the repo suffix (a team slug) from the student who
+  gets access; omitting it keeps the individual-lab behaviour untouched.
+- **Grading**: `evaluate_student(..., repo_name=...)` grades the team's repository. It is called
+  exactly ONCE per team with a synthetic `SheetContext` (`current_cell_value=""`,
+  `student_order=None`); `can_overwrite_cell` is then applied per member against their own cell.
+  Calling it per member would triple the GitHub work. TASKID is off for team labs
+  (`taskid_column` returns None), and bulk `by_file` mode is refused.
 
 ## Bulk Grading (admin)
 

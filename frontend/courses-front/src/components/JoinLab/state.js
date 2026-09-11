@@ -69,3 +69,77 @@ export function getSafeRepositoryUrl(rawUrl) {
     return null;
   }
 }
+
+
+// Коды ошибок командных эндпоинтов (main.py §8.3 плана командных лаб).
+// Отдаются backend'ом в `detail` как стабильные строки - фронтенд переводит
+// их сам, как и коды RepoProvisioner выше.
+Object.assign(ERROR_TRANSLATION_KEYS, {
+  NOT_A_TEAM_LAB: "join.errors.notATeamLab",
+  LAB_NOT_CONFIGURED: "join.errors.notConfigured",
+  SESSION_REQUIRED: "join.errors.sessionRequired",
+  TEAMS_UNAVAILABLE: "join.errors.teamsUnavailable",
+  TEAM_NOT_FOUND: "join.errors.teamNotFound",
+  ALREADY_IN_TEAM: "join.errors.alreadyInTeam",
+  TEAM_FULL: "join.errors.teamFull",
+  TEAM_LIMIT_REACHED: "join.errors.teamLimitReached",
+  TITLE_TAKEN: "join.errors.titleTaken",
+  INVALID_TITLE: "join.errors.invalidTitle",
+  SLUG_RACE: "join.errors.slugRace",
+  PROVISION_FAILED: "join.errors.unknown",
+
+  // Клиентская валидация формы создания команды (§3.4 плана)
+  title_too_short: "join.errors.titleTooShort",
+  title_too_long: "join.errors.titleTooLong",
+  title_has_separator: "join.errors.titleHasSeparator",
+  description_too_long: "join.errors.descriptionTooLong",
+});
+
+
+// Ограничения названия и описания команды. Должны совпадать с
+// grading/teams.py: клиентская проверка только избавляет от лишнего запроса,
+// решение всё равно принимает backend.
+export const TITLE_MIN_LENGTH = 3;
+export const TITLE_MAX_LENGTH = 60;
+export const DESCRIPTION_MAX_LENGTH = 200;
+export const DESCRIPTION_SEPARATOR = " — ";
+
+
+export function cleanTeamText(value) {
+  return (value || "").replace(/\s+/g, " ").trim();
+}
+
+
+export function validateTeamForm(title, description) {
+  const cleanTitle = cleanTeamText(title);
+  const cleanDescription = cleanTeamText(description);
+
+  if (cleanTitle.length < TITLE_MIN_LENGTH) return "title_too_short";
+  if (cleanTitle.length > TITLE_MAX_LENGTH) return "title_too_long";
+  if (cleanTitle.includes(DESCRIPTION_SEPARATOR)) return "title_has_separator";
+  if (cleanDescription.length > DESCRIPTION_MAX_LENGTH) return "description_too_long";
+  return null;
+}
+
+
+/**
+ * Экран, который видит студент (§5 плана командных лаб).
+ *
+ * Признак «студент авторизован» - не query-параметр, а успешно полученный
+ * список команд: cookie join_session помечена HttpOnly и странице не видна,
+ * зато переживает перезагрузку, поэтому источником истины должен быть ответ
+ * backend, а не адресная строка.
+ */
+export function resolveJoinView({ teamEnabled, teamsData, teamsError }) {
+  if (!teamEnabled) return "individual";
+  if (teamsData) return teamsData.my_team ? "member" : "picker";
+  if (teamsError === "SESSION_REQUIRED") return "landing";
+  if (teamsError) return "error";
+  return "loading";
+}
+
+
+export function findMyTeam(teamsData) {
+  if (!teamsData || !teamsData.my_team) return null;
+  return teamsData.teams.find((team) => team.slug === teamsData.my_team) || null;
+}

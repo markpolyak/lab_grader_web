@@ -9,6 +9,7 @@ This module contains functions for various aspects of lab grading:
 - sheets_client: Google Sheets helpers
 - grader: Orchestrator for grading workflow
 - repo_provisioning: Orchestrator for the /join student repo creation flow
+- teams: Team (group) lab assignments - one repository per team
 - propagate: Orchestrator for propagating template updates via fork PRs (admin)
 """
 
@@ -74,6 +75,25 @@ from .repo_provisioning import (
     RepoProvisioner,
     ProvisionResult,
     ProvisionStatus,
+)
+
+from .teams import (
+    TeamConfig,
+    TeamConfigError,
+    TeamActionResult,
+    TeamActionStatus,
+    TeamInfo,
+    TeamRegistry,
+    TeamTitleError,
+    TEAMS_CACHE_TTL_SECONDS,
+    TEAM_SLUG_RE,
+    is_team_lab,
+    parse_team_config,
+    clean_team_title,
+    clean_team_description,
+    compose_description,
+    parse_description,
+    reset_teams_state,
 )
 
 from .propagate import (
@@ -166,6 +186,23 @@ __all__ = [
     "RepoProvisioner",
     "ProvisionResult",
     "ProvisionStatus",
+    # teams
+    "TeamConfig",
+    "TeamConfigError",
+    "TeamActionResult",
+    "TeamActionStatus",
+    "TeamInfo",
+    "TeamRegistry",
+    "TeamTitleError",
+    "TEAMS_CACHE_TTL_SECONDS",
+    "TEAM_SLUG_RE",
+    "is_team_lab",
+    "parse_team_config",
+    "clean_team_title",
+    "clean_team_description",
+    "compose_description",
+    "parse_description",
+    "reset_teams_state",
     # propagate
     "PropagateJob",
     "PropagateResult",

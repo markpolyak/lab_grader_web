@@ -100,7 +100,8 @@
         "github": "GitHub",
         "status": "Status",
         "grade": "Grade",
-        "message": "Message"
+        "message": "Message",
+        "team": "Team"
       },
       "statuses": {
         "updated": "graded",
@@ -109,7 +110,8 @@
         "error": "error",
         "conflict": "username conflict",
         "unmatched": "name not matched",
-        "ambiguous": "ambiguous name"
+        "ambiguous": "ambiguous name",
+        "no_team": "no team"
       },
       "errors": {
         "groupsFailed": "Failed to load groups",
@@ -154,7 +156,56 @@
       "actionsEnableFailed": "Could not enable checks in the repository. Contact the teacher.",
       "nameTaken": "A repository with this name is already taken. Contact the teacher.",
       "forkCheckFailed": "Could not verify the repository. Please try again in a few minutes.",
-      "unknown": "An unexpected error occurred. Try again or contact the teacher."
+      "unknown": "An unexpected error occurred. Try again or contact the teacher.",
+      "notATeamLab": "This lab is done individually, not as a team.",
+      "sessionRequired": "Your sign-in session has expired. Sign in with GitHub again.",
+      "teamsUnavailable": "Could not get the list of teams from GitHub. Try again in a minute.",
+      "teamNotFound": "Team not found. Refresh the list of teams.",
+      "alreadyInTeam": "You are already in a team for this lab. Contact your teacher to change teams.",
+      "teamFull": "This team has no free places left. Pick another one.",
+      "teamLimitReached": "The maximum number of teams has been reached. Join one of the existing teams.",
+      "titleTaken": "A team with this name already exists. Pick another name.",
+      "invalidTitle": "The team name is not acceptable. Check its length and remove unusual characters.",
+      "slugRace": "Someone created a team at the same moment. Please try again.",
+      "titleTooShort": "The team name must be at least 3 characters long.",
+      "titleTooLong": "The team name must be at most 60 characters long.",
+      "titleHasSeparator": "The team name must not contain “ — ”.",
+      "descriptionTooLong": "The team description must be at most 200 characters long."
+    },
+    "team": {
+      "badge": "Team assignment",
+      "limits": "Maximum team members: {{size}}. Maximum teams: {{count}}.",
+      "noLimit": "unlimited",
+      "landing": "Sign in with GitHub to see this lab's teams and join one of them, or create your own.",
+      "loading": "Loading the list of teams…",
+      "retry": "Try again",
+      "pickTitle": "Teams of this lab",
+      "pickDescription": "Join your groupmates' team or create your own. One repository per team, shared by all its members.",
+      "empty": "There are no teams yet. Create the first one.",
+      "join": "Join",
+      "joining": "Joining…",
+      "full": "Team is full",
+      "size": "Members: {{count}}",
+      "sizeOf": "{{size}} of {{max}}",
+      "pending": "invitation sent",
+      "pendingHint": "The student has not accepted the invitation yet, but the place is already taken.",
+      "expired": "invitation expired",
+      "expiredHint": "The invitation has expired, but the place is still taken. The student can restore access through the lab link; the teacher can free the place.",
+      "membersUnknown": "The team roster is unavailable right now. Refresh the page in a minute.",
+      "createTitle": "Create a team",
+      "nameLabel": "Team name",
+      "namePlaceholder": "For example: Penguins",
+      "descriptionLabel": "Description (optional)",
+      "descriptionPlaceholder": "What the team is working on",
+      "create": "Create team",
+      "creating": "Creating…",
+      "creationClosed": "Creating new teams is closed. Join one of the existing teams.",
+      "creationClosedLimit": "The maximum number of teams ({{count}}) has been reached. Join one of the existing teams.",
+      "myTeamTitle": "Your team",
+      "openRepository": "Open the team repository",
+      "memberHint": "If the repository invitation never arrived or has expired, press “Restore access” and it will be sent again.",
+      "repairAccess": "Restore access",
+      "repairing": "Restoring…"
     }
   }
 }

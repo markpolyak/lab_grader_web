@@ -42,6 +42,83 @@ export const fetchJoinLab = async (courseId, labId) => {
 export const getJoinStartUrl = (courseId, labId) =>
   `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}/start`;
 
+
+// --- Командные лабораторные работы (docs/TEAM_ASSIGNMENTS_PLAN.md §8.2) ---
+//
+// Все три запроса идут с credentials: "include" - личность студента backend
+// берёт из подписанной cookie join_session, и только из неё. В dev-режиме
+// фронтенд на :8080 и backend на :8000 - это разные источники, поэтому без
+// этой опции cookie не уедет (так же сделано в админке, LabList/index.jsx).
+
+const joinTeamsUrl = (courseId, labId) =>
+  `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}/teams`;
+
+// Backend отдаёт в `detail` стабильные коды (SESSION_REQUIRED, TEAM_FULL, ...),
+// которые компонент переводит сам. Сюда попадают только те случаи, когда кода
+// нет: сеть, таймаут, ответ прокси.
+const teamErrorCode = (status, detail) => {
+  if (typeof detail === "string" && /^[A-Z][A-Z_]*$/.test(detail)) return detail;
+  if (status === 401) return "SESSION_REQUIRED";
+  if (status === 404) return "join_not_found";
+  if (status === 429) return "rate_limit";
+  return "unknown";
+};
+
+const requestJoinTeams = async (url, options = {}) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), JOIN_REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(url, {
+      credentials: "include",
+      signal: controller.signal,
+      ...options,
+    });
+  } catch (cause) {
+    const error = new Error("Team request failed", { cause });
+    error.code = cause?.name === "AbortError" ? "request_timeout" : "unknown";
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    // тело может быть пустым - код ошибки тогда выводится из статуса
+  }
+
+  if (!response.ok) {
+    const error = new Error("Team request failed");
+    error.code = teamErrorCode(response.status, data && data.detail);
+    error.status = response.status;
+    // ALREADY_IN_TEAM несёт с собой slug и ссылку на команду студента
+    error.payload = data || {};
+    throw error;
+  }
+
+  return data;
+};
+
+export const fetchJoinTeams = (courseId, labId) =>
+  requestJoinTeams(joinTeamsUrl(courseId, labId));
+
+export const createJoinTeam = (courseId, labId, { title, description }) =>
+  requestJoinTeams(joinTeamsUrl(courseId, labId), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, description }),
+  });
+
+// Имя репозитория собирает backend из префикса лабы и slug'а - отсюда
+// уезжает только slug.
+export const joinJoinTeam = (courseId, labId, slug) =>
+  requestJoinTeams(
+    `${joinTeamsUrl(courseId, labId)}/${encodeURIComponent(slug)}/join`,
+    { method: "POST" }
+  );
+
 // Маппинг полей на русские названия для сообщений об ошибках
 const fieldLabels = {
   name: "Имя",

@@ -256,6 +256,11 @@ class TestTaskidColumn:
     def test_ignore_task_id(self):
         assert taskid_column(self.COURSE, {"taskid-max": 20, "ignore-task-id": True}) is None
 
+    def test_team_lab_never_checks_taskid(self):
+        """A team has no position in the sheet to derive a variant from."""
+        assert taskid_column(self.COURSE, {"taskid-max": 20, "team": {}}) is None
+        assert taskid_column(self.COURSE, {"taskid-max": 20, "team": None}) is None
+
 
 class TestRepoNameFor:
     def test_builds_conventional_name(self):
@@ -810,3 +815,222 @@ class TestRunBulkGradingByFile:
 
         assert job.total == 2
         assert job.processed == 2
+
+
+class TestRunBulkGradingTeamLab:
+    """A team lab grades one repository per team (§10.3 of the team plan)."""
+
+    @pytest.fixture(autouse=True)
+    def clean_teams_state(self):
+        from grading.teams import reset_teams_state
+
+        reset_teams_state()
+        yield
+        reset_teams_state()
+
+    def _team_setup(self, bulk_setup, size_max=None):
+        bulk_setup["lab_config"]["team"] = {"size-max": size_max} if size_max else {}
+        return bulk_setup
+
+    def _github_client(self, teams):
+        """teams: {slug: (description, [members])}"""
+        client = MagicMock()
+        prefix = "os-task1"
+        client.list_org_repos.return_value = [
+            {"name": f"{prefix}-{slug}", "description": description}
+            for slug, (description, _members) in teams.items()
+        ]
+        rosters = {
+            f"{prefix}-{slug}": [
+                {"login": login, "permissions": {"push": True, "admin": False}}
+                for login in members
+            ]
+            for slug, (_description, members) in teams.items()
+        }
+        client.list_collaborators.side_effect = lambda org, repo, affiliation="direct": (
+            rosters.get(repo, [])
+        )
+        client.list_invitations.side_effect = lambda org, repo: []
+        return client
+
+    def test_repository_is_evaluated_once_per_team(self, bulk_setup):
+        """alice and bob share team-1, so the repo is graded once, not twice."""
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": ("Пингвины", ["alice", "bob"])})
+        grader = _passing_grader()
+        job = _job()
+        _run(job, setup, grader=grader, github_client=client)
+
+        assert job.status == "done"
+        assert grader.check_repository.call_count == 1
+        assert grader._evaluate_ci_internal.call_count == 1
+
+    def test_the_team_repository_is_the_one_graded(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": ("Пингвины", ["alice", "bob"])})
+        grader = _passing_grader()
+        job = _job()
+        _run(job, setup, grader=grader, github_client=client)
+
+        org, repo, _config = grader.check_repository.call_args.args
+        assert repo == "os-task1-team-1"
+        assert all(result.repo == "os-task1-team-1" for result in job.results)
+
+    def test_the_grade_reaches_every_member(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": ("Пингвины", ["alice", "bob"])})
+        job = _job()
+        _run(job, setup, github_client=client)
+
+        assert [r.status for r in job.results] == ["updated", "updated"]
+        assert _written_cells(setup["worksheet"]) == [("D3", "v"), ("D4", "v")]
+        assert [r.team for r in job.results] == ["Пингвины", "Пингвины"]
+
+    def test_cell_protection_is_applied_per_member(self, bulk_setup):
+        """Alice already has a grade; bob still gets his."""
+        setup = self._team_setup(bulk_setup)
+        setup["grid"][2][3] = "v@8"
+        client = self._github_client({"team-1": ("Пингвины", ["alice", "bob"])})
+        job = _job()
+        _run(job, setup, github_client=client)
+
+        assert job.results[0].status == "rejected"
+        assert job.results[0].grade == "v@8"
+        assert job.results[1].status == "updated"
+        assert _written_cells(setup["worksheet"]) == [("D4", "v")]
+
+    def test_student_without_a_team_is_reported(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": ("Пингвины", ["alice"])})
+        grader = _passing_grader()
+        job = _job()
+        _run(job, setup, grader=grader, github_client=client)
+
+        by_github = {r.github: r for r in job.results}
+        assert by_github["bob"].status == "no_team"
+        assert by_github["alice"].status == "updated"
+        assert grader.check_repository.call_count == 1
+        assert job.total == 2 and job.processed == 2
+
+    def test_unreadable_roster_fails_the_run_instead_of_reporting_no_team(self, bulk_setup):
+        """
+        Regression: a team whose roster GitHub would not return used to be
+        skipped silently, and its members were reported as never having joined
+        a team - a false statement the teacher had no way to spot.
+        """
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({
+            "team-1": ("Пингвины", ["alice"]),
+            "team-2": ("Тюлени", ["bob"]),
+        })
+        client.list_collaborators.side_effect = lambda org, repo, affiliation="direct": (
+            None if repo == "os-task1-team-2" else
+            [{"login": "alice", "permissions": {"push": True, "admin": False}}]
+        )
+        grader = _passing_grader()
+        job = _job()
+        _run(job, setup, grader=grader, github_client=client)
+
+        assert job.status == "failed"
+        assert "team-2" in job.error
+        assert [r.status for r in job.results] == []
+        assert grader.check_repository.call_count == 0
+
+    def test_two_teams_are_graded_separately(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({
+            "team-1": ("Пингвины", ["alice"]),
+            "team-2": ("Тюлени", ["bob"]),
+        })
+        grader = _passing_grader()
+        job = _job()
+        _run(job, setup, grader=grader, github_client=client)
+
+        assert grader.check_repository.call_count == 2
+        assert {r.team for r in job.results} == {"Пингвины", "Тюлени"}
+
+    def test_ci_error_is_copied_to_every_member(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": ("Пингвины", ["alice", "bob"])})
+        grader = _passing_grader()
+        grader.check_repository.return_value = _grade_result(
+            GradeStatus.ERROR, message="Нет коммитов", error_code="NO_COMMITS"
+        )
+        job = _job()
+        _run(job, setup, grader=grader, github_client=client)
+
+        assert [r.status for r in job.results] == ["error", "error"]
+        assert all("Нет коммитов" in r.message for r in job.results)
+        setup["worksheet"].batch_update.assert_not_called()
+
+    def test_pending_ci_is_copied_to_every_member(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": ("Пингвины", ["alice", "bob"])})
+        ci = CIEvaluation(
+            grade_result=_grade_result(GradeStatus.PENDING, message="CI ещё выполняется ⏳"),
+            ci_passed=False,
+        )
+        job = _job()
+        _run(job, setup, grader=_grader_mock(ci), github_client=client)
+
+        assert [r.status for r in job.results] == ["pending", "pending"]
+
+    def test_taskid_is_never_checked_for_a_team(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        setup["course_info"]["google"]["task-id-column"] = 0
+        setup["lab_config"]["taskid-max"] = 20
+        client = self._github_client({"team-1": ("Пингвины", ["alice", "bob"])})
+        grader = _passing_grader()
+        job = _job()
+        _run(job, setup, grader=grader, github_client=client)
+
+        grader.check_taskid.assert_not_called()
+        assert [r.status for r in job.results] == ["updated", "updated"]
+
+    def test_unavailable_teams_fail_the_job(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        client = MagicMock()
+        client.list_org_repos.return_value = None
+        job = _job()
+        _run(job, setup, github_client=client)
+
+        assert job.status == "failed"
+        assert "команд" in job.error
+
+    def test_by_file_mode_is_refused(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        job = _job(mode="by_file", name_file="info.md")
+        _run(job, setup, github_client=MagicMock())
+
+        assert job.status == "failed"
+        assert "файлу с ФИО" in job.error
+
+    def test_dry_run_writes_nothing(self, bulk_setup):
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": ("Пингвины", ["alice", "bob"])})
+        job = _job(dry_run=True)
+        _run(job, setup, github_client=client)
+
+        assert [r.status for r in job.results] == ["updated", "updated"]
+        setup["worksheet"].batch_update.assert_not_called()
+
+    def test_pending_invitee_is_graded_too(self, bulk_setup):
+        """A place is occupied by an invitation, and so is the grade row."""
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": ("Пингвины", ["alice"])})
+        client.list_invitations.side_effect = lambda org, repo: (
+            [{"id": 1, "invitee": {"login": "bob"}}] if repo == "os-task1-team-1" else []
+        )
+        job = _job()
+        _run(job, setup, github_client=client)
+
+        assert [r.status for r in job.results] == ["updated", "updated"]
+
+    def test_slugless_team_falls_back_to_the_slug_as_a_name(self, bulk_setup):
+        """A repository whose description was cleared still reports a team."""
+        setup = self._team_setup(bulk_setup)
+        client = self._github_client({"team-1": (None, ["alice", "bob"])})
+        job = _job()
+        _run(job, setup, github_client=client)
+
+        assert [r.team for r in job.results] == ["team-1", "team-1"]
