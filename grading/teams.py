@@ -209,6 +209,7 @@ class TeamInfo:
     description: str = ""
     members: list[str] = field(default_factory=list)   # accepted collaborators
     pending: list[str] = field(default_factory=list)   # invited, not accepted
+    expired: list[str] = field(default_factory=list)   # subset of pending: invitation expired
     members_unknown: bool = False  # roster could not be read (see §7.1)
 
     @property
@@ -362,7 +363,7 @@ class TeamRegistry:
                 continue
 
             title, description = parse_description(repo.get("description"))
-            members, pending, unknown = self._read_roster(org, name, excluded)
+            members, pending, expired, unknown = self._read_roster(org, name, excluded)
             teams.append(TeamInfo(
                 slug=match.group(1),
                 number=int(match.group(2)),
@@ -372,6 +373,7 @@ class TeamRegistry:
                 description=description,
                 members=members,
                 pending=pending,
+                expired=expired,
                 members_unknown=unknown,
             ))
 
@@ -386,7 +388,7 @@ class TeamRegistry:
         org: str,
         repo_name: str,
         excluded: set[str],
-    ) -> tuple[list[str], list[str], bool]:
+    ) -> tuple[list[str], list[str], list[str], bool]:
         """
         Read one team's roster.
 
@@ -396,16 +398,25 @@ class TeamRegistry:
         `course.github.teachers` are excluded on top of it - that list mixes
         names and logins, so it is a helper, not the main criterion.
 
+        Every invitation counts as pending, expired ones included. GitHub does
+        not drop an invitation once its 7 days run out: it stays in the list
+        with `expired: true` (observed on a live organization a year after
+        expiry). Counting it keeps the place held and the student in their
+        team - a later visit re-issues the invitation through
+        RepoProvisioner._ensure_access - instead of silently handing the
+        place to someone else and leaving the student teamless. Expired
+        logins are reported separately only so the picker can say so.
+
         Returns:
-            (members, pending, members_unknown). A GitHub failure for one team
-            yields empty lists and members_unknown=True, so that a single
-            unreadable team does not break the whole page.
+            (members, pending, expired, members_unknown). A GitHub failure for
+            one team yields empty lists and members_unknown=True, so that a
+            single unreadable team does not break the whole page.
         """
         collaborators = self.github.list_collaborators(org, repo_name, affiliation="direct")
         invitations = self.github.list_invitations(org, repo_name)
         if collaborators is None or invitations is None:
             logger.warning(f"Could not read the roster of {org}/{repo_name}")
-            return [], [], True
+            return [], [], [], True
 
         members: list[str] = []
         for collaborator in collaborators:
@@ -418,13 +429,16 @@ class TeamRegistry:
             members.append(login)
 
         pending: list[str] = []
+        expired: list[str] = []
         for invitation in invitations:
             login = (invitation.get("invitee") or {}).get("login") or ""
             if not login or login.casefold() in excluded:
                 continue
             pending.append(login)
+            if invitation.get("expired"):
+                expired.append(login)
 
-        return members, pending, False
+        return members, pending, expired, False
 
     @staticmethod
     def find_member_team(teams: list[TeamInfo], username: str) -> TeamInfo | None:

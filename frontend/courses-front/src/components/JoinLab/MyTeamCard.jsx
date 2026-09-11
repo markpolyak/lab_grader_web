@@ -35,11 +35,19 @@ export function MyTeamCard({ team, sizeMax, isBusy, onRepairAccess }) {
         {team.members.map((login) => (
           <MemberChip key={login}>{login}</MemberChip>
         ))}
-        {team.pending.map((login) => (
-          <MemberChip key={login} $pending>
-            {login} · {t("join.team.pending")}
-          </MemberChip>
-        ))}
+        {team.pending.map((login) => {
+          // Истёкшее приглашение по-прежнему занимает место - см. TeamRegistry._read_roster.
+          const isExpired = (team.expired ?? []).includes(login);
+          return (
+            <MemberChip
+              key={login}
+              $pending
+              title={t(isExpired ? "join.team.expiredHint" : "join.team.pendingHint")}
+            >
+              {login} · {t(isExpired ? "join.team.expired" : "join.team.pending")}
+            </MemberChip>
+          );
+        })}
       </TeamMembers>
 
       {repositoryUrl ? (

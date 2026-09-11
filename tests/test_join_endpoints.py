@@ -592,6 +592,7 @@ class TestJoinLabTeams:
         # The organization owner (admin) and the teacher stay out of the roster
         assert first["members"] == ["alice"]
         assert first["pending"] == ["carol"]
+        assert first["expired"] == []
         assert first["size"] == 2
 
     @responses.activate

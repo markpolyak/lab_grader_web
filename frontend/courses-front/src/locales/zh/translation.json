@@ -192,6 +192,8 @@
       "sizeOf": "{{size}} / {{max}}",
       "pending": "邀请已发送",
       "pendingHint": "该学生尚未接受邀请，但名额已被占用。",
+      "expired": "邀请已过期",
+      "expiredHint": "邀请已过期，但名额仍被占用。学生可通过实验链接恢复访问，教师可以释放该名额。",
       "membersUnknown": "暂时无法获取小组成员，请一分钟后刷新页面。",
       "createTitle": "创建小组",
       "nameLabel": "小组名称",

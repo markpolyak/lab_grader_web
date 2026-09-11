@@ -189,6 +189,8 @@
       "sizeOf": "{{size}} of {{max}}",
       "pending": "invitation sent",
       "pendingHint": "The student has not accepted the invitation yet, but the place is already taken.",
+      "expired": "invitation expired",
+      "expiredHint": "The invitation has expired, but the place is still taken. The student can restore access through the lab link; the teacher can free the place.",
       "membersUnknown": "The team roster is unavailable right now. Refresh the page in a minute.",
       "createTitle": "Create a team",
       "nameLabel": "Team name",

@@ -1396,6 +1396,9 @@ def _team_payload(team: TeamInfo, is_mine: bool, size_max: int | None) -> dict:
         "description": team.description,
         "members": list(team.members),
         "pending": list(team.pending),
+        # Subset of `pending`: the invitation expired, yet the place stays held
+        # (see TeamRegistry._read_roster).
+        "expired": list(team.expired),
         "size": team.size,
         "is_full": size_max is not None and team.size >= size_max,
         "is_mine": is_mine,

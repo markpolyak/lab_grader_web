@@ -140,8 +140,8 @@ def _collaborator(login, push=True, admin=False):
     return {"login": login, "permissions": {"push": push, "admin": admin}}
 
 
-def _invitation(login):
-    return {"invitee": {"login": login}}
+def _invitation(login, expired=False):
+    return {"invitee": {"login": login}, "expired": expired}
 
 
 class FakeGitHub:
@@ -725,6 +725,60 @@ class TestJoinTeam:
         registry.join_team(**LAB, username="dave", slug="team-1")
 
         assert registry.cached_teams("test-org", "os-task5") is None
+
+
+class TestExpiredInvitation:
+    """
+    GitHub keeps an expired invitation listed with `expired: true`. It must
+    keep holding the place: otherwise the seat silently goes to someone else
+    and the invited student drops out of their own team (§7.1).
+    """
+
+    def _github(self):
+        return FakeGitHub(
+            repos=[_repo("os-task5-team-1", "Пингвины")],
+            collaborators={"os-task5-team-1": [_collaborator("alice")]},
+            invitations={"os-task5-team-1": [_invitation("carol", expired=True)]},
+        )
+
+    def test_expired_invitation_still_holds_a_place(self):
+        team = TeamRegistry(self._github()).list_teams("o", "os-task5")[0]
+
+        assert team.pending == ["carol"]
+        assert team.expired == ["carol"]
+        assert team.size == 2
+        assert team.has_member("carol")
+
+    def test_fresh_invitation_is_not_reported_as_expired(self):
+        github = self._github()
+        github.invitations = {"os-task5-team-1": [_invitation("carol")]}
+        team = TeamRegistry(github).list_teams("o", "os-task5")[0]
+
+        assert team.pending == ["carol"]
+        assert team.expired == []
+
+    def test_nobody_else_takes_the_place(self):
+        provisioner = FakeProvisioner()
+        result = _registry(self._github(), provisioner).join_team(
+            **LAB, username="dave", slug="team-1", team_config=TeamConfig(size_max=2),
+        )
+
+        assert result.error_code == "TEAM_FULL"
+        assert provisioner.calls == []
+
+    def test_the_invited_student_repairs_access(self):
+        provisioner = FakeProvisioner()
+        result = _registry(self._github(), provisioner).join_team(
+            **LAB, username="carol", slug="team-1", team_config=TeamConfig(size_max=2),
+        )
+
+        assert result.status == TeamActionStatus.OK
+        assert provisioner.calls[0]["access_username"] == "carol"
+        assert provisioner.calls[0]["force_invite"] is False
+
+    def test_the_invited_student_is_graded_with_the_team(self):
+        teams = TeamRegistry(self._github()).list_teams("o", "os-task5")
+        assert TeamRegistry.member_index(teams)["carol"].slug == "team-1"
 
 
 class TestUnreadableRoster:
