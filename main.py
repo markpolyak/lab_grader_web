@@ -56,7 +56,19 @@ from grading import (
     TeamRegistry,
     is_team_lab,
     parse_team_config,
+    JoinConfigError,
+    JoinWindow,
+    STATE_CLOSED,
+    STATE_NOT_OPEN,
+    STATE_OPEN,
+    check_token_collisions,
+    is_secret_lab,
+    lab_token,
+    parse_join_config,
+    parse_window,
+    resolve_token,
 )
+import tempfile
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -170,6 +182,91 @@ def load_course_index():
 
     return index_data
 
+def _course_meta(entry: dict) -> dict:
+    """Index metadata attached to a course config as `_meta`."""
+    return {
+        "status": entry.get("status", "active"),
+        "priority": entry.get("priority", 0),
+        "featured": entry.get("featured", False),
+        "filename": entry["file"],
+        "logo": entry.get("logo", "/assets/default.png"),
+    }
+
+
+def _read_course_file(entry: dict) -> dict | None:
+    """
+    Read one course file named by an index entry.
+
+    Returns:
+        The `course` mapping with `_meta` filled in, or None if the file is
+        missing, unparseable or not a course config (logged, never fatal -
+        one broken file must not take the whole list down).
+    """
+    file_path = os.path.join(COURSES_DIR, entry["file"])
+    if not os.path.exists(file_path):
+        logger.warning(f"Course file {entry['file']} not found, skipping")
+        return None
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        logger.error(f"Error parsing YAML in {entry['file']}: {e}")
+        return None
+
+    if not isinstance(data, dict) or "course" not in data:
+        logger.warning(f"Skipping file {entry['file']}: invalid structure")
+        return None
+
+    course_info = data["course"]
+    course_info["_meta"] = _course_meta(entry)
+    return course_info
+
+
+def iter_course_configs():
+    """
+    Перечислить конфигурации всех курсов индекса - единственная точка
+    перечисления на весь проект (docs/SECRET_JOIN_LINKS_PLAN.md §6, §13).
+
+    Резолв секретной ссылки и список курсов читают конфиги через неё, поэтому
+    перенос конфигов в отдельное хранилище (БД, приватный git) потребует
+    правки одного места, а не десятка чтений с диска. Там же потом появится
+    индекс `token -> (курс, лаба)`.
+
+    Yields:
+        (course_id, course_info) - `course_info` с заполненным `_meta`
+    """
+    index_data = load_course_index()
+    for entry in index_data.get("courses", []):
+        course_id = entry.get("id")
+        if not course_id or not entry.get("file"):
+            continue
+        course_info = _read_course_file(entry)
+        if course_info is None:
+            continue
+        yield course_id, course_info
+
+
+def warn_about_join_links(filename: str, course_info: dict) -> None:
+    """
+    Log problems in labs' `join` sections (see warn_about_team_labs).
+
+    A malformed section is answered per request by the endpoint that names
+    the lab; here it makes it into the startup log, where the teacher sees it
+    before a student does. Public paths hide such a lab rather than guess
+    what was meant - see find_public_lab_config.
+    """
+    labs = course_info.get("labs", {})
+    if not isinstance(labs, dict):
+        return
+
+    for lab_key, lab_config in labs.items():
+        try:
+            parse_join_config(lab_config, course_info.get("timezone"))
+        except JoinConfigError as e:
+            logger.warning(f"{filename}: лаба '{lab_key}' - {e}")
+
+
 def warn_about_team_labs(filename: str, course_info: dict) -> None:
     """
     Log config problems of team labs that are not fatal on their own.
@@ -247,6 +344,7 @@ def validate_course_index():
                     print(f"❌ ERROR: Invalid course structure in {entry['file']}")
                     return False
                 warn_about_team_labs(entry["file"], data["course"])
+                warn_about_join_links(entry["file"], data["course"])
         except Exception as e:
             print(f"❌ ERROR: Failed to load {entry['file']}: {e}")
             return False
@@ -278,12 +376,7 @@ def get_course_by_id(course_id: str):
 
     # Merge index metadata with course data
     course_info = course_data.get("course", {})
-    course_info["_meta"] = {
-        "status": course_entry.get("status", "active"),
-        "priority": course_entry.get("priority", 0),
-        "featured": course_entry.get("featured", False),
-        "filename": course_entry["file"]
-    }
+    course_info["_meta"] = _course_meta(course_entry)
 
     return course_info
 
@@ -291,6 +384,12 @@ def get_course_by_id(course_id: str):
 print("Validating course index...")
 if not validate_course_index():
     raise RuntimeError("Course index validation failed. Please fix index.yaml before starting.")
+
+# Two secret links resolving to the same lab would be silent; three lines turn
+# that into a startup log line a teacher can fix by raising join.revision
+# (docs/SECRET_JOIN_LINKS_PLAN.md §3.1).
+for _collision in check_token_collisions(SECRET_KEY, iter_course_configs()):
+    logger.error(f"Конфликт секретных ссылок: {_collision}")
 
 # Mount static files for course logos
 LOGOS_DIR = os.path.join(COURSES_DIR, "logos")
@@ -374,44 +473,26 @@ def get_courses(request: Request, status: str = "active"):
     Args:
         status: Filter by status (active, archived, all). Default: active
     """
-    index_data = load_course_index()
     courses = []
 
-    for entry in index_data.get("courses", []):
-        course_status = entry.get("status", "active")
+    for course_id, course_info in iter_course_configs():
+        meta = course_info["_meta"]
+        course_status = meta["status"]
 
         # Filter by status
         if status != "all" and course_status != status:
             continue
 
-        # Load course file
-        file_path = os.path.join(COURSES_DIR, entry["file"])
-        if not os.path.exists(file_path):
-            print(f"Warning: Course file {entry['file']} not found, skipping")
-            continue
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            print(f"Error parsing YAML in {entry['file']}: {e}")
-            continue
-
-        if not isinstance(data, dict) or "course" not in data:
-            print(f"Skipping file {entry['file']}: invalid structure")
-            continue
-
-        course_info = data["course"]
         courses.append({
-            "id": entry["id"],
+            "id": course_id,
             "name": course_info.get("name", "Unknown"),
             "university": course_info.get("university", ""),
             "semester": course_info.get("semester", "Unknown"),
-            "logo": entry.get("logo", "/assets/default.png"),  # Logo from index, not course file
+            "logo": meta["logo"],  # Logo from index, not course file
             "email": course_info.get("email", ""),
             "status": course_status,
-            "priority": entry.get("priority", 0),
-            "featured": entry.get("featured", False),
+            "priority": meta["priority"],
+            "featured": meta["featured"],
         })
 
     # Sort by priority (descending), then by name
@@ -465,6 +546,65 @@ def find_lab_config(labs: dict, lab_id: str) -> tuple[str, dict] | None:
             return numeric_key, labs[numeric_key]
 
     return None
+
+def find_public_lab_config(
+    course_info: dict,
+    lab_id: str,
+    now: datetime | None = None,
+) -> tuple[str, dict] | None:
+    """
+    Найти лабораторную так, как её видит студент без секретной ссылки.
+
+    Обёртка над find_lab_config, которая пропускает:
+      - лабы с `join.link: secret` - адрес /join/{курс}/{лаба} для них не
+        работает никогда, они доступны только по /j/{token};
+      - лабы, не достигшие `join.opens-at`;
+      - лабы с неразбираемой секцией `join` - конфигурация сломана, и
+        безопаснее спрятать работу, чем гадать, что имелось в виду (ошибка
+        при этом попадает в лог при старте, см. warn_about_join_links).
+
+    Вызывающий обязан ответить на None ровно так же, как на несуществующую
+    лабу: одинаковый код и одинаковое тело ответа. Иначе публичный эндпоинт
+    становится оракулом, подтверждающим существование контрольной, ради
+    устранения которого секретные ссылки и сделаны
+    (docs/SECRET_JOIN_LINKS_PLAN.md §5, §7.2).
+
+    Админские пути, /j/{token} и массовая проверка продолжают пользоваться
+    прямым find_lab_config: окно на них не распространяется.
+
+    Returns:
+        (ключ в конфиге, конфиг лабы) или None
+    """
+    resolved = find_lab_config(course_info.get("labs", {}), lab_id)
+    if not resolved:
+        return None
+
+    lab_key, lab_config = resolved
+    try:
+        window = parse_window(lab_config, course_info.get("timezone"))
+    except JoinConfigError as e:
+        logger.warning(f"Лаба '{lab_key}' скрыта из публичных путей: {e}")
+        return None
+
+    if window.secret or not window.is_visible(now):
+        return None
+
+    return lab_key, lab_config
+
+
+def public_labs(course_info: dict, now: datetime | None = None) -> list[dict]:
+    """Конфиги лаб курса, доступных студенту сейчас (см. find_public_lab_config)."""
+    labs = course_info.get("labs", {})
+    if not isinstance(labs, dict):
+        return []
+
+    visible = []
+    for lab_key in labs:
+        resolved = find_public_lab_config(course_info, str(lab_key), now)
+        if resolved is not None:
+            visible.append(resolved[1])
+    return visible
+
 
 @app.get("/courses/{course_id}")
 @limiter.limit("100/minute")
@@ -532,6 +672,84 @@ def edit_course_get(request: Request, course_id: str, admin: str = Depends(requi
     return {"filename": filename, "content": content}
 
 
+def _labs_of(course_data) -> dict:
+    """Секция labs разобранного YAML курса, или пустой словарь."""
+    if not isinstance(course_data, dict):
+        return {}
+    course = course_data.get("course")
+    if not isinstance(course, dict):
+        return {}
+    labs = course.get("labs")
+    return labs if isinstance(labs, dict) else {}
+
+
+def _validate_join_sections(new_data, old_data) -> None:
+    """
+    Проверить секции `join` сохраняемого конфига (§7.2 плана).
+
+    Файл читается на каждый запрос и не кэшируется, поэтому сохранение с
+    испорченной секцией `join` ломает /j/{token} немедленно и до следующей
+    правки - проверять надо до записи, а не при старте.
+
+    Отдельно запрещается уменьшать `join.revision`: это воскресило бы уже
+    отозванную ссылку. Когда конфиги переедут в версионируемое хранилище,
+    та же проверка понадобится и восстановлению версии (§13).
+
+    Raises:
+        HTTPException(400): секция не разбирается или ревизия уменьшена
+    """
+    new_course = new_data.get("course") if isinstance(new_data, dict) else None
+    timezone_str = new_course.get("timezone") if isinstance(new_course, dict) else None
+
+    old_labs = _labs_of(old_data)
+
+    for lab_key, lab_config in _labs_of(new_data).items():
+        try:
+            settings = parse_join_config(lab_config, timezone_str)
+        except JoinConfigError as e:
+            raise HTTPException(status_code=400, detail=f"Лаба '{lab_key}': {e}")
+
+        try:
+            old_settings = parse_join_config(old_labs.get(str(lab_key)) or old_labs.get(lab_key))
+        except JoinConfigError:
+            # Прежний конфиг сам был испорчен - сравнивать не с чем,
+            # сохранение исправленной версии блокировать нельзя.
+            continue
+
+        if settings.revision < old_settings.revision:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Лаба '{lab_key}': join.revision нельзя уменьшать "
+                    f"({old_settings.revision} -> {settings.revision}) - это вернуло бы к жизни "
+                    "уже отозванную ссылку"
+                ),
+            )
+
+
+def _write_file_atomically(file_path: str, content: str) -> None:
+    """
+    Записать файл целиком или не записать вовсе.
+
+    Прежняя запись усечением оставляла обрезанный YAML, если процесс умирал
+    посреди неё; во время идущей контрольной это ломает ссылку сразу.
+    Временный файл создаётся рядом с целевым, чтобы os.replace был
+    атомарным переименованием в пределах одной файловой системы.
+    """
+    directory = os.path.dirname(os.path.abspath(file_path))
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".course-", suffix=".yaml.tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, file_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
 @app.put("/courses/{course_id}/edit")
 @limiter.limit("20/minute")
 def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, admin: str = Depends(require_admin)):
@@ -542,12 +760,19 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
     file_path = os.path.join(COURSES_DIR, filename)
 
     try:
-        yaml.safe_load(data.content)
+        new_data = yaml.safe_load(data.content)
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка в YAML формате: {str(e)}")
 
-    with open(file_path, "w", encoding="utf-8") as file:
-        file.write(data.content)
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            old_data = yaml.safe_load(file.read())
+    except (OSError, yaml.YAMLError):
+        old_data = None
+
+    _validate_join_sections(new_data, old_data)
+
+    _write_file_atomically(file_path, data.content)
 
     return {"message": "Изменения успешно сохранены"}
 

@@ -10,6 +10,7 @@ This module contains functions for various aspects of lab grading:
 - grader: Orchestrator for grading workflow
 - repo_provisioning: Orchestrator for the /join student repo creation flow
 - teams: Team (group) lab assignments - one repository per team
+- join_links: Secret /j/{token} links and lab availability windows
 - propagate: Orchestrator for propagating template updates via fork PRs (admin)
 """
 
@@ -94,6 +95,28 @@ from .teams import (
     compose_description,
     parse_description,
     reset_teams_state,
+)
+
+from .join_links import (
+    JoinConfigError,
+    JoinSettings,
+    JoinWindow,
+    LINK_PUBLIC,
+    LINK_SECRET,
+    STATE_CLOSED,
+    STATE_NOT_OPEN,
+    STATE_OPEN,
+    TOKEN_LENGTH,
+    TOKEN_RE,
+    check_token_collisions,
+    compute_token,
+    is_secret_lab,
+    iter_secret_labs,
+    join_identity,
+    lab_token,
+    parse_join_config,
+    parse_window,
+    resolve_token,
 )
 
 from .propagate import (
@@ -203,6 +226,26 @@ __all__ = [
     "compose_description",
     "parse_description",
     "reset_teams_state",
+    # join_links
+    "JoinConfigError",
+    "JoinSettings",
+    "JoinWindow",
+    "LINK_PUBLIC",
+    "LINK_SECRET",
+    "STATE_CLOSED",
+    "STATE_NOT_OPEN",
+    "STATE_OPEN",
+    "TOKEN_LENGTH",
+    "TOKEN_RE",
+    "check_token_collisions",
+    "compute_token",
+    "is_secret_lab",
+    "iter_secret_labs",
+    "join_identity",
+    "lab_token",
+    "parse_join_config",
+    "parse_window",
+    "resolve_token",
     # propagate
     "PropagateJob",
     "PropagateResult",

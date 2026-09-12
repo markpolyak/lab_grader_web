@@ -523,3 +523,113 @@ class TestBulkGradeEndpoint:
 
         assert result["status"] == "running"
         assert job.cancel_requested is True
+
+
+# ---------------------------------------------------------------------------
+# Сохранение конфига курса: семантическая проверка секции join, запрет
+# уменьшать join.revision и атомарная запись
+# (docs/SECRET_JOIN_LINKS_PLAN.md §7.2, §13, этап 1 чек-листа).
+# ---------------------------------------------------------------------------
+
+
+SECRET_LAB_YAML = """course:
+  name: Test Course
+  timezone: UTC+3
+  labs:
+    "7":
+      github-prefix: kr1
+      short-name: "Тест / КР"
+      template-repo: org/kr1-template
+      join:
+        link: secret
+        opens-at: "2026-10-15 10:00"
+        revision: 3
+"""
+
+
+@pytest.fixture
+def secret_lab_course(admin_course_env):
+    """Курс с секретной лабой на диске - исходная версия для правок."""
+    path = admin_course_env / "test-course.yaml"
+    path.write_text(SECRET_LAB_YAML, encoding="utf-8")
+    return path
+
+
+class TestEditCourseJoinValidation:
+    def test_saving_a_valid_change_works(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 4")
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 200
+        assert "revision: 4" in secret_lab_course.read_text(encoding="utf-8")
+
+    def test_lowering_revision_is_rejected(self, client, secret_lab_course):
+        """Откат ревизии воскресил бы уже отозванную ссылку (§13 плана)."""
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 2")
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 400
+        assert "revision" in response.json()["detail"]
+        # Файл на диске не тронут
+        assert "revision: 3" in secret_lab_course.read_text(encoding="utf-8")
+
+    def test_broken_join_section_is_rejected_before_writing(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace('link: secret', 'link: sekret')
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 400
+        assert "join.link" in response.json()["detail"]
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    def test_unparseable_window_is_rejected(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace('opens-at: "2026-10-15 10:00"', 'opens-at: "когда-нибудь"')
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 400
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    def test_team_lab_with_secret_link_is_rejected(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace(
+            "      join:", "      team:\n        size-max: 4\n      join:"
+        )
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 400
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    def test_invalid_yaml_is_still_rejected(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.put("/courses/test-course/edit", json={"content": "course: [unclosed"})
+        assert response.status_code == 400
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    def test_course_without_join_sections_saves_as_before(self, client, admin_course_env):
+        """Обратная совместимость: конфиг без join сохраняется как раньше."""
+        client.cookies.set("admin_session", valid_cookie())
+        content = "course:\n  name: Test Course\n  labs:\n    \"1\":\n      short-name: ЛР1\n"
+        response = client.put("/courses/test-course/edit", json={"content": content})
+        assert response.status_code == 200
+        assert (admin_course_env / "test-course.yaml").read_text(encoding="utf-8") == content
+
+    def test_write_is_atomic_and_leaves_no_temporary_files(self, client, secret_lab_course, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 9")
+        assert client.put("/courses/test-course/edit", json={"content": updated}).status_code == 200
+        leftovers = [p.name for p in admin_course_env.iterdir() if p.name.endswith(".tmp")]
+        assert leftovers == []
+
+    def test_failed_write_leaves_the_previous_file_intact(self, client, secret_lab_course, monkeypatch):
+        """Прерванное сохранение не должно оставлять обрезанный файл."""
+        client.cookies.set("admin_session", valid_cookie())
+
+        real_replace = os.replace
+
+        def failing_replace(src, dst):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(main_module.os, "replace", failing_replace)
+        updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 5")
+        with pytest.raises(OSError):
+            client.put("/courses/test-course/edit", json={"content": updated})
+        monkeypatch.setattr(main_module.os, "replace", real_replace)
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
