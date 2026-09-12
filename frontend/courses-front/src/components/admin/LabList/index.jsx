@@ -41,6 +41,7 @@ import {
   SelectableTableWrapper,
   HintText,
   JoinLinkCell,
+  JoinLinkLine,
   JoinLinkText,
 } from "./styled";
 
@@ -300,8 +301,8 @@ export const LabList = ({ courseId, onBack }) => {
                         <Chip size="small" color="error" label={lab.join_error} />
                       ) : lab.join_link ? (
                         <JoinLinkCell>
-                          <JoinLinkText title={lab.join_link}>{lab.join_link}</JoinLinkText>
-                          <div>
+                          <JoinLinkLine>
+                            <JoinLinkText title={lab.join_link}>{lab.join_link}</JoinLinkText>
                             <Tooltip title={t("adminLabs.join.copy")}>
                               <IconButton
                                 size="small"
@@ -311,6 +312,8 @@ export const LabList = ({ courseId, onBack }) => {
                                 <CopyIcon />
                               </IconButton>
                             </Tooltip>
+                          </JoinLinkLine>
+                          <div>
                             <Chip
                               size="small"
                               color={JOIN_STATE_COLOR[lab.join_state] || "default"}
