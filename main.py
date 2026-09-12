@@ -547,21 +547,23 @@ def find_lab_config(labs: dict, lab_id: str) -> tuple[str, dict] | None:
 
     return None
 
-def find_public_lab_config(
+def find_visible_lab_config(
     course_info: dict,
     lab_id: str,
     now: datetime | None = None,
 ) -> tuple[str, dict] | None:
     """
-    Найти лабораторную так, как её видит студент без секретной ссылки.
+    Найти лабораторную, которая уже открыта для студентов.
 
     Обёртка над find_lab_config, которая пропускает:
-      - лабы с `join.link: secret` - адрес /join/{курс}/{лаба} для них не
-        работает никогда, они доступны только по /j/{token};
-      - лабы, не достигшие `join.opens-at`;
+      - лабы, не достигшие `join.opens-at` (у секретной лабы отсутствие
+        `opens-at` тоже означает «ещё не открыта», см. JoinWindow);
       - лабы с неразбираемой секцией `join` - конфигурация сломана, и
         безопаснее спрятать работу, чем гадать, что имелось в виду (ошибка
         при этом попадает в лог при старте, см. warn_about_join_links).
+
+    После `closes-at` лаба остаётся видимой: работы сдают как раз после
+    окончания контрольной, закрывается только выдача репозиториев.
 
     Вызывающий обязан ответить на None ровно так же, как на несуществующую
     лабу: одинаковый код и одинаковое тело ответа. Иначе публичный эндпоинт
@@ -586,21 +588,41 @@ def find_public_lab_config(
         logger.warning(f"Лаба '{lab_key}' скрыта из публичных путей: {e}")
         return None
 
-    if window.secret or not window.is_visible(now):
+    if not window.is_visible(now):
         return None
 
     return lab_key, lab_config
 
 
-def public_labs(course_info: dict, now: datetime | None = None) -> list[dict]:
-    """Конфиги лаб курса, доступных студенту сейчас (см. find_public_lab_config)."""
+def find_public_lab_config(
+    course_info: dict,
+    lab_id: str,
+    now: datetime | None = None,
+) -> tuple[str, dict] | None:
+    """
+    То же, что find_visible_lab_config, но дополнительно прячет лабы с
+    `join.link: secret`.
+
+    Разница нужна ровно в одном месте: адрес `/join/{курс}/{лаба}` для
+    секретной лабы не работает НИКОГДА, а список работ и самостоятельная
+    проверка после открытия работают - иначе студент не сдал бы контрольную
+    (§5 плана).
+    """
+    resolved = find_visible_lab_config(course_info, lab_id, now)
+    if resolved is None or is_secret_lab(resolved[1]):
+        return None
+    return resolved
+
+
+def visible_labs(course_info: dict, now: datetime | None = None) -> list[dict]:
+    """Конфиги лаб курса, открытых студенту сейчас (см. find_visible_lab_config)."""
     labs = course_info.get("labs", {})
     if not isinstance(labs, dict):
         return []
 
     visible = []
     for lab_key in labs:
-        resolved = find_public_lab_config(course_info, str(lab_key), now)
+        resolved = find_visible_lab_config(course_info, str(lab_key), now)
         if resolved is not None:
             visible.append(resolved[1])
     return visible
@@ -806,7 +828,9 @@ def get_course_groups(request: Request, course_id: str):
 def get_course_labs(request: Request, course_id: str, group_id: str):
     course_info = get_course_by_id(course_id)
     spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-    labs = [lab["short-name"] for lab in course_info.get("labs", {}).values() if "short-name" in lab]
+    # Работа, не достигшая join.opens-at, в список не попадает: до публикации
+    # её не должно быть видно даже по названию столбца (§5, §7.2 плана).
+    labs = [lab["short-name"] for lab in visible_labs(course_info) if "short-name" in lab]
 
     if not spreadsheet_id or not labs:
         raise HTTPException(status_code=400, detail="Missing spreadsheet ID or labs in config")
@@ -955,12 +979,19 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         org = course_info.get("github", {}).get("organization")
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
 
-        labs = course_info.get("labs", {})
         # lab_id приходит из интерфейса как short-name ("ЛР0.1"), а из прочих
         # вызовов - как ключ конфига. Разбор по числу выбирал не ту лабу,
         # см. find_lab_config.
-        resolved = find_lab_config(labs, lab_id)
-        lab_key, lab_config_dict = resolved if resolved else (None, {})
+        #
+        # Лаба, не достигшая join.opens-at, отвечает здесь тем же, чем и
+        # несуществующая: публичная проверка не должна подтверждать, что
+        # контрольная существует (§5 плана). Массовая проверка из админки
+        # окном не ограничена и резолвит лабу напрямую.
+        resolved = find_visible_lab_config(course_info, lab_id)
+        if not resolved:
+            logger.info(f"Lab '{lab_id}' is not available in course {course_id}")
+            raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+        lab_key, lab_config_dict = resolved
         repo_prefix = lab_config_dict.get("github-prefix")
 
         logger.debug(f"Looking for lab config by '{lab_id}', resolved key: {lab_key!r}, found: {bool(lab_config_dict)}")
