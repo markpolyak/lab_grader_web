@@ -31,7 +31,7 @@ pytest tests/ --cov=. --cov-report=term-missing
 GITHUB_TOKEN=ghp_...      # GitHub API token
 ADMIN_LOGIN=admin         # Admin panel login
 ADMIN_PASSWORD=...        # Admin panel password
-SECRET_KEY=...            # Cookie signing key
+SECRET_KEY=...            # Cookie signing key AND secret /j/{token} links (changing it revokes every link)
 LOG_DIR=/app/logs         # Log directory (optional)
 LOG_LEVEL=INFO            # Logging level (optional)
 
@@ -39,6 +39,11 @@ LOG_LEVEL=INFO            # Logging level (optional)
 GITHUB_OAUTH_CLIENT_ID=...
 GITHUB_OAUTH_CLIENT_SECRET=...
 FRONTEND_URL=http://localhost:8080
+
+# Optional: public address used to build secret /j/{token} links, and the
+# reverse proxies allowed to set X-Forwarded-For (empty = trust nobody)
+PUBLIC_BASE_URL=https://labgrader.example.ru
+FORWARDED_ALLOW_IPS=
 ```
 
 ## Key Conventions
@@ -59,6 +64,7 @@ FRONTEND_URL=http://localhost:8080
 | Team lab operations | `grading/teams.py` (`TeamRegistry`) |
 | Add React component | `frontend/courses-front/src/components/` |
 | Add/edit course | `courses/` directory + `index.yaml` |
+| Secret link / availability window | `grading/join_links.py` |
 | Add translation | `frontend/courses-front/src/locales/{en,ru,zh}/` |
 | Add tests | `tests/` |
 
@@ -142,6 +148,42 @@ its members (see `docs/TEAM_ASSIGNMENTS_PLAN.md` for the full design and
   `student_order=None`); `can_overwrite_cell` is then applied per member against their own cell.
   Calling it per member would triple the GitHub work. TASKID is off for team labs
   (`taskid_column` returns None), and bulk `by_file` mode is refused.
+
+## Secret Join Links and Availability Windows
+
+A lab can be reached through an unguessable `/j/{token}` link instead of
+`/join/{course_id}/{lab_id}`, and can have an availability window. A test
+("контрольная") is a lab with both (see `docs/SECRET_JOIN_LINKS_PLAN.md`; the
+teacher-facing instructions are in `docs/PROJECT_DESCRIPTION.md`).
+
+- **The token is computed, not stored.** `grading/join_links.py`:
+  `base32(HMAC-SHA256(SECRET_KEY, "{join.id or course+lab key}\n{revision}"))[:10]`,
+  alphabet `a-z2-7`. Nothing secret reaches git, the link is revoked by raising
+  `join.revision`, and the server can always rebuild it. Comparison is always
+  `secrets.compare_digest`, the format is checked by `TOKEN_RE` before any
+  search, and the token is never logged - log the course id and lab key.
+- **Indistinguishable from a missing lab.** For a secret lab, and for any lab
+  that has not reached `join.opens-at`, `/join/{c}/{l}`, `/start`, the lab list
+  and public grading must answer exactly what a nonexistent lab answers - same
+  code, same body. Public paths resolve through `find_public_lab_config`
+  (window + secrecy) or `find_visible_lab_config` (window only, so an open
+  secret lab is still gradable); `find_lab_config` stays for admin paths,
+  `/j/{token}` and bulk grading.
+- **Two different defaults.** A lab with no `join` section behaves exactly as
+  before. Missing `opens-at` means "open" for a public lab and "not open yet"
+  for a secret one.
+- **After `closes-at`** no new repository is created, but a student who
+  already has one repairs access through the same link - that is
+  `RepoProvisioner.provision(create=False)`, whose default must keep the
+  behaviour of individual and team labs unchanged.
+- **`team` + `link: secret` is a configuration error**, not a silent fallback
+  (team labs are addressed by course/lab pair - out of scope, §12 of the plan).
+- **Course enumeration goes through `main.iter_course_configs()`** (reading
+  itself lives in `grading/course_index.py`, shared with
+  `scripts/join-link.py`) - the single point the config storage migration will
+  have to change.
+- The link is shown by the admin lab list page and by `scripts/join-link.py`,
+  built from `PUBLIC_BASE_URL` (then `FRONTEND_URL`, then `request.base_url`).
 
 ## Bulk Grading (admin)
 
