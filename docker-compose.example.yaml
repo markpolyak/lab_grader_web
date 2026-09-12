@@ -32,6 +32,12 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
+      # Публичный адрес сервиса - из него собирается секретная ссылка /j/{token}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://labgrader.markpolyak.ru}
+      # Адреса Caddy, которым можно доверять X-Forwarded-For: без этого все
+      # студенты приходят с адреса прокси и делят одну корзину лимита запросов
+      # (docs/DEPLOYMENT.md, раздел «Ограничение частоты запросов за прокси»)
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-}
       # Logging configuration
       LOG_DIR: /app/logs  # Directory for persistent log files
       LOG_LEVEL: INFO  # Options: DEBUG, INFO, WARNING, ERROR (use DEBUG for detailed troubleshooting)

@@ -69,6 +69,8 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS}
     labels:
       caddy: labgrader.markpolyak.ru
       caddy.handle_path: /api/v1*
@@ -89,6 +91,44 @@ GITHUB_TOKEN=your_github_token
 ADMIN_LOGIN=your_admin_login
 ADMIN_PASSWORD=your_secure_password
 SECRET_KEY=your_secret_key
+# Публичный адрес сервиса: из него собирается секретная ссылка /j/{token},
+# которую админка показывает преподавателю
+PUBLIC_BASE_URL=https://labgrader.markpolyak.ru
+# Адреса обратного прокси - см. раздел ниже
+FORWARDED_ALLOW_IPS=172.18.0.0/16
+```
+
+### Ограничение частоты запросов за обратным прокси
+
+Лимиты запросов считаются по адресу клиента (`request.client.host`). За
+обратным прокси этот адрес - адрес прокси, поэтому **все студенты делят одну
+корзину лимита**: в момент открытия контрольной работы группа из 30 человек
+одновременно откроет ссылку, и часть из них получит `429`. Обратная сторона
+та же: перебор секретного токена ограничивается глобально, а не по нарушителю.
+
+Бэкенд запускается с `--proxy-headers`, а список адресов прокси задаётся
+переменной `FORWARDED_ALLOW_IPS`:
+
+- **значение по умолчанию пустое** - заголовку `X-Forwarded-For` не доверяет
+  никто. Так и должно быть, если backend доступен напрямую: иначе лимит
+  обходится подделкой заголовка;
+- за прокси укажите адрес или подсеть, с которых прокси обращается к
+  backend. Для Caddy в docker-сети это подсеть сети `caddy-proxy`:
+
+```bash
+docker network inspect caddy-proxy -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
+# -> 172.18.0.0/16  -> FORWARDED_ALLOW_IPS=172.18.0.0/16
+```
+
+Проверить результат нужно **до** контрольной работы, а не во время неё:
+
+```bash
+# В логах доступа должен быть адрес студента, а не адрес прокси
+docker compose logs backend | grep "GET /j/"
+
+# Подделка заголовка с недоверенного адреса лимит обходить не должна:
+# адрес в логе останется настоящим
+curl -s -o /dev/null -H "X-Forwarded-For: 9.9.9.9" https://labgrader.markpolyak.ru/api/v1/j/aaaaaaaaaa
 ```
 
 ## Switching Between Branches
