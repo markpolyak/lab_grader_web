@@ -306,7 +306,7 @@ class TestResolveToken:
 
         assert resolve_token(SECRET, junk, exploding()) is None
 
-    def test_lab_with_broken_join_section_is_skipped_not_fatal(self):
+    def test_lab_whose_token_cannot_be_computed_is_skipped_not_fatal(self):
         labs = {
             "6": {"join": {"link": "secret", "revision": 0}},
             "7": secret_lab(),
@@ -338,8 +338,22 @@ class TestCheckTokenCollisions:
         assert len(problems) == 1
         assert "join.revision" in problems[0]
 
-    def test_broken_section_is_reported_too(self):
-        labs = {"7": {"join": {"link": "secret", "opens-at": "когда-нибудь"}}}
+    def test_section_that_breaks_the_token_is_reported_too(self):
+        labs = {"7": {"join": {"link": "secret", "revision": 0}}}
         problems = check_token_collisions(SECRET, [("os-2026", course_with(labs))])
         assert len(problems) == 1
-        assert "opens-at" in problems[0]
+        assert "revision" in problems[0]
+
+    def test_broken_window_does_not_break_the_token(self):
+        """
+        Опечатка в дате не должна выглядеть снаружи как отозванная ссылка:
+        токен зависит только от join.id и join.revision, а окно отвечает
+        отдельной ошибкой конфигурации.
+        """
+        labs = {"7": {"join": {"link": "secret", "opens-at": "когда-нибудь"}}}
+        courses = [("os-2026", course_with(labs))]
+        assert check_token_collisions(SECRET, courses) == []
+        token = lab_token(SECRET, "os-2026", "7", labs["7"])
+        assert resolve_token(SECRET, token, courses) == ("os-2026", "7")
+        with pytest.raises(JoinConfigError):
+            parse_window(labs["7"])

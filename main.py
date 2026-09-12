@@ -1148,9 +1148,22 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
 REPO_PROVISIONING_MODES = {"template", "fork"}
 
 
-def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, str, dict, str, TeamConfig | None]:
+def _load_lab_for_join(
+    course_id: str,
+    lab_id: str,
+    public: bool = True,
+) -> tuple[dict, str, dict, str, TeamConfig | None]:
     """
     Load course/lab config needed by the /join flow.
+
+    Args:
+        public: resolve the lab the way a student without a secret link sees
+            it - a lab with `join.link: secret` and a lab that has not
+            reached `join.opens-at` are then indistinguishable from a lab
+            that does not exist (same 404, same body). Callers that already
+            hold the secret (the /j/{token} endpoints and the OAuth callback,
+            which reads the lab out of a signed `state`) pass False and check
+            the window themselves.
 
     Returns:
         (course_info, lab_key, lab_config, github_organization, team_config).
@@ -1169,7 +1182,11 @@ def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, str, dict, st
     course_info = get_course_by_id(course_id)  # raises 404 if course unknown
 
     labs = course_info.get("labs", {})
-    resolved = find_lab_config(labs, lab_id)
+    resolved = (
+        find_public_lab_config(course_info, lab_id)
+        if public
+        else find_lab_config(labs, lab_id)
+    )
     if not resolved:
         raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
     lab_key, lab_config = resolved
@@ -1334,6 +1351,31 @@ def _join_result_redirect(course_id: str, lab_id: str, status: str, **extra) -> 
     return f"{base}/join/{course_id}/{lab_id}?{urlencode(params)}"
 
 
+def _secret_join_result_redirect(token: str, status: str, **extra) -> str:
+    """
+    Same, for a lab reached through a secret link: the student must land back
+    on /j/{token} and never on /join/{course}/{lab}, which for such a lab is
+    indistinguishable from a lab that does not exist.
+    """
+    params = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
+    return f"{FRONTEND_URL.rstrip('/')}/j/{token}?{urlencode(params)}"
+
+
+def _result_redirect_for(
+    course_id: str,
+    lab_id: str,
+    lab_key: str,
+    lab_config: dict,
+    status: str,
+    **extra,
+) -> str:
+    """Result URL for either kind of lab - the token is recomputed, never carried in `state`."""
+    if is_secret_lab(lab_config):
+        token = lab_token(SECRET_KEY, course_id, lab_key, lab_config)
+        return _secret_join_result_redirect(token, status, **extra)
+    return _join_result_redirect(course_id, lab_id, status, **extra)
+
+
 def _join_error_redirect(reason: str) -> str:
     """Результат для случая, когда course_id/lab_id ещё неизвестны (битый state)."""
     return f"{FRONTEND_URL.rstrip('/')}/join/error?{urlencode({'status': 'error', 'reason': reason})}"
@@ -1398,6 +1440,164 @@ def _exchange_code_for_username(code: str, redirect_uri: str) -> str | None:
         return None
 
     return username
+
+
+# ---------------------------------------------------------------------------
+# /j/{token}: the same flow behind a secret, unguessable link.
+# See docs/SECRET_JOIN_LINKS_PLAN.md. The prefix is deliberately not /join/:
+# /join/{token} would collide with /join/{course_id}/{lab_id} and
+# /join/callback.
+# ---------------------------------------------------------------------------
+
+# Никакой ответ по секретной ссылке не должен утащить токен в заголовке
+# Referer при переходе на github.com (§10 плана). Заголовок ставится и на
+# ответы backend, и на саму страницу фронтенда (index.html).
+NO_REFERRER_HEADERS = {"Referrer-Policy": "no-referrer"}
+
+
+def _join_error(status_code: int, code: str, **extra) -> JSONResponse:
+    """
+    Стабильный код ошибки секретной ссылки (§7.3 плана) - фронтенд переводит
+    его сам, как и коды провижининга.
+    """
+    # `None` остаётся в теле намеренно: у секретной лабы без opens-at времени
+    # открытия нет, и фронтенду нужно отличать «времени нет» от «поля нет».
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": code, **extra},
+        headers=NO_REFERRER_HEADERS,
+    )
+
+
+def _iso(moment: datetime | None) -> str | None:
+    return moment.isoformat() if moment is not None else None
+
+
+def _load_lab_by_token(token: str) -> tuple[str, dict, str, dict]:
+    """
+    Найти лабораторную по токену секретной ссылки.
+
+    Returns:
+        (course_id, course_info, lab_key, lab_config)
+
+    Raises:
+        HTTPException(404): токен не совпал ни с одной лабой - испорчен,
+        отозван увеличением revision или просто ничей. Все три случая
+        отвечают одинаково: различать их снаружи нельзя.
+    """
+    resolved = resolve_token(SECRET_KEY, token, iter_course_configs())
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="LINK_NOT_FOUND")
+
+    course_id, lab_key = resolved
+    course_info = get_course_by_id(course_id)
+    labs = course_info.get("labs", {})
+    lab_config = labs.get(lab_key)
+    if not isinstance(lab_config, dict):
+        # iter_secret_labs приводит ключ к строке, а незакавыченный ключ в
+        # YAML разбирается в число - сверяем по строковому представлению.
+        lab_config = next(
+            (cfg for key, cfg in labs.items() if str(key) == lab_key and isinstance(cfg, dict)),
+            None,
+        )
+    if not isinstance(lab_config, dict):
+        # Конфиг изменился между перечислением и чтением курса.
+        raise HTTPException(status_code=404, detail="LINK_NOT_FOUND")
+
+    # Токен в лог не пишется - только курс и ключ лабы.
+    logger.info(f"Secret join link resolved to {course_id}/{lab_key}")
+    return course_id, course_info, lab_key, lab_config
+
+
+def _lab_window(course_info: dict, lab_config: dict) -> JoinWindow:
+    """
+    Окно доступности лабы.
+
+    Raises:
+        HTTPException(400): секция join не разбирается - это ошибка
+        конфигурации, а не 500
+    """
+    try:
+        return parse_window(lab_config, course_info.get("timezone"))
+    except JoinConfigError as e:
+        logger.error(f"Некорректная секция join: {e}")
+        raise HTTPException(status_code=400, detail="LAB_MISCONFIGURED")
+
+
+@app.get("/j/{token}")
+@limiter.limit("120/minute")
+def secret_join_info(request: Request, token: str):
+    """
+    Публичная информация для лендинга секретной ссылки.
+
+    Лимит намеренно высокий: в момент открытия контрольной вся группа
+    заходит сюда одновременно, а за обратным прокси без --proxy-headers все
+    30 студентов делят одну корзину (§11 плана). Перебор токена
+    ограничивается не этим лимитом, а его длиной - 50 бит.
+    """
+    try:
+        course_id, course_info, lab_key, lab_config = _load_lab_by_token(token)
+    except HTTPException as e:
+        return _join_error(e.status_code, str(e.detail))
+
+    try:
+        window = _lab_window(course_info, lab_config)
+    except HTTPException as e:
+        return _join_error(e.status_code, str(e.detail))
+
+    state = window.state()
+    if state == STATE_NOT_OPEN:
+        # До публикации ссылка не раскрывает даже названия работы.
+        return _join_error(403, "JOIN_NOT_OPEN", opens_at=_iso(window.opens_at))
+
+    return JSONResponse(
+        content={
+            "token": token,
+            "course_name": course_info.get("name", "Unknown"),
+            "lab_short_name": lab_config.get("short-name", lab_key),
+            "join_state": state,
+            "opens_at": _iso(window.opens_at),
+            "closes_at": _iso(window.closes_at),
+        },
+        headers=NO_REFERRER_HEADERS,
+    )
+
+
+@app.get("/j/{token}/start")
+@limiter.limit("20/minute")
+def secret_join_start(request: Request, token: str):
+    """
+    Начинает GitHub OAuth для секретной ссылки.
+
+    После closes-at вход остаётся открытым: новый репозиторий не создастся,
+    но студент с уже созданным чинит по этой же ссылке доступ (§8 плана).
+    """
+    try:
+        course_id, course_info, lab_key, lab_config = _load_lab_by_token(token)
+        window = _lab_window(course_info, lab_config)
+    except HTTPException as e:
+        return _join_error(e.status_code, str(e.detail))
+
+    if window.state() == STATE_NOT_OPEN:
+        return _join_error(403, "JOIN_NOT_OPEN", opens_at=_iso(window.opens_at))
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        return _join_error(503, "OAUTH_NOT_CONFIGURED")
+
+    # В state кладётся канонический ключ лабы, а не токен: колбэк вычислит
+    # токен заново из конфига (§7.1 плана).
+    params = {
+        "client_id": GITHUB_OAUTH_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri(request),
+        "scope": "read:user",
+        "state": _build_join_state(course_id, lab_key),
+    }
+    logger.info(f"Redirecting to GitHub OAuth for secret join {course_id}/{lab_key}")
+    return RedirectResponse(
+        url=f"https://github.com/login/oauth/authorize?{urlencode(params)}",
+        headers=NO_REFERRER_HEADERS,
+    )
 
 
 @app.get("/join/{course_id}/{lab_id}")
@@ -1481,17 +1681,36 @@ def join_callback(
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="missing_code"))
 
     try:
-        course_info, _lab_key, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
+        # public=False: for a secret lab the state is the proof that the
+        # student came through the secret link, and the window is checked
+        # right below instead.
+        course_info, lab_key, lab_config, org, team_config = _load_lab_for_join(
+            course_id, lab_id, public=False
+        )
     except HTTPException:
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="config"))
 
+    def result_url(status: str, **extra) -> str:
+        return _result_redirect_for(course_id, lab_id, lab_key, lab_config, status, **extra)
+
+    try:
+        window = _lab_window(course_info, lab_config)
+    except HTTPException:
+        return RedirectResponse(url=result_url("error", reason="LAB_MISCONFIGURED"))
+
+    if window.state() == STATE_NOT_OPEN:
+        # Ссылка ещё не опубликована (или окно сдвинули, пока студент был на
+        # github.com) - репозиторий не создаётся.
+        logger.info(f"Join attempt before opens-at for {course_id}/{lab_key}")
+        return RedirectResponse(url=result_url("error", reason="JOIN_NOT_OPEN"))
+
     if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
         logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
-        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_not_configured"))
+        return RedirectResponse(url=result_url("error", reason="oauth_not_configured"))
 
     username = _exchange_code_for_username(code, _oauth_redirect_uri(request))
     if username is None:
-        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_exchange_failed"))
+        return RedirectResponse(url=result_url("error", reason="oauth_exchange_failed"))
 
     logger.info(f"Confirmed GitHub username '{username}' for join {course_id}/{lab_id}")
 
@@ -1509,24 +1728,30 @@ def join_callback(
     template_repo = lab_config.get("template-repo")
     repo_provisioning = lab_config.get("repo-provisioning", "template")
 
+    # После closes-at новый репозиторий не создаётся, но студент с уже
+    # созданным чинит доступ по той же ссылке (§8 плана).
+    create = window.accepts_new_repos()
+
     try:
         # Server-side token, never the student's OAuth token (see §3.2/§6 of the plan).
         github_client = GitHubClient(GITHUB_TOKEN)
         provisioner = RepoProvisioner(github_client)
-        result = provisioner.provision(org, github_prefix, template_repo, username, repo_provisioning)
+        result = provisioner.provision(
+            org, github_prefix, template_repo, username, repo_provisioning, create=create
+        )
     except Exception:
         logger.exception(f"Unexpected error provisioning repo for {username} in {course_id}/{lab_id}")
-        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="provision_failed"))
+        return RedirectResponse(url=result_url("error", reason="provision_failed"))
 
     if result.status != ProvisionStatus.OK:
         logger.warning(f"Provisioning failed for {username} in {course_id}/{lab_id}: {result.error_code}")
         return RedirectResponse(
-            url=_join_result_redirect(course_id, lab_id, "error", reason=result.error_code or "provision_failed")
+            url=result_url("error", reason=result.error_code or "provision_failed")
         )
 
     logger.info(f"Provisioned {result.repo_url} for {username} ({course_id}/{lab_id})")
     return RedirectResponse(
-        url=_join_result_redirect(course_id, lab_id, "success", repo_url=result.repo_url, username=username)
+        url=result_url("success", repo_url=result.repo_url, username=username)
     )
 
 

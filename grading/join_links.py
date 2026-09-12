@@ -152,6 +152,27 @@ def _join_section(lab_config: dict | None) -> dict:
     return raw
 
 
+def _revision_of(raw: dict) -> int:
+    """
+    `join.revision`, validated.
+
+    Kept apart from the rest of the parsing because the token depends on this
+    field and on `join.id` alone: a typo in `opens-at` must surface as a
+    configuration error, never as a silently revoked link in the middle of a
+    test (see lab_token).
+
+    Raises:
+        JoinConfigError: not an integer, or smaller than 1
+    """
+    revision = raw.get("revision", DEFAULT_REVISION)
+    # bool is an int subclass, and `revision: yes` in YAML is a bool.
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise JoinConfigError(
+            f"Некорректное значение join.revision: {revision!r} (ожидается целое число не меньше 1)"
+        )
+    return revision
+
+
 def is_secret_lab(lab_config: dict | None) -> bool:
     """
     Whether the lab is reachable only through a secret link.
@@ -199,12 +220,7 @@ def parse_join_config(lab_config: dict | None, timezone_str: str | None = None) 
         )
     link = link.strip().lower()
 
-    revision = raw.get("revision", DEFAULT_REVISION)
-    # bool is an int subclass, and `revision: yes` in YAML is a bool.
-    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
-        raise JoinConfigError(
-            f"Некорректное значение join.revision: {revision!r} (ожидается целое число не меньше 1)"
-        )
+    revision = _revision_of(raw)
 
     join_id = raw.get("id")
     if join_id is not None:
@@ -319,14 +335,19 @@ def lab_token(secret_key: str, course_id: str, lab_key: str, lab_config: dict | 
     """
     The token of one lab, straight from its config.
 
+    Only the two fields the token is built from are validated here. A lab
+    whose window does not parse keeps its link working and answers
+    LAB_MISCONFIGURED - a typo in `closes-at` must not read as "this link no
+    longer exists", which is what a failure here would look like from the
+    outside.
+
     Raises:
-        JoinConfigError: the `join` section does not parse
+        JoinConfigError: `join` is not a mapping, or `revision` is invalid
     """
-    settings = parse_join_config(lab_config)
     return compute_token(
         secret_key,
         join_identity(course_id, lab_key, lab_config),
-        settings.revision,
+        _revision_of(_join_section(lab_config)),
     )
 
 
