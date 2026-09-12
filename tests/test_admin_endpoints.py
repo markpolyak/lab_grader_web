@@ -744,3 +744,43 @@ class TestAdminLabListJoinFields:
         )
         assert result.returncode == 0, result.stderr
         assert labs["7"]["join_link"] in result.stdout
+
+
+class TestBulkGradeIgnoresJoinWindow:
+    """
+    Массовая проверка из админки окном не ограничена (§5, §7.2 плана):
+    преподаватель проверяет работу и до открытия, и после закрытия приёма,
+    иначе контрольную нельзя было бы проверить вовсе.
+    """
+
+    @pytest.fixture
+    def worksheet(self):
+        worksheet = MagicMock()
+        worksheet.get_all_values.return_value = [
+            ["№", "ФИО", "GitHub", ""],
+            ["", "", "", "Тест / КР"],
+            ["1", "Иванов Иван", "student1", ""],
+        ]
+        spreadsheet = MagicMock()
+        spreadsheet.fetch_sheet_metadata.return_value = {"properties": {"locale": "en_US"}}
+        with patch.object(main_module, "_open_group_worksheet", return_value=(spreadsheet, worksheet)):
+            yield worksheet
+
+    @pytest.mark.parametrize("join_section", [
+        {"link": "secret", "opens-at": FUTURE},
+        {"link": "secret", "opens-at": PAST, "closes-at": PAST},
+    ])
+    def test_secret_lab_is_graded_in_bulk_whatever_the_window(
+        self, mock_request, worksheet, join_section
+    ):
+        course = labs_course(join_section)
+        course["google"] = {"spreadsheet": "sheet-id"}
+        course["github"] = {"organization": "test-org"}
+
+        with patch("main.get_course_by_id", return_value=course):
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "7", BackgroundTasks(),
+                body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
+            )
+
+        assert response.status_code == 202
