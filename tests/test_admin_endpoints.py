@@ -27,6 +27,7 @@ from main import app
 from grading.grader import CIEvaluation, GradeResult, GradeStatus
 from grading.propagate import _jobs, _running_lab_keys
 from grading.bulk import _jobs as _bulk_jobs, _running_keys as _bulk_running_keys
+from grading.join_links import TOKEN_RE
 
 
 @pytest.fixture(autouse=True)
@@ -633,3 +634,113 @@ class TestEditCourseJoinValidation:
             client.put("/courses/test-course/edit", json={"content": updated})
         monkeypatch.setattr(main_module.os, "replace", real_replace)
         assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+
+# ---------------------------------------------------------------------------
+# Админский список лаб: готовая секретная ссылка и состояние окна
+# (docs/SECRET_JOIN_LINKS_PLAN.md §7.2, §9, этап 5 чек-листа).
+# ---------------------------------------------------------------------------
+
+PAST = "2000-01-01 10:00"
+FUTURE = "2099-01-01 10:00"
+
+
+def labs_course(join_section, **lab_extra):
+    lab = {
+        "short-name": "Тест / КР",
+        "github-prefix": "kr1",
+        "template-repo": "org/kr1-template",
+        "join": join_section,
+    }
+    lab.update(lab_extra)
+    return {
+        "name": "Test Course",
+        "timezone": "UTC+3",
+        "labs": {
+            "1": {"short-name": "ЛР1", "github-prefix": "os-task1"},
+            "7": lab,
+        },
+        "_meta": {"filename": "test-course.yaml", "id": "test-course"},
+    }
+
+
+def list_labs(mock_request, course, monkeypatch, base_url="https://labgrader.example.ru"):
+    monkeypatch.setattr(main_module, "PUBLIC_BASE_URL", base_url)
+    with patch("main.get_course_by_id", return_value=course):
+        labs = main_module.admin_list_course_labs(mock_request, "test-course", admin="admin")
+    return {lab["id"]: lab for lab in labs}
+
+
+class TestAdminLabListJoinFields:
+    def test_secret_lab_carries_a_ready_to_send_link(self, mock_request, monkeypatch):
+        course = labs_course({"link": "secret", "opens-at": FUTURE})
+        labs = list_labs(mock_request, course, monkeypatch)
+
+        link = labs["7"]["join_link"]
+        assert link.startswith("https://labgrader.example.ru/j/")
+        token = link.rsplit("/", 1)[1]
+        assert TOKEN_RE.match(token)
+        assert labs["7"]["join_secret"] is True
+
+    def test_link_is_available_long_before_opens_at(self, mock_request, monkeypatch):
+        """Преподавателю нужно подготовить рассылку заранее (§9.1)."""
+        course = labs_course({"link": "secret", "opens-at": FUTURE})
+        labs = list_labs(mock_request, course, monkeypatch)
+        assert labs["7"]["join_state"] == "not_open"
+        assert labs["7"]["join_link"]
+        assert labs["7"]["opens_at"].startswith("2099-01-01T10:00")
+
+    @pytest.mark.parametrize("join_section,expected", [
+        ({"link": "secret", "opens-at": FUTURE}, "not_open"),
+        ({"link": "secret", "opens-at": PAST}, "open"),
+        ({"link": "secret", "opens-at": PAST, "closes-at": PAST}, "closed"),
+    ])
+    def test_window_state_is_reported(self, mock_request, monkeypatch, join_section, expected):
+        labs = list_labs(mock_request, labs_course(join_section), monkeypatch)
+        assert labs["7"]["join_state"] == expected
+
+    def test_ordinary_lab_has_no_link(self, mock_request, monkeypatch):
+        labs = list_labs(mock_request, labs_course({"link": "public"}), monkeypatch)
+        assert labs["1"]["join_link"] is None
+        assert labs["1"]["join_secret"] is False
+        assert labs["1"]["join_state"] == "open"
+
+    def test_broken_join_section_does_not_break_the_list(self, mock_request, monkeypatch):
+        labs = list_labs(mock_request, labs_course({"link": "secret", "revision": 0}), monkeypatch)
+        assert labs["7"]["join_link"] is None
+        assert "revision" in labs["7"]["join_error"]
+        # остальные лабы курса на месте
+        assert labs["1"]["short_name"] == "ЛР1"
+
+    def test_frontend_url_is_used_when_public_base_url_is_unset(self, mock_request, monkeypatch):
+        monkeypatch.setattr(main_module, "FRONTEND_URL", "https://front.example.com")
+        labs = list_labs(mock_request, labs_course({"link": "secret"}), monkeypatch, base_url=None)
+        assert labs["7"]["join_link"].startswith("https://front.example.com/j/")
+
+    def test_link_matches_the_one_the_script_prints(self, mock_request, monkeypatch, tmp_path):
+        """
+        §9: админка и scripts/join-link.py показывают одну и ту же строку -
+        обе считают её одними и теми же функциями grading/join_links.py.
+        """
+        import subprocess
+
+        course = labs_course({"link": "secret", "opens-at": FUTURE})
+        labs = list_labs(mock_request, course, monkeypatch)
+
+        courses_dir = tmp_path / "courses"
+        courses_dir.mkdir()
+        (courses_dir / "index.yaml").write_text(
+            yaml.dump({"courses": [{"id": "test-course", "file": "c.yaml"}]}), encoding="utf-8"
+        )
+        payload = {"course": {k: v for k, v in course.items() if k != "_meta"}}
+        (courses_dir / "c.yaml").write_text(yaml.dump(payload, allow_unicode=True), encoding="utf-8")
+
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "join-link.py")
+        result = subprocess.run(
+            [sys.executable, script, "--courses-dir", str(courses_dir),
+             "--base-url", "https://labgrader.example.ru", "--course", "test-course", "--lab", "7"],
+            capture_output=True, text=True,
+            env={**os.environ, "SECRET_KEY": main_module.SECRET_KEY},
+        )
+        assert result.returncode == 0, result.stderr
+        assert labs["7"]["join_link"] in result.stdout

@@ -68,6 +68,11 @@ from grading import (
     parse_window,
     resolve_token,
 )
+from grading.course_index import (
+    course_meta,
+    iter_course_configs as _iter_course_configs,
+    load_course_index as _load_course_index,
+)
 import tempfile
 
 # Configure logging to both file and console
@@ -132,6 +137,11 @@ GITHUB_OAUTH_CALLBACK_URL = os.getenv("GITHUB_OAUTH_CALLBACK_URL")
 # Where to send the student's browser after the /join/callback finishes (the frontend's
 # /join/:courseId/:labId route, which renders the "after" state from the query params).
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
+# Public address of the service, used to build the secret /j/{token} links the
+# admin page shows. Behind a reverse proxy request.base_url can hold the
+# container's internal address, so production should set this explicitly
+# (docs/SECRET_JOIN_LINKS_PLAN.md §9.1).
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 # Max age (seconds) for the signed OAuth `state` param - see docs/REPO_GENERATION_PLAN.md §3.3.
 JOIN_STATE_MAX_AGE = 600
 # Student session issued by /join/callback for team labs, so that the team
@@ -171,57 +181,7 @@ INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
 
 def load_course_index():
     """Load and validate course index file"""
-    if not os.path.exists(INDEX_FILE):
-        raise RuntimeError(f"Course index file not found: {INDEX_FILE}")
-
-    with open(INDEX_FILE, "r", encoding="utf-8") as f:
-        index_data = yaml.safe_load(f)
-
-    if not isinstance(index_data, dict) or "courses" not in index_data:
-        raise RuntimeError("Invalid index.yaml structure: missing 'courses' key")
-
-    return index_data
-
-def _course_meta(entry: dict) -> dict:
-    """Index metadata attached to a course config as `_meta`."""
-    return {
-        "status": entry.get("status", "active"),
-        "priority": entry.get("priority", 0),
-        "featured": entry.get("featured", False),
-        "filename": entry["file"],
-        "logo": entry.get("logo", "/assets/default.png"),
-    }
-
-
-def _read_course_file(entry: dict) -> dict | None:
-    """
-    Read one course file named by an index entry.
-
-    Returns:
-        The `course` mapping with `_meta` filled in, or None if the file is
-        missing, unparseable or not a course config (logged, never fatal -
-        one broken file must not take the whole list down).
-    """
-    file_path = os.path.join(COURSES_DIR, entry["file"])
-    if not os.path.exists(file_path):
-        logger.warning(f"Course file {entry['file']} not found, skipping")
-        return None
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        logger.error(f"Error parsing YAML in {entry['file']}: {e}")
-        return None
-
-    if not isinstance(data, dict) or "course" not in data:
-        logger.warning(f"Skipping file {entry['file']}: invalid structure")
-        return None
-
-    course_info = data["course"]
-    course_info["_meta"] = _course_meta(entry)
-    return course_info
-
+    return _load_course_index(INDEX_FILE)
 
 def iter_course_configs():
     """
@@ -233,18 +193,13 @@ def iter_course_configs():
     правки одного места, а не десятка чтений с диска. Там же потом появится
     индекс `token -> (курс, лаба)`.
 
+    Само чтение файлов живёт в grading/course_index.py: тем же кодом
+    пользуется scripts/join-link.py, которому сервер целиком не нужен.
+
     Yields:
         (course_id, course_info) - `course_info` с заполненным `_meta`
     """
-    index_data = load_course_index()
-    for entry in index_data.get("courses", []):
-        course_id = entry.get("id")
-        if not course_id or not entry.get("file"):
-            continue
-        course_info = _read_course_file(entry)
-        if course_info is None:
-            continue
-        yield course_id, course_info
+    yield from _iter_course_configs(COURSES_DIR, INDEX_FILE)
 
 
 def warn_about_join_links(filename: str, course_info: dict) -> None:
@@ -376,7 +331,7 @@ def get_course_by_id(course_id: str):
 
     # Merge index metadata with course data
     course_info = course_data.get("course", {})
-    course_info["_meta"] = _course_meta(course_entry)
+    course_info["_meta"] = course_meta(course_entry)
 
     return course_info
 
@@ -2018,12 +1973,74 @@ def join_join_team(request: Request, course_id: str, lab_id: str, slug: str):
 # ---------------------------------------------------------------------------
 
 
+def _public_base_url(request: Request) -> str:
+    """
+    Адрес сервиса, из которого собирается секретная ссылка.
+
+    Порядок важен: за обратным прокси `request.base_url` содержит внутренний
+    адрес контейнера, поэтому в продакшене задаётся PUBLIC_BASE_URL, а
+    FRONTEND_URL - разумный запасной вариант (§9.1 плана).
+    """
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL.rstrip("/")
+    if FRONTEND_URL:
+        return FRONTEND_URL.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _join_fields(
+    request: Request,
+    course_id: str,
+    lab_key: str,
+    lab_config: dict,
+    timezone_str: str | None,
+) -> dict:
+    """
+    Поля секции join для админского списка лаб: готовая ссылка целиком и
+    состояние окна (§7.2, §9.1 плана).
+
+    Ссылка доступна с момента появления лабы в конфиге, задолго до
+    `opens-at`: преподавателю нужно подготовить рассылку заранее. Собрать её
+    руками нельзя, поэтому админка - основной способ её получить.
+
+    Испорченная секция не роняет весь список: лаба приходит с текстом ошибки
+    в `join_error`, чтобы преподаватель увидел её там же, где правит конфиг.
+    """
+    try:
+        settings = parse_join_config(lab_config, timezone_str)
+    except JoinConfigError as e:
+        return {
+            "join_link": None,
+            "join_state": None,
+            "join_secret": is_secret_lab(lab_config),
+            "opens_at": None,
+            "closes_at": None,
+            "join_error": str(e),
+        }
+
+    window = JoinWindow(settings.opens_at, settings.closes_at, settings.secret)
+
+    link = None
+    if settings.secret:
+        link = f"{_public_base_url(request)}/j/{lab_token(SECRET_KEY, course_id, lab_key, lab_config)}"
+
+    return {
+        "join_link": link,
+        "join_state": window.state(),
+        "join_secret": settings.secret,
+        "opens_at": _iso(settings.opens_at),
+        "closes_at": _iso(settings.closes_at),
+        "join_error": None,
+    }
+
+
 @app.get("/admin/courses/{course_id}/labs")
 @limiter.limit("30/minute")
 def admin_list_course_labs(request: Request, course_id: str, admin: str = Depends(require_admin)):
     """Labs of a course with the fields the admin lab list page needs."""
     course_info = get_course_by_id(course_id)
     labs = course_info.get("labs", {})
+    timezone_str = course_info.get("timezone")
 
     result = []
     for lab_number, lab_config in labs.items():
@@ -2040,6 +2057,7 @@ def admin_list_course_labs(request: Request, course_id: str, admin: str = Depend
             # name, and the one preselected via `student-name-file`.
             "files": lab_config.get("files", []),
             "name_file": lab_config.get("student-name-file"),
+            **_join_fields(request, course_id, str(lab_number), lab_config, timezone_str),
         })
 
     # Порядок как у преподавателя в таблице: ЛР0, ЛР0.1, ЛР1... Сортировка по
