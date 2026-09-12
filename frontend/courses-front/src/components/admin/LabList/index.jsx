@@ -17,8 +17,21 @@ import {
   DialogActions,
   Button as MuiButton,
   Checkbox,
+  IconButton,
 } from "@mui/material";
 import { BulkGradeDialog } from "./BulkGradeDialog";
+
+// Иконка копирования (два листа) - та же, что на GitHub: Octicons copy-16,
+// встроенная, чтобы не тащить @mui/icons-material ради одного значка.
+// currentColor - цвет наследуется от кнопки, поэтому тема не ломается.
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false">
+      <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z" />
+      <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
+    </svg>
+  );
+}
 import {
   Container,
   Panel,
@@ -289,9 +302,15 @@ export const LabList = ({ courseId, onBack }) => {
                         <JoinLinkCell>
                           <JoinLinkText title={lab.join_link}>{lab.join_link}</JoinLinkText>
                           <div>
-                            <MuiButton size="small" onClick={() => copyJoinLink(lab.join_link)}>
-                              {t("adminLabs.join.copy")}
-                            </MuiButton>
+                            <Tooltip title={t("adminLabs.join.copy")}>
+                              <IconButton
+                                size="small"
+                                aria-label={t("adminLabs.join.copy")}
+                                onClick={() => copyJoinLink(lab.join_link)}
+                              >
+                                <CopyIcon />
+                              </IconButton>
+                            </Tooltip>
                             <Chip
                               size="small"
                               color={JOIN_STATE_COLOR[lab.join_state] || "default"}
