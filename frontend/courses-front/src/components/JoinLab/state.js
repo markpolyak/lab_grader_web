@@ -27,6 +27,13 @@ export const ERROR_TRANSLATION_KEYS = {
   NAME_TAKEN_BY_FOREIGN_REPO: "join.errors.nameTaken",
   FORK_CHECK_FAILED: "join.errors.forkCheckFailed",
 
+  // main.py: коды секретной ссылки /j/{token} (§7.3 плана секретных ссылок)
+  LINK_NOT_FOUND: "join.errors.linkNotFound",
+  JOIN_NOT_OPEN: "join.errors.notOpen",
+  JOIN_CLOSED: "join.errors.closed",
+  LAB_MISCONFIGURED: "join.errors.notConfigured",
+  OAUTH_NOT_CONFIGURED: "join.errors.oauthNotConfigured",
+
   // src/api/index.js: fetchJoinLab error.code
   join_not_found: "join.errors.notFound",
   join_not_configured: "join.errors.notConfigured",
@@ -142,4 +149,42 @@ export function resolveJoinView({ teamEnabled, teamsData, teamsError }) {
 export function findMyTeam(teamsData) {
   if (!teamsData || !teamsData.my_team) return null;
   return teamsData.teams.find((team) => team.slug === teamsData.my_team) || null;
+}
+
+
+// --- Секретная ссылка /j/{token} (docs/SECRET_JOIN_LINKS_PLAN.md §10) ---
+
+/**
+ * Момент открытия или закрытия работы в читаемом виде.
+ *
+ * Backend отдаёт ISO-строку со смещением часового пояса курса; здесь она
+ * показывается в поясе браузера студента, чтобы «10:00» не означало разного
+ * времени для разных людей.
+ */
+export function formatMoment(iso, language) {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toLocaleString(language || undefined, {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+
+/**
+ * Экран секретной ссылки.
+ *
+ * "not_open" - работа ещё не опубликована: backend отвечает на неё ошибкой,
+ * не раскрывая названия. "closed" - приём закрыт, но войти всё равно можно:
+ * студент с уже созданным репозиторием чинит по той же ссылке доступ.
+ */
+export function resolveSecretJoinView({ lab, loadError }) {
+  if (loadError === "JOIN_NOT_OPEN") return "not_open";
+  if (loadError) return "error";
+  if (!lab) return "loading";
+  return lab.join_state === "closed" ? "closed" : "open";
 }

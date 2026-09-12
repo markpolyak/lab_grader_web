@@ -27,10 +27,20 @@ import {
   TableWrapper,
   SelectableTableWrapper,
   HintText,
+  JoinLinkCell,
+  JoinLinkText,
 } from "./styled";
 
 // Опрос статуса фоновой работы - см. main.py GET /admin/propagate-jobs/{job_id}
 const JOB_POLL_INTERVAL_MS = 2000;
+
+// Состояние окна доступности лабы (main.py `join_state`,
+// docs/SECRET_JOIN_LINKS_PLAN.md §9.1).
+const JOIN_STATE_COLOR = {
+  not_open: "default",
+  open: "success",
+  closed: "warning",
+};
 
 const RESULT_STATUS_COLOR = {
   will_process: "default",
@@ -81,6 +91,35 @@ export const LabList = ({ courseId, onBack }) => {
   const [bulkLab, setBulkLab] = useState(null);
 
   const showSnackbar = (message, severity = "info") => setSnackbar({ open: true, message, severity });
+
+  // Ссылку нельзя собрать руками - её можно только скопировать отсюда.
+  const copyJoinLink = (link) => {
+    const done = () => showSnackbar(t("adminLabs.join.copied"), "success");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done, () => window.prompt(t("adminLabs.join.copyPrompt"), link));
+      return;
+    }
+    window.prompt(t("adminLabs.join.copyPrompt"), link);
+  };
+
+  const formatMoment = (iso) => {
+    if (!iso) return null;
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
+  };
+
+  const joinStateLabel = (lab) => {
+    if (lab.join_state === "not_open") {
+      const moment = formatMoment(lab.opens_at);
+      return moment ? t("adminLabs.join.opensAt", { moment }) : t("adminLabs.join.notScheduled");
+    }
+    if (lab.join_state === "closed") {
+      const moment = formatMoment(lab.closes_at);
+      return moment ? t("adminLabs.join.closedAt", { moment }) : t("adminLabs.join.closed");
+    }
+    const moment = formatMoment(lab.closes_at);
+    return moment ? t("adminLabs.join.openUntil", { moment }) : t("adminLabs.join.open");
+  };
 
   const loadLabs = useCallback(() => {
     setLoading(true);
@@ -227,6 +266,7 @@ export const LabList = ({ courseId, onBack }) => {
                   <TableCell>{t("adminLabs.columns.githubPrefix")}</TableCell>
                   <TableCell>{t("adminLabs.columns.templateRepo")}</TableCell>
                   <TableCell>{t("adminLabs.columns.provisioning")}</TableCell>
+                  <TableCell>{t("adminLabs.columns.joinLink")}</TableCell>
                   <TableCell>{t("adminLabs.columns.actions")}</TableCell>
                 </TableRow>
               </TableHead>
@@ -241,6 +281,34 @@ export const LabList = ({ courseId, onBack }) => {
                       {lab.repo_provisioning === "fork"
                         ? t("adminLabs.provisioningFork")
                         : t("adminLabs.provisioningTemplate")}
+                    </TableCell>
+                    <TableCell>
+                      {lab.join_error ? (
+                        <Chip size="small" color="error" label={lab.join_error} />
+                      ) : lab.join_link ? (
+                        <JoinLinkCell>
+                          <JoinLinkText title={lab.join_link}>{lab.join_link}</JoinLinkText>
+                          <div>
+                            <MuiButton size="small" onClick={() => copyJoinLink(lab.join_link)}>
+                              {t("adminLabs.join.copy")}
+                            </MuiButton>
+                            <Chip
+                              size="small"
+                              color={JOIN_STATE_COLOR[lab.join_state] || "default"}
+                              label={joinStateLabel(lab)}
+                            />
+                          </div>
+                          <HintText>{t("adminLabs.join.revokeHint")}</HintText>
+                        </JoinLinkCell>
+                      ) : lab.join_state && lab.join_state !== "open" ? (
+                        <Chip
+                          size="small"
+                          color={JOIN_STATE_COLOR[lab.join_state] || "default"}
+                          label={joinStateLabel(lab)}
+                        />
+                      ) : (
+                        "—"
+                      )}
                     </TableCell>
                     <TableCell>
                       {lab.can_propagate ? (

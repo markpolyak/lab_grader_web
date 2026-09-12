@@ -39,7 +39,8 @@
       "githubPrefix": "github-prefix",
       "templateRepo": "template-repo",
       "provisioning": "仓库创建方式",
-      "actions": "操作"
+      "actions": "操作",
+      "joinLink": "私密链接"
     },
     "provisioningTemplate": "template",
     "provisioningFork": "fork",
@@ -122,6 +123,18 @@
         "alreadyRunning": "该实验对该班级的评定已在进行中。",
         "cancelFailed": "停止评定失败"
       }
+    },
+    "join": {
+      "copy": "复制",
+      "copied": "链接已复制",
+      "copyPrompt": "请复制链接：",
+      "opensAt": "将于 {{moment}} 开放",
+      "notScheduled": "未开放：未设置 join.opens-at",
+      "open": "已开放，无截止时间",
+      "openUntil": "已开放，截止 {{moment}}",
+      "closed": "已截止",
+      "closedAt": "已于 {{moment}} 截止",
+      "revokeHint": "如需撤销：在课程配置中增大 join.revision，并重新分发新链接。"
     }
   },
   "join": {
@@ -173,7 +186,10 @@
       "titleTooShort": "小组名称至少需要 3 个字符。",
       "titleTooLong": "小组名称不能超过 60 个字符。",
       "titleHasSeparator": "小组名称不能包含“ — ”。",
-      "descriptionTooLong": "小组描述不能超过 200 个字符。"
+      "descriptionTooLong": "小组描述不能超过 200 个字符。",
+      "linkNotFound": "未找到该链接，或该链接已失效。请检查地址，或向老师索取新链接。",
+      "notOpen": "该链接对应的作业尚未开放。",
+      "closed": "该链接已停止发放仓库。如果您已有仓库，可通过同一链接恢复访问权限。"
     },
     "team": {
       "badge": "小组作业",
@@ -209,6 +225,12 @@
       "memberHint": "如果没有收到仓库邀请或邀请已过期，请点击“恢复访问”重新发送。",
       "repairAccess": "恢复访问",
       "repairing": "正在恢复…"
+    },
+    "secret": {
+      "notOpen": "作业尚未开放。老师发布后，该链接才会生效。",
+      "notOpenAt": "作业尚未开放，该链接将于 {{moment}} 生效。",
+      "closed": "提交已截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。",
+      "closedAt": "提交已于 {{moment}} 截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。"
     }
   }
 }

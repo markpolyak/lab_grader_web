@@ -73,3 +73,19 @@ export const HintText = styled.p`
   font-size: ${sizes.fontSizeSmall};
   margin: 0;
 `;
+
+
+// Ячейка с готовой секретной ссылкой: её показывают целиком, чтобы её можно
+// было и скопировать кнопкой, и прочитать глазами при сверке
+// (docs/SECRET_JOIN_LINKS_PLAN.md §9.1).
+export const JoinLinkCell = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 260px;
+`;
+
+export const JoinLinkText = styled.code`
+  font-size: ${sizes.fontSizeSmall};
+  word-break: break-all;
+`;
