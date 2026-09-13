@@ -144,6 +144,11 @@ FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 # Max age (seconds) for the signed OAuth `state` param - see docs/REPO_GENERATION_PLAN.md §3.3.
 JOIN_STATE_MAX_AGE = 600
+
+# Таймаут прямых обращений к GitHub из main.py. Без него requests ждёт ответа
+# бесконечно: зависшее соединение держало бы воркер, а студент - открытую
+# вкладку. Обращения через GitHubClient пользуются его собственными таймаутами.
+GITHUB_REQUEST_TIMEOUT = 10
 # Student session issued by /join/callback for team labs, so that the team
 # endpoints can take the confirmed username from a signed cookie and never
 # from the request - see docs/TEAM_ASSIGNMENTS_PLAN.md §6.
@@ -870,7 +875,9 @@ def register_student(request: Request, course_id: str, group_id: str, student: S
             raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден в таблице")
 
         try:
-            github_response = requests.get(f"https://api.github.com/users/{student.github}")
+            github_response = requests.get(
+                f"https://api.github.com/users/{student.github}", timeout=GITHUB_REQUEST_TIMEOUT
+            )
             if github_response.status_code != 200:
                 logger.warning(f"GitHub user '{student.github}' not found (status: {github_response.status_code})")
                 raise HTTPException(status_code=404, detail="Пользователь GitHub не найден")
@@ -1117,6 +1124,17 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         return response
     except HTTPException:
         raise
+    except requests.RequestException as e:
+        # Таймаут или обрыв связи с GitHub - не внутренняя ошибка сервиса:
+        # студенту нужно предложить повторить, а не "Внутреннюю ошибку".
+        logger.error(
+            f"GitHub API request failed while grading {grade_request.github} "
+            f"in {course_id}/{lab_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub не ответил вовремя. Попробуйте запустить проверку ещё раз",
+        )
     except Exception as e:
         logger.exception(f"Unexpected error during grading: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
