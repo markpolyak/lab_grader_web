@@ -26,6 +26,9 @@ export const ERROR_TRANSLATION_KEYS = {
   ACTIONS_ENABLE_FAILED: "join.errors.actionsEnableFailed",
   NAME_TAKEN_BY_FOREIGN_REPO: "join.errors.nameTaken",
   FORK_CHECK_FAILED: "join.errors.forkCheckFailed",
+  // Сеть до GitHub не ответила: таймаут или обрыв. Сообщение то же, что у
+  // упавшего запроса самого фронтенда, - предлагает повторить.
+  GITHUB_UNAVAILABLE: "join.errors.githubUnavailable",
 
   // main.py: коды секретной ссылки /j/{token} (§7.3 плана секретных ссылок)
   LINK_NOT_FOUND: "join.errors.linkNotFound",

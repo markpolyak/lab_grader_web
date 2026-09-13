@@ -8,6 +8,8 @@ docs/REPO_GENERATION_PLAN.md for the full design.
 """
 import logging
 import time
+
+import requests
 from dataclasses import dataclass
 from enum import Enum
 
@@ -114,6 +116,37 @@ class RepoProvisioner:
                 error_code="INVALID_TEMPLATE_CONFIG",
             )
 
+        try:
+            return self._provision_steps(
+                org, repo_name, template_owner, template_name, mode,
+                access_username or repo_suffix, force_invite, create,
+            )
+        except requests.RequestException as e:
+            # Сетевую ошибку (таймаут, обрыв) не ловил никто: она проходила
+            # мимо ProvisionResult и всплывала как необработанное исключение,
+            # после чего студент видел «непредвиденную ошибку» вместо
+            # понятного «GitHub не ответил, повторите». Ни один метод
+            # GitHubClient такие исключения не перехватывает, поэтому ловим
+            # здесь - на границе всей операции.
+            logger.error(f"GitHub API request failed for {org}/{repo_name}: {e}")
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="GitHub не ответил вовремя. Попробуйте ещё раз через минуту",
+                error_code="GITHUB_UNAVAILABLE",
+            )
+
+    def _provision_steps(
+        self,
+        org: str,
+        repo_name: str,
+        template_owner: str,
+        template_name: str,
+        mode: str,
+        access_username: str,
+        force_invite: bool,
+        create: bool,
+    ) -> ProvisionResult:
+        """Шаги provision() без обработки сетевых ошибок - см. provision()."""
         create_error = self._ensure_repo_created(
             org, repo_name, template_owner, template_name, mode, create=create
         )
@@ -121,7 +154,7 @@ class RepoProvisioner:
             return create_error
 
         access_error = self._ensure_access(
-            org, repo_name, access_username or repo_suffix, force_invite=force_invite
+            org, repo_name, access_username, force_invite=force_invite
         )
         if access_error:
             return access_error

@@ -905,3 +905,52 @@ class TestClosedJoinWindow:
 
         assert result.status == ProvisionStatus.OK
         assert create_call.call_count == 1
+
+
+class TestNetworkFailure:
+    """
+    Сетевая ошибка при обращении к GitHub - не «непредвиденная ошибка».
+
+    Регрессия боевого случая: у студента уже был форк, повторный заход по
+    ссылке дошёл до enable_actions, запрос упёрся в таймаут, requests бросил
+    ReadTimeout - и исключение прошло мимо ProvisionResult, потому что ни
+    один метод GitHubClient сетевые ошибки не перехватывает. Студент видел
+    «Произошла непредвиденная ошибка» вместо предложения повторить.
+    """
+
+    @responses.activate
+    def test_timeout_while_repairing_an_existing_fork(self):
+        import requests as requests_lib
+
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], json={
+            "name": REPO_NAME,
+            "parent": {"full_name": TEMPLATE_REPO},
+        }, status=200)
+        responses.add(responses.PUT, urls["actions"], body=requests_lib.exceptions.ReadTimeout("read timed out"))
+
+        result = RepoProvisioner(GitHubClient("token")).provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork",
+        )
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "GITHUB_UNAVAILABLE"
+        assert "GitHub" in result.message
+
+    @responses.activate
+    def test_timeout_while_creating_a_repository(self):
+        import requests as requests_lib
+
+        responses.add(responses.GET, f"https://api.github.com/repos/{ORG}/{REPO_NAME}", status=404)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{TEMPLATE_REPO}/generate",
+            body=requests_lib.exceptions.ConnectionError("connection reset"),
+        )
+
+        result = RepoProvisioner(GitHubClient("token")).provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME,
+        )
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "GITHUB_UNAVAILABLE"
