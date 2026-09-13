@@ -5,11 +5,17 @@ import {
   ERROR_TRANSLATION_KEYS,
   cleanTeamText,
   findMyTeam,
+  formatMoment,
   getSafeRepositoryUrl,
   resolveJoinView,
+  resolveSecretJoinView,
   shouldShowJoinAction,
   validateTeamForm,
 } from "./state.js";
+
+import ru from "../../locales/ru/translation.json" with { type: "json" };
+import en from "../../locales/en/translation.json" with { type: "json" };
+import zh from "../../locales/zh/translation.json" with { type: "json" };
 
 
 test("каждый код ошибки бэкенда имеет ключ локализации", () => {
@@ -198,4 +204,72 @@ test("схлопывание пробелов совпадает с очистк
   assert.equal(cleanTeamText("  Весёлые   пингвины  "), "Весёлые пингвины");
   assert.equal(cleanTeamText("Пингвины\nи тюлени"), "Пингвины и тюлени");
   assert.equal(cleanTeamText(null), "");
+});
+
+
+test("каждый код ошибки секретной ссылки имеет ключ локализации", () => {
+  const codes = [
+    "LINK_NOT_FOUND",
+    "JOIN_NOT_OPEN",
+    "JOIN_CLOSED",
+    "LAB_MISCONFIGURED",
+    "OAUTH_NOT_CONFIGURED",
+  ];
+
+  for (const code of codes) {
+    assert.equal(
+      typeof ERROR_TRANSLATION_KEYS[code],
+      "string",
+      `код ${code} должен иметь ключ локализации`
+    );
+  }
+});
+
+
+test("состояния секретной ссылки переведены на все языки", () => {
+  const keys = ["notOpen", "notOpenAt", "closed", "closedAt"];
+  const errorKeys = ["linkNotFound", "notOpen", "closed"];
+
+  for (const [language, translation] of [["ru", ru], ["en", en], ["zh", zh]]) {
+    for (const key of keys) {
+      assert.equal(
+        typeof translation.join.secret[key],
+        "string",
+        `${language}: join.secret.${key}`
+      );
+    }
+    for (const key of errorKeys) {
+      assert.equal(
+        typeof translation.join.errors[key],
+        "string",
+        `${language}: join.errors.${key}`
+      );
+    }
+    assert.equal(typeof translation.adminLabs.join.copy, "string", `${language}: adminLabs.join.copy`);
+    assert.equal(
+      typeof translation.adminLabs.columns.joinLink,
+      "string",
+      `${language}: adminLabs.columns.joinLink`
+    );
+  }
+});
+
+
+test("экран секретной ссылки выбирается по ответу backend", () => {
+  // Пока ответа нет - загрузка
+  assert.equal(resolveSecretJoinView({ lab: null, loadError: null }), "loading");
+  // Работа ещё не открыта: это не ошибка, а отдельный экран со временем открытия
+  assert.equal(resolveSecretJoinView({ lab: null, loadError: "JOIN_NOT_OPEN" }), "not_open");
+  // Отозванная или испорченная ссылка - обычная ошибка
+  assert.equal(resolveSecretJoinView({ lab: null, loadError: "LINK_NOT_FOUND" }), "error");
+  // Открыта и закрыта - разные экраны, но вход доступен в обоих
+  assert.equal(resolveSecretJoinView({ lab: { join_state: "open" }, loadError: null }), "open");
+  assert.equal(resolveSecretJoinView({ lab: { join_state: "closed" }, loadError: null }), "closed");
+});
+
+
+test("момент открытия показывается читаемо, а мусор не показывается вовсе", () => {
+  assert.equal(formatMoment(null), null);
+  assert.equal(formatMoment("не дата"), null);
+  assert.equal(typeof formatMoment("2026-10-15T10:00:00+03:00", "ru"), "string");
 });

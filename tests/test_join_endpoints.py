@@ -8,6 +8,7 @@ mocked with `responses`.
 
 See docs/REPO_GENERATION_PLAN.md §7, §10, §11 (stage 2/3/4 acceptance).
 """
+import base64
 import json
 import sys
 import os
@@ -1014,3 +1015,350 @@ class TestLabKeyCanonicalization:
 
         assert len(keys) == 2
         assert keys[0] == keys[1] == ("test-course", "1")
+
+
+# ---------------------------------------------------------------------------
+# Секретная ссылка /j/{token} и окно доступности
+# (docs/SECRET_JOIN_LINKS_PLAN.md §5, §7, §8, §14).
+# ---------------------------------------------------------------------------
+
+from grading.join_links import lab_token  # noqa: E402
+
+
+PAST = "2000-01-01 10:00"
+FUTURE = "2099-01-01 10:00"
+FURTHER_FUTURE = "2099-01-01 11:30"
+
+
+@pytest.fixture
+def secret_course_config(join_course_config):
+    """Курс с контрольной работой (лаба "7") за секретной ссылкой."""
+    join_course_config["labs"]["7"] = {
+        "github-prefix": "kr1",
+        "short-name": "Тест / КР",
+        "template-repo": "test-org/kr1-template",
+        "ignore-task-id": True,
+        "join": {"link": "secret", "opens-at": PAST, "revision": 1},
+    }
+    join_course_config["timezone"] = "UTC+3"
+    return join_course_config
+
+
+@pytest.fixture
+def secret_env(secret_course_config, monkeypatch):
+    """
+    Курс подставляется и в поиск по id, и в перечисление курсов, через
+    которое резолвится токен.
+    """
+    monkeypatch.setattr(main_module, "get_course_by_id", lambda _cid: secret_course_config)
+    monkeypatch.setattr(
+        main_module, "iter_course_configs", lambda: iter([("test-course", secret_course_config)])
+    )
+    return secret_course_config
+
+
+def token_of(config, lab_key="7"):
+    return lab_token(main_module.SECRET_KEY, "test-course", lab_key, config["labs"][lab_key])
+
+
+def body(response):
+    return json.loads(response.body)
+
+
+class TestSecretLabIsIndistinguishableFromAMissingOne:
+    """
+    §5, §7.2: публичные пути отвечают на секретную лабу ровно тем же, чем и
+    на несуществующую - иначе перебор адресов подтверждает существование
+    контрольной, ради чего всё и делается.
+    """
+
+    def _error(self, call):
+        with pytest.raises(HTTPException) as exc_info:
+            call()
+        return exc_info.value.status_code, exc_info.value.detail
+
+    def test_join_info_for_secret_lab_matches_missing_lab(self, mock_request, secret_env):
+        secret = self._error(lambda: main_module.join_lab_info(mock_request, "test-course", "7"))
+        missing = self._error(lambda: main_module.join_lab_info(mock_request, "test-course", "99"))
+        assert secret == missing == (404, "Лабораторная работа не найдена")
+
+    def test_join_info_by_short_name_matches_missing_lab(self, mock_request, secret_env):
+        """Короткое имя - второй способ адресации той же лабы."""
+        secret = self._error(
+            lambda: main_module.join_lab_info(mock_request, "test-course", "Тест / КР")
+        )
+        assert secret == (404, "Лабораторная работа не найдена")
+
+    def test_join_start_for_secret_lab_matches_missing_lab(self, mock_request, secret_env):
+        secret = self._error(lambda: main_module.join_lab_start(mock_request, "test-course", "7"))
+        missing = self._error(lambda: main_module.join_lab_start(mock_request, "test-course", "99"))
+        assert secret == missing == (404, "Лабораторная работа не найдена")
+
+    def test_public_lab_before_opens_at_matches_missing_lab(self, mock_request, secret_env):
+        """Не достигшая opens-at обычная лаба прячется так же."""
+        secret_env["labs"]["1"]["join"] = {"opens-at": FUTURE}
+        not_open = self._error(lambda: main_module.join_lab_info(mock_request, "test-course", "1"))
+        missing = self._error(lambda: main_module.join_lab_info(mock_request, "test-course", "99"))
+        assert not_open == missing == (404, "Лабораторная работа не найдена")
+
+    def test_public_lab_without_join_section_still_works(self, mock_request, secret_env):
+        """Обратная совместимость: лаба без секции join открыта, как и раньше."""
+        data = main_module.join_lab_info(mock_request, "test-course", "1")
+        assert data["lab_short_name"] == "ЛР1"
+
+
+class TestSecretJoinInfo:
+    def test_returns_course_and_lab_and_window_state(self, mock_request, secret_env):
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.status_code == 200
+        data = body(response)
+        assert data["course_name"] == "Test Course"
+        assert data["lab_short_name"] == "Тест / КР"
+        assert data["join_state"] == "open"
+        assert data["closes_at"] is None
+
+    def test_reports_closed_window(self, mock_request, secret_env):
+        secret_env["labs"]["7"]["join"]["closes-at"] = PAST
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.status_code == 200
+        assert body(response)["join_state"] == "closed"
+
+    def test_before_opens_at_is_join_not_open_with_the_opening_time(self, mock_request, secret_env):
+        secret_env["labs"]["7"]["join"]["opens-at"] = FUTURE
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.status_code == 403
+        data = body(response)
+        assert data["detail"] == "JOIN_NOT_OPEN"
+        assert data["opens_at"].startswith("2099-01-01T10:00")
+        # Название работы до публикации не раскрывается
+        assert "lab_short_name" not in data
+
+    def test_secret_lab_without_opens_at_is_not_open(self, mock_request, secret_env):
+        del secret_env["labs"]["7"]["join"]["opens-at"]
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.status_code == 403
+        assert body(response)["detail"] == "JOIN_NOT_OPEN"
+        assert body(response)["opens_at"] is None
+
+    @pytest.mark.parametrize("token", ["короткий", "AAAAAAAAAA", "0000000000", "../../etc", ""])
+    def test_malformed_token_is_link_not_found(self, mock_request, secret_env, token):
+        response = main_module.secret_join_info(mock_request, token)
+        assert response.status_code == 404
+        assert body(response) == {"detail": "LINK_NOT_FOUND"}
+
+    def test_revoked_token_is_link_not_found(self, mock_request, secret_env):
+        """Увеличение revision отзывает ссылку немедленно."""
+        old_token = token_of(secret_env)
+        secret_env["labs"]["7"]["join"]["revision"] = 2
+        response = main_module.secret_join_info(mock_request, old_token)
+        assert response.status_code == 404
+        assert body(response) == {"detail": "LINK_NOT_FOUND"}
+        # ...а новая ссылка работает
+        assert main_module.secret_join_info(mock_request, token_of(secret_env)).status_code == 200
+
+    def test_unknown_token_answers_exactly_like_a_malformed_one(self, mock_request, secret_env):
+        unknown = main_module.secret_join_info(mock_request, "aaaaaaaaaa")
+        malformed = main_module.secret_join_info(mock_request, "AAAAAAAAAA")
+        assert unknown.status_code == malformed.status_code == 404
+        assert body(unknown) == body(malformed)
+
+    def test_broken_join_section_is_a_config_error_not_500(self, mock_request, secret_env):
+        token = token_of(secret_env)
+        secret_env["labs"]["7"]["join"]["closes-at"] = "когда-нибудь"
+        response = main_module.secret_join_info(mock_request, token)
+        assert response.status_code == 400
+        assert body(response) == {"detail": "LAB_MISCONFIGURED"}
+
+    def test_response_carries_no_referrer_policy(self, mock_request, secret_env):
+        """Токен не должен уехать в Referer при переходе на github.com (§10)."""
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.headers["referrer-policy"] == "no-referrer"
+
+
+class TestSecretJoinStart:
+    def test_redirects_to_github_with_signed_state(self, mock_request, secret_env):
+        resp = main_module.secret_join_start(mock_request, token_of(secret_env))
+        location = resp.headers["location"]
+        assert urlparse(location).netloc == "github.com"
+        params = qs(location)
+        assert params["scope"] == ["read:user"]
+        # В state уезжает канонический ключ лабы, не токен
+        payload = json.loads(
+            base64.urlsafe_b64decode(
+                main_module.signer.unsign(params["state"][0]).decode("ascii").encode("ascii")
+            )
+        )
+        assert payload == {"course_id": "test-course", "lab_id": "7"}
+        assert "j/" not in params["state"][0]
+        assert resp.headers["referrer-policy"] == "no-referrer"
+
+    def test_before_opens_at_refuses(self, mock_request, secret_env):
+        secret_env["labs"]["7"]["join"]["opens-at"] = FUTURE
+        resp = main_module.secret_join_start(mock_request, token_of(secret_env))
+        assert resp.status_code == 403
+        assert body(resp)["detail"] == "JOIN_NOT_OPEN"
+
+    def test_after_closes_at_still_starts(self, mock_request, secret_env):
+        """Приём закрыт, но доступ к уже созданному репозиторию чинится (§8)."""
+        secret_env["labs"]["7"]["join"]["closes-at"] = PAST
+        resp = main_module.secret_join_start(mock_request, token_of(secret_env))
+        assert urlparse(resp.headers["location"]).netloc == "github.com"
+
+    def test_unknown_token_is_link_not_found(self, mock_request, secret_env):
+        resp = main_module.secret_join_start(mock_request, "aaaaaaaaaa")
+        assert resp.status_code == 404
+        assert body(resp) == {"detail": "LINK_NOT_FOUND"}
+
+
+def _secret_state(mock_request, config):
+    """Реальный state из /j/{token}/start - подписанный, как у настоящего запроса."""
+    resp = main_module.secret_join_start(mock_request, token_of(config))
+    return qs(resp.headers["location"])["state"][0]
+
+
+def _oauth_success():
+    responses.add(
+        responses.POST,
+        "https://github.com/login/oauth/access_token",
+        json={"access_token": "gho_student_token"},
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        "https://api.github.com/user",
+        json={"login": "student1"},
+        status=200,
+    )
+
+
+class TestSecretJoinCallback:
+    ORG = "test-org"
+    REPO = "kr1-student1"
+
+    @responses.activate
+    def test_success_redirects_back_to_the_secret_link(self, mock_request, secret_env):
+        state = _secret_state(mock_request, secret_env)
+        _oauth_success()
+        responses.add(responses.GET, f"https://api.github.com/repos/{self.ORG}/{self.REPO}", status=404)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{self.ORG}/kr1-template/generate",
+            json={},
+            status=201,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/collaborators/student1",
+            status=204,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        location = resp.headers["location"]
+        assert location.startswith(f"https://front.example.com/j/{token_of(secret_env)}?")
+        # Адрес /join/{курс}/{лаба} для секретной лабы не используется никогда
+        assert "/join/test-course/" not in location
+        params = qs(location)
+        assert params["status"] == ["success"]
+        assert params["repo_url"] == [f"https://github.com/{self.ORG}/{self.REPO}"]
+
+    @responses.activate
+    def test_after_closes_at_no_repository_is_created(self, mock_request, secret_env):
+        state = _secret_state(mock_request, secret_env)
+        secret_env["labs"]["7"]["join"]["closes-at"] = PAST
+        _oauth_success()
+        responses.add(responses.GET, f"https://api.github.com/repos/{self.ORG}/{self.REPO}", status=404)
+        create_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{self.ORG}/kr1-template/generate",
+            json={},
+            status=201,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        assert create_call.call_count == 0
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["error"]
+        assert params["reason"] == ["JOIN_CLOSED"]
+
+    @responses.activate
+    def test_after_closes_at_access_to_an_existing_repository_is_repaired(self, mock_request, secret_env):
+        state = _secret_state(mock_request, secret_env)
+        secret_env["labs"]["7"]["join"]["closes-at"] = PAST
+        _oauth_success()
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}",
+            json={"full_name": f"{self.ORG}/{self.REPO}"},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/collaborators/student1",
+            status=404,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/invitations",
+            json=[{"id": 7, "invitee": {"login": "student1"}}],
+            status=200,
+        )
+        responses.add(
+            responses.DELETE,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/invitations/7",
+            status=204,
+        )
+        responses.add(
+            responses.PUT,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/collaborators/student1",
+            status=201,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["success"]
+        assert resp.headers["location"].startswith(f"https://front.example.com/j/{token_of(secret_env)}?")
+
+    @responses.activate
+    def test_window_closed_before_opens_at_stops_the_callback(self, mock_request, secret_env):
+        """Окно сдвинули, пока студент был на github.com."""
+        state = _secret_state(mock_request, secret_env)
+        secret_env["labs"]["7"]["join"]["opens-at"] = FUTURE
+        create_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{self.ORG}/kr1-template/generate",
+            json={},
+            status=201,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        assert create_call.call_count == 0
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["error"]
+        assert params["reason"] == ["JOIN_NOT_OPEN"]
+
+    @responses.activate
+    def test_ordinary_lab_still_lands_on_the_public_result_page(self, mock_request, secret_env):
+        """Обычная лаба ведёт себя ровно как раньше."""
+        state = _get_state(mock_request)
+        _oauth_success()
+        repo = "test-task1-student1"
+        responses.add(responses.GET, f"https://api.github.com/repos/{self.ORG}/{repo}", status=404)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{self.ORG}/os-task1-template/generate",
+            json={},
+            status=201,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{repo}/collaborators/student1",
+            status=204,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        assert resp.headers["location"].startswith("https://front.example.com/join/test-course/1?")

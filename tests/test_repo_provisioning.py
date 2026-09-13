@@ -786,3 +786,171 @@ class TestAccessUsername:
         assert result.status == ProvisionStatus.OK
         assert generate.call_count == 0
         assert any(call.request.method == "DELETE" for call in responses.calls)
+
+
+class TestClosedJoinWindow:
+    """
+    `create=False`: приём по ссылке закрыт (docs/SECRET_JOIN_LINKS_PLAN.md §8).
+
+    Новый репозиторий не создаётся, но студент с уже созданным продолжает
+    чинить по той же ссылке доступ - протухшее приглашение живёт 7 дней, а
+    контрольную сдают и после закрытия окна.
+    """
+
+    @responses.activate
+    def test_missing_repo_is_not_created(self):
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}",
+            status=404,
+        )
+        create_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{TEMPLATE_REPO}/generate",
+            json={"full_name": f"{ORG}/{REPO_NAME}"},
+            status=201,
+        )
+
+        result = make_provisioner().provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, create=False
+        )
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "JOIN_CLOSED"
+        assert create_call.call_count == 0
+
+    @responses.activate
+    def test_missing_repo_in_fork_mode_is_not_created_either(self):
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}",
+            status=404,
+        )
+        fork_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{TEMPLATE_REPO}/forks",
+            json={"full_name": f"{ORG}/{REPO_NAME}"},
+            status=202,
+        )
+
+        result = make_provisioner().provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork", create=False
+        )
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "JOIN_CLOSED"
+        assert fork_call.call_count == 0
+
+    @responses.activate
+    def test_existing_repo_still_gets_access_repaired(self):
+        """Протухшее приглашение перевыпускается и после закрытия приёма."""
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}",
+            json={"full_name": f"{ORG}/{REPO_NAME}"},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}/collaborators/{USERNAME}",
+            status=404,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}/invitations",
+            json=[{"id": 42, "invitee": {"login": USERNAME}}],
+            status=200,
+        )
+        delete_call = responses.add(
+            responses.DELETE,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}/invitations/42",
+            status=204,
+        )
+        invite_call = responses.add(
+            responses.PUT,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}/collaborators/{USERNAME}",
+            status=201,
+        )
+
+        result = make_provisioner().provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, create=False
+        )
+
+        assert result.status == ProvisionStatus.OK
+        assert result.repo_url == f"https://github.com/{ORG}/{REPO_NAME}"
+        assert delete_call.call_count == 1
+        assert invite_call.call_count == 1
+
+    @responses.activate
+    def test_default_still_creates_the_repository(self):
+        """Значение по умолчанию не меняет поведение индивидуальных и командных лаб."""
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}",
+            status=404,
+        )
+        create_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{TEMPLATE_REPO}/generate",
+            json={"full_name": f"{ORG}/{REPO_NAME}"},
+            status=201,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/{REPO_NAME}/collaborators/{USERNAME}",
+            status=204,
+        )
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME)
+
+        assert result.status == ProvisionStatus.OK
+        assert create_call.call_count == 1
+
+
+class TestNetworkFailure:
+    """
+    Сетевая ошибка при обращении к GitHub - не «непредвиденная ошибка».
+
+    Регрессия боевого случая: у студента уже был форк, повторный заход по
+    ссылке дошёл до enable_actions, запрос упёрся в таймаут, requests бросил
+    ReadTimeout - и исключение прошло мимо ProvisionResult, потому что ни
+    один метод GitHubClient сетевые ошибки не перехватывает. Студент видел
+    «Произошла непредвиденная ошибка» вместо предложения повторить.
+    """
+
+    @responses.activate
+    def test_timeout_while_repairing_an_existing_fork(self):
+        import requests as requests_lib
+
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], json={
+            "name": REPO_NAME,
+            "parent": {"full_name": TEMPLATE_REPO},
+        }, status=200)
+        responses.add(responses.PUT, urls["actions"], body=requests_lib.exceptions.ReadTimeout("read timed out"))
+
+        result = RepoProvisioner(GitHubClient("token")).provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork",
+        )
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "GITHUB_UNAVAILABLE"
+        assert "GitHub" in result.message
+
+    @responses.activate
+    def test_timeout_while_creating_a_repository(self):
+        import requests as requests_lib
+
+        responses.add(responses.GET, f"https://api.github.com/repos/{ORG}/{REPO_NAME}", status=404)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{TEMPLATE_REPO}/generate",
+            body=requests_lib.exceptions.ConnectionError("connection reset"),
+        )
+
+        result = RepoProvisioner(GitHubClient("token")).provision(
+            ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME,
+        )
+
+        assert result.status == ProvisionStatus.ERROR
+        assert result.error_code == "GITHUB_UNAVAILABLE"

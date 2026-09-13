@@ -27,6 +27,7 @@ from main import app
 from grading.grader import CIEvaluation, GradeResult, GradeStatus
 from grading.propagate import _jobs, _running_lab_keys
 from grading.bulk import _jobs as _bulk_jobs, _running_keys as _bulk_running_keys
+from grading.join_links import TOKEN_RE
 
 
 @pytest.fixture(autouse=True)
@@ -523,3 +524,273 @@ class TestBulkGradeEndpoint:
 
         assert result["status"] == "running"
         assert job.cancel_requested is True
+
+
+# ---------------------------------------------------------------------------
+# Сохранение конфига курса: семантическая проверка секции join, запрет
+# уменьшать join.revision и атомарная запись
+# (docs/SECRET_JOIN_LINKS_PLAN.md §7.2, §13, этап 1 чек-листа).
+# ---------------------------------------------------------------------------
+
+
+SECRET_LAB_YAML = """course:
+  name: Test Course
+  timezone: UTC+3
+  labs:
+    "7":
+      github-prefix: kr1
+      short-name: "Тест / КР"
+      template-repo: org/kr1-template
+      join:
+        link: secret
+        opens-at: "2026-10-15 10:00"
+        revision: 3
+"""
+
+
+@pytest.fixture
+def secret_lab_course(admin_course_env):
+    """Курс с секретной лабой на диске - исходная версия для правок."""
+    path = admin_course_env / "test-course.yaml"
+    path.write_text(SECRET_LAB_YAML, encoding="utf-8")
+    return path
+
+
+class TestEditCourseJoinValidation:
+    def test_saving_a_valid_change_works(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 4")
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 200
+        assert "revision: 4" in secret_lab_course.read_text(encoding="utf-8")
+
+    def test_lowering_revision_is_rejected(self, client, secret_lab_course):
+        """Откат ревизии воскресил бы уже отозванную ссылку (§13 плана)."""
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 2")
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 400
+        assert "revision" in response.json()["detail"]
+        # Файл на диске не тронут
+        assert "revision: 3" in secret_lab_course.read_text(encoding="utf-8")
+
+    def test_broken_join_section_is_rejected_before_writing(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace('link: secret', 'link: sekret')
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 400
+        assert "join.link" in response.json()["detail"]
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    def test_unparseable_window_is_rejected(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace('opens-at: "2026-10-15 10:00"', 'opens-at: "когда-нибудь"')
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 400
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    def test_team_lab_with_secret_link_is_rejected(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace(
+            "      join:", "      team:\n        size-max: 4\n      join:"
+        )
+        response = client.put("/courses/test-course/edit", json={"content": updated})
+        assert response.status_code == 400
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    def test_invalid_yaml_is_still_rejected(self, client, secret_lab_course):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.put("/courses/test-course/edit", json={"content": "course: [unclosed"})
+        assert response.status_code == 400
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    def test_course_without_join_sections_saves_as_before(self, client, admin_course_env):
+        """Обратная совместимость: конфиг без join сохраняется как раньше."""
+        client.cookies.set("admin_session", valid_cookie())
+        content = "course:\n  name: Test Course\n  labs:\n    \"1\":\n      short-name: ЛР1\n"
+        response = client.put("/courses/test-course/edit", json={"content": content})
+        assert response.status_code == 200
+        assert (admin_course_env / "test-course.yaml").read_text(encoding="utf-8") == content
+
+    def test_write_is_atomic_and_leaves_no_temporary_files(self, client, secret_lab_course, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 9")
+        assert client.put("/courses/test-course/edit", json={"content": updated}).status_code == 200
+        leftovers = [p.name for p in admin_course_env.iterdir() if p.name.endswith(".tmp")]
+        assert leftovers == []
+
+    def test_failed_write_leaves_the_previous_file_intact(self, client, secret_lab_course, monkeypatch):
+        """Прерванное сохранение не должно оставлять обрезанный файл."""
+        client.cookies.set("admin_session", valid_cookie())
+
+        real_replace = os.replace
+
+        def failing_replace(src, dst):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(main_module.os, "replace", failing_replace)
+        updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 5")
+        with pytest.raises(OSError):
+            client.put("/courses/test-course/edit", json={"content": updated})
+        monkeypatch.setattr(main_module.os, "replace", real_replace)
+        assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+
+# ---------------------------------------------------------------------------
+# Админский список лаб: готовая секретная ссылка и состояние окна
+# (docs/SECRET_JOIN_LINKS_PLAN.md §7.2, §9, этап 5 чек-листа).
+# ---------------------------------------------------------------------------
+
+PAST = "2000-01-01 10:00"
+FUTURE = "2099-01-01 10:00"
+
+
+def labs_course(join_section, **lab_extra):
+    lab = {
+        "short-name": "Тест / КР",
+        "github-prefix": "kr1",
+        "template-repo": "org/kr1-template",
+        "join": join_section,
+    }
+    lab.update(lab_extra)
+    return {
+        "name": "Test Course",
+        "timezone": "UTC+3",
+        "labs": {
+            "1": {"short-name": "ЛР1", "github-prefix": "os-task1"},
+            "7": lab,
+        },
+        "_meta": {"filename": "test-course.yaml", "id": "test-course"},
+    }
+
+
+def list_labs(mock_request, course, monkeypatch, base_url="https://labgrader.example.ru"):
+    monkeypatch.setattr(main_module, "PUBLIC_BASE_URL", base_url)
+    with patch("main.get_course_by_id", return_value=course):
+        labs = main_module.admin_list_course_labs(mock_request, "test-course", admin="admin")
+    return {lab["id"]: lab for lab in labs}
+
+
+class TestAdminLabListJoinFields:
+    def test_secret_lab_carries_a_ready_to_send_link(self, mock_request, monkeypatch):
+        course = labs_course({"link": "secret", "opens-at": FUTURE})
+        labs = list_labs(mock_request, course, monkeypatch)
+
+        link = labs["7"]["join_link"]
+        assert link.startswith("https://labgrader.example.ru/j/")
+        token = link.rsplit("/", 1)[1]
+        assert TOKEN_RE.match(token)
+        assert labs["7"]["join_secret"] is True
+
+    def test_link_is_available_long_before_opens_at(self, mock_request, monkeypatch):
+        """Преподавателю нужно подготовить рассылку заранее (§9.1)."""
+        course = labs_course({"link": "secret", "opens-at": FUTURE})
+        labs = list_labs(mock_request, course, monkeypatch)
+        assert labs["7"]["join_state"] == "not_open"
+        assert labs["7"]["join_link"]
+        assert labs["7"]["opens_at"].startswith("2099-01-01T10:00")
+
+    @pytest.mark.parametrize("join_section,expected", [
+        ({"link": "secret", "opens-at": FUTURE}, "not_open"),
+        ({"link": "secret", "opens-at": PAST}, "open"),
+        ({"link": "secret", "opens-at": PAST, "closes-at": PAST}, "closed"),
+    ])
+    def test_window_state_is_reported(self, mock_request, monkeypatch, join_section, expected):
+        labs = list_labs(mock_request, labs_course(join_section), monkeypatch)
+        assert labs["7"]["join_state"] == expected
+
+    def test_lab_without_template_repo_has_no_link(self, mock_request, monkeypatch):
+        """Лаба "1" в фикстуре без template-repo: /join для неё не работает."""
+        labs = list_labs(mock_request, labs_course({"link": "public"}), monkeypatch)
+        assert labs["1"]["join_link"] is None
+        assert labs["1"]["join_secret"] is False
+        assert labs["1"]["join_state"] == "open"
+
+    def test_ordinary_lab_gets_the_public_link(self, mock_request, monkeypatch):
+        """Столбец со ссылками общий: обычная лаба показывает /join/{курс}/{лаба}."""
+        course = labs_course({"link": "public"})
+        course["labs"]["1"]["template-repo"] = "org/os-task1-template"
+        labs = list_labs(mock_request, course, monkeypatch)
+
+        assert labs["1"]["join_link"] == "https://labgrader.example.ru/join/test-course/1"
+        assert labs["1"]["join_secret"] is False
+
+    def test_broken_join_section_does_not_break_the_list(self, mock_request, monkeypatch):
+        labs = list_labs(mock_request, labs_course({"link": "secret", "revision": 0}), monkeypatch)
+        assert labs["7"]["join_link"] is None
+        assert "revision" in labs["7"]["join_error"]
+        # остальные лабы курса на месте
+        assert labs["1"]["short_name"] == "ЛР1"
+
+    def test_frontend_url_is_used_when_public_base_url_is_unset(self, mock_request, monkeypatch):
+        monkeypatch.setattr(main_module, "FRONTEND_URL", "https://front.example.com")
+        labs = list_labs(mock_request, labs_course({"link": "secret"}), monkeypatch, base_url=None)
+        assert labs["7"]["join_link"].startswith("https://front.example.com/j/")
+
+    def test_link_matches_the_one_the_script_prints(self, mock_request, monkeypatch, tmp_path):
+        """
+        §9: админка и scripts/join-link.py показывают одну и ту же строку -
+        обе считают её одними и теми же функциями grading/join_links.py.
+        """
+        import subprocess
+
+        course = labs_course({"link": "secret", "opens-at": FUTURE})
+        labs = list_labs(mock_request, course, monkeypatch)
+
+        courses_dir = tmp_path / "courses"
+        courses_dir.mkdir()
+        (courses_dir / "index.yaml").write_text(
+            yaml.dump({"courses": [{"id": "test-course", "file": "c.yaml"}]}), encoding="utf-8"
+        )
+        payload = {"course": {k: v for k, v in course.items() if k != "_meta"}}
+        (courses_dir / "c.yaml").write_text(yaml.dump(payload, allow_unicode=True), encoding="utf-8")
+
+        script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts", "join-link.py")
+        result = subprocess.run(
+            [sys.executable, script, "--courses-dir", str(courses_dir),
+             "--base-url", "https://labgrader.example.ru", "--course", "test-course", "--lab", "7"],
+            capture_output=True, text=True,
+            env={**os.environ, "SECRET_KEY": main_module.SECRET_KEY},
+        )
+        assert result.returncode == 0, result.stderr
+        assert labs["7"]["join_link"] in result.stdout
+
+
+class TestBulkGradeIgnoresJoinWindow:
+    """
+    Массовая проверка из админки окном не ограничена (§5, §7.2 плана):
+    преподаватель проверяет работу и до открытия, и после закрытия приёма,
+    иначе контрольную нельзя было бы проверить вовсе.
+    """
+
+    @pytest.fixture
+    def worksheet(self):
+        worksheet = MagicMock()
+        worksheet.get_all_values.return_value = [
+            ["№", "ФИО", "GitHub", ""],
+            ["", "", "", "Тест / КР"],
+            ["1", "Иванов Иван", "student1", ""],
+        ]
+        spreadsheet = MagicMock()
+        spreadsheet.fetch_sheet_metadata.return_value = {"properties": {"locale": "en_US"}}
+        with patch.object(main_module, "_open_group_worksheet", return_value=(spreadsheet, worksheet)):
+            yield worksheet
+
+    @pytest.mark.parametrize("join_section", [
+        {"link": "secret", "opens-at": FUTURE},
+        {"link": "secret", "opens-at": PAST, "closes-at": PAST},
+    ])
+    def test_secret_lab_is_graded_in_bulk_whatever_the_window(
+        self, mock_request, worksheet, join_section
+    ):
+        course = labs_course(join_section)
+        course["google"] = {"spreadsheet": "sheet-id"}
+        course["github"] = {"organization": "test-org"}
+
+        with patch("main.get_course_by_id", return_value=course):
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "7", BackgroundTasks(),
+                body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
+            )
+
+        assert response.status_code == 202

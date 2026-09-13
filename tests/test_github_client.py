@@ -5,9 +5,11 @@ Tests GitHub API client with mocked HTTP responses.
 """
 import json
 import pytest
+import requests
 import responses
 import sys
 import os
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -784,3 +786,84 @@ class TestListCollaborators:
             status=404,
         )
         assert GitHubClient("test_token").list_collaborators("test-org", "repo") is None
+
+
+class TestGitHubClientGetJobLogs:
+    """
+    Скачивание логов задания (перенесено из PR #42, закрытого в пользу этой
+    ветки). У метода свой, более длинный таймаут: логи качаются целиком и
+    весят мегабайты. Сетевая ошибка здесь не должна ронять проверку - без
+    логов не извлекутся баллы и TASKID, но результат CI уже известен.
+    """
+
+    LOGS_URL = "https://api.github.com/repos/org/repo/actions/jobs/12345/logs"
+
+    @responses.activate
+    def test_logs_are_returned_as_text(self):
+        responses.add(responses.GET, self.LOGS_URL, body="TASKID=5\nDone.", status=200)
+
+        logs = GitHubClient("test_token").get_job_logs("org", "repo", 12345)
+
+        assert logs is not None and "TASKID=5" in logs
+
+    @responses.activate
+    def test_http_error_returns_none(self):
+        responses.add(responses.GET, self.LOGS_URL, json={"message": "Not Found"}, status=404)
+
+        assert GitHubClient("test_token").get_job_logs("org", "repo", 12345) is None
+
+    @responses.activate
+    def test_network_error_returns_none_instead_of_raising(self):
+        import requests as requests_lib
+
+        responses.add(
+            responses.GET,
+            self.LOGS_URL,
+            body=requests_lib.exceptions.ConnectionError("Remote end closed connection"),
+        )
+
+        assert GitHubClient("test_token").get_job_logs("org", "repo", 12345) is None
+
+    @responses.activate
+    def test_logs_use_their_own_longer_timeout(self):
+        responses.add(responses.GET, self.LOGS_URL, body="ok", status=200)
+        client = GitHubClient("test_token")
+
+        with patch("grading.github_client.requests.get", wraps=requests.get) as spy:
+            client.get_job_logs("org", "repo", 12345)
+
+        assert spy.call_args.kwargs["timeout"] == GitHubClient.LOGS_TIMEOUT
+        assert GitHubClient.LOGS_TIMEOUT > GitHubClient.DEFAULT_TIMEOUT
+
+
+class TestEveryRequestHasATimeout:
+    """
+    Страховка от возврата исходной проблемы PR #42: вызов requests без
+    timeout ждёт ответа бесконечно, и одно зависшее соединение останавливает
+    проверку целой группы - сторожевого таймера у массовой проверки нет.
+    Проверяется весь модуль разбором исходника, а не перечислением методов:
+    новый метод без таймаута тоже будет пойман.
+    """
+
+    def test_no_request_without_timeout(self):
+        import ast
+        import inspect
+
+        import grading.github_client as module
+
+        tree = ast.parse(inspect.getsource(module))
+        offenders = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not isinstance(func, ast.Attribute) or not isinstance(func.value, ast.Name):
+                continue
+            if func.value.id != "requests":
+                continue
+            if func.attr not in {"get", "post", "put", "patch", "delete", "request"}:
+                continue
+            if not any(kw.arg == "timeout" for kw in node.keywords):
+                offenders.append(f"requests.{func.attr} на строке {node.lineno}")
+
+        assert offenders == [], "вызовы без timeout: " + ", ".join(offenders)

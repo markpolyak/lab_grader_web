@@ -17,8 +17,21 @@ import {
   DialogActions,
   Button as MuiButton,
   Checkbox,
+  IconButton,
 } from "@mui/material";
 import { BulkGradeDialog } from "./BulkGradeDialog";
+
+// Иконка копирования (два листа) - та же, что на GitHub: Octicons copy-16,
+// встроенная, чтобы не тащить @mui/icons-material ради одного значка.
+// currentColor - цвет наследуется от кнопки, поэтому тема не ломается.
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false">
+      <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z" />
+      <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
+    </svg>
+  );
+}
 import {
   Container,
   Panel,
@@ -27,10 +40,21 @@ import {
   TableWrapper,
   SelectableTableWrapper,
   HintText,
+  JoinLinkCell,
+  JoinLinkLine,
+  JoinLinkText,
 } from "./styled";
 
 // Опрос статуса фоновой работы - см. main.py GET /admin/propagate-jobs/{job_id}
 const JOB_POLL_INTERVAL_MS = 2000;
+
+// Состояние окна доступности лабы (main.py `join_state`,
+// docs/SECRET_JOIN_LINKS_PLAN.md §9.1).
+const JOIN_STATE_COLOR = {
+  not_open: "default",
+  open: "success",
+  closed: "warning",
+};
 
 const RESULT_STATUS_COLOR = {
   will_process: "default",
@@ -61,6 +85,10 @@ export const LabList = ({ courseId, onBack }) => {
   const { t } = useTranslation();
 
   const [labs, setLabs] = useState([]);
+  // Название курса для заголовка страницы. Админский список лаб его не
+  // отдаёт (это плоский список работ), поэтому берём из публичной карточки
+  // курса; до её загрузки заголовок остаётся без названия.
+  const [courseName, setCourseName] = useState(null);
   const [loading, setLoading] = useState(true);
   const [snackbar, setSnackbar] = useState({ open: false, message: "", severity: "info" });
 
@@ -82,6 +110,35 @@ export const LabList = ({ courseId, onBack }) => {
 
   const showSnackbar = (message, severity = "info") => setSnackbar({ open: true, message, severity });
 
+  // Ссылку нельзя собрать руками - её можно только скопировать отсюда.
+  const copyJoinLink = (link) => {
+    const done = () => showSnackbar(t("adminLabs.join.copied"), "success");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done, () => window.prompt(t("adminLabs.join.copyPrompt"), link));
+      return;
+    }
+    window.prompt(t("adminLabs.join.copyPrompt"), link);
+  };
+
+  const formatMoment = (iso) => {
+    if (!iso) return null;
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
+  };
+
+  const joinStateLabel = (lab) => {
+    if (lab.join_state === "not_open") {
+      const moment = formatMoment(lab.opens_at);
+      return moment ? t("adminLabs.join.opensAt", { moment }) : t("adminLabs.join.notScheduled");
+    }
+    if (lab.join_state === "closed") {
+      const moment = formatMoment(lab.closes_at);
+      return moment ? t("adminLabs.join.closedAt", { moment }) : t("adminLabs.join.closed");
+    }
+    const moment = formatMoment(lab.closes_at);
+    return moment ? t("adminLabs.join.openUntil", { moment }) : t("adminLabs.join.open");
+  };
+
   const loadLabs = useCallback(() => {
     setLoading(true);
     fetchJson(`/api/v1/admin/courses/${courseId}/labs`)
@@ -98,6 +155,22 @@ export const LabList = ({ courseId, onBack }) => {
   useEffect(() => {
     loadLabs();
   }, [loadLabs]);
+
+  useEffect(() => {
+    let current = true;
+    fetchJson(`/api/v1/courses/${courseId}`)
+      .then((data) => {
+        if (current) setCourseName(data && data.name ? data.name : null);
+      })
+      .catch(() => {
+        // Название - украшение заголовка: без него страница полностью
+        // работоспособна, поэтому ошибку не показываем.
+        if (current) setCourseName(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [courseId]);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -213,7 +286,11 @@ export const LabList = ({ courseId, onBack }) => {
     <Container>
       <Panel>
         <BackButton onClick={onBack}>{t("adminLabs.back")}</BackButton>
-        <PageTitle>{t("adminLabs.title")}</PageTitle>
+        <PageTitle>
+          {courseName
+            ? t("adminLabs.titleWithCourse", { course: courseName })
+            : t("adminLabs.title")}
+        </PageTitle>
 
         {loading ? (
           <HintText>{t("adminLabs.loading")}</HintText>
@@ -227,6 +304,7 @@ export const LabList = ({ courseId, onBack }) => {
                   <TableCell>{t("adminLabs.columns.githubPrefix")}</TableCell>
                   <TableCell>{t("adminLabs.columns.templateRepo")}</TableCell>
                   <TableCell>{t("adminLabs.columns.provisioning")}</TableCell>
+                  <TableCell>{t("adminLabs.columns.joinLink")}</TableCell>
                   <TableCell>{t("adminLabs.columns.actions")}</TableCell>
                 </TableRow>
               </TableHead>
@@ -241,6 +319,44 @@ export const LabList = ({ courseId, onBack }) => {
                       {lab.repo_provisioning === "fork"
                         ? t("adminLabs.provisioningFork")
                         : t("adminLabs.provisioningTemplate")}
+                    </TableCell>
+                    <TableCell>
+                      {lab.join_error ? (
+                        <Chip size="small" color="error" label={lab.join_error} />
+                      ) : lab.join_link ? (
+                        <JoinLinkCell>
+                          <JoinLinkLine>
+                            <JoinLinkText title={lab.join_link}>{lab.join_link}</JoinLinkText>
+                            <Tooltip title={t("adminLabs.join.copy")}>
+                              <IconButton
+                                size="small"
+                                aria-label={t("adminLabs.join.copy")}
+                                onClick={() => copyJoinLink(lab.join_link)}
+                              >
+                                <CopyIcon />
+                              </IconButton>
+                            </Tooltip>
+                          </JoinLinkLine>
+                          {(lab.join_secret || lab.opens_at || lab.closes_at) && (
+                            <div>
+                              <Chip
+                                size="small"
+                                color={JOIN_STATE_COLOR[lab.join_state] || "default"}
+                                label={joinStateLabel(lab)}
+                              />
+                            </div>
+                          )}
+                          {lab.join_secret && <HintText>{t("adminLabs.join.revokeHint")}</HintText>}
+                        </JoinLinkCell>
+                      ) : lab.join_state && lab.join_state !== "open" ? (
+                        <Chip
+                          size="small"
+                          color={JOIN_STATE_COLOR[lab.join_state] || "default"}
+                          label={joinStateLabel(lab)}
+                        />
+                      ) : (
+                        "—"
+                      )}
                     </TableCell>
                     <TableCell>
                       {lab.can_propagate ? (

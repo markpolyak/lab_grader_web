@@ -6,9 +6,12 @@ to check repositories, commits, and CI status.
 """
 import base64
 import binascii
+import logging
 import requests
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Text files above this size are not fetched for content extraction
 MAX_TEXT_FILE_SIZE = 1024 * 1024
@@ -64,6 +67,11 @@ class GitHubClient:
     # used for the OAuth requests in main.py (avoids a hung worker if api.github.com stalls).
     DEFAULT_TIMEOUT = 10
 
+    # Логи задания качаются целиком и весят мегабайты, поэтому десяти секунд
+    # им мало - для них отдельный таймаут. Остальные вызовы интерактивные:
+    # студент ждёт ответа в браузере, и там лучше быстро ответить ошибкой.
+    LOGS_TIMEOUT = 30
+
     def __init__(self, token: str):
         """
         Initialize GitHub client.
@@ -88,7 +96,7 @@ class GitHubClient:
             True if user exists, False otherwise
         """
         url = f"{self.BASE_URL}/users/{username}"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 200
 
     def file_exists(self, org: str, repo: str, path: str) -> bool:
@@ -104,7 +112,7 @@ class GitHubClient:
             True if file exists, False otherwise
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/contents/{path}"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 200
 
     def get_file_content(
@@ -209,7 +217,7 @@ class GitHubClient:
         """
         # Get commits list
         commits_url = f"{self.BASE_URL}/repos/{org}/{repo}/commits"
-        commits_resp = requests.get(commits_url, headers=self.headers)
+        commits_resp = requests.get(commits_url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if commits_resp.status_code != 200:
             return None
@@ -222,7 +230,7 @@ class GitHubClient:
 
         # Get commit details with files
         commit_url = f"{self.BASE_URL}/repos/{org}/{repo}/commits/{latest_sha}"
-        commit_resp = requests.get(commit_url, headers=self.headers)
+        commit_resp = requests.get(commit_url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if commit_resp.status_code != 200:
             return CommitInfo(sha=latest_sha, files=[])
@@ -251,7 +259,7 @@ class GitHubClient:
             List of check run dicts from GitHub API, or None on error
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/commits/{commit_sha}/check-runs"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if resp.status_code != 200:
             return None
@@ -695,11 +703,19 @@ class GitHubClient:
             repo: Repository name
             job_id: Job ID from check run
 
+        Сетевая ошибка здесь не должна ронять проверку: без логов не
+        извлекутся баллы и TASKID, но результат CI уже известен, поэтому
+        возвращаем None и даём проверке продолжиться (PR #42).
+
         Returns:
             Log text or None if not available
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/actions/jobs/{job_id}/logs"
-        resp = requests.get(url, headers=self.headers)
+        try:
+            resp = requests.get(url, headers=self.headers, timeout=self.LOGS_TIMEOUT)
+        except requests.RequestException as e:
+            logger.warning(f"Could not download logs of job {job_id} in {org}/{repo}: {e}")
+            return None
 
         if resp.status_code != 200:
             return None

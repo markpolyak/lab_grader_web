@@ -6,7 +6,9 @@ import {
   createJoinTeam,
   fetchJoinLab,
   fetchJoinTeams,
+  fetchSecretJoinLab,
   getJoinStartUrl,
+  getSecretJoinStartUrl,
   joinJoinTeam,
 } from "../../api";
 import { SUPPORTED_LANGUAGES } from "../../language";
@@ -35,19 +37,24 @@ import {
 import {
   ERROR_TRANSLATION_KEYS,
   findMyTeam,
+  formatMoment,
   getSafeRepositoryUrl,
   resolveJoinView,
+  resolveSecretJoinView,
   shouldShowJoinAction,
 } from "./state";
 
 
 export function JoinLab() {
-  const { courseId, labId } = useParams();
+  // Лаба адресуется либо парой курс/лаба, либо секретным токеном
+  // (docs/SECRET_JOIN_LINKS_PLAN.md §10). Сценарий после входа один и тот же.
+  const { courseId, labId, token } = useParams();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const { t, i18n } = useTranslation();
   const [lab, setLab] = useState(null);
   const [loadError, setLoadError] = useState(null);
+  const [loadErrorPayload, setLoadErrorPayload] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRedirecting, setIsRedirecting] = useState(false);
   const [teamsData, setTeamsData] = useState(null);
@@ -61,7 +68,8 @@ export function JoinLab() {
   // зарезервирован под сырой код ошибки GitHub OAuth, см. join_callback).
   const callbackReason = searchParams.get("reason");
   const username = searchParams.get("username");
-  const hasLabContext = Boolean(courseId && labId);
+  const isSecretLink = Boolean(token);
+  const hasLabContext = Boolean(courseId && labId) || isSecretLink;
   const isStandaloneError = !hasLabContext && callbackStatus === "error";
   const repositoryUrl = useMemo(
     () => getSafeRepositoryUrl(searchParams.get("repo_url")),
@@ -72,6 +80,27 @@ export function JoinLab() {
     let isCurrentRequest = true;
     setIsLoading(true);
     setLoadError(null);
+    setLoadErrorPayload(null);
+
+    if (isSecretLink) {
+      fetchSecretJoinLab(token)
+        .then((data) => {
+          if (isCurrentRequest) setLab(data);
+        })
+        .catch((error) => {
+          if (isCurrentRequest) {
+            setLab(null);
+            setLoadError(error.code || "unknown");
+            setLoadErrorPayload(error.payload || null);
+          }
+        })
+        .finally(() => {
+          if (isCurrentRequest) setIsLoading(false);
+        });
+      return () => {
+        isCurrentRequest = false;
+      };
+    }
 
     if (!hasLabContext) {
       setLab(null);
@@ -98,7 +127,7 @@ export function JoinLab() {
     return () => {
       isCurrentRequest = false;
     };
-  }, [courseId, labId, hasLabContext, isStandaloneError]);
+  }, [courseId, labId, token, isSecretLink, hasLabContext, isStandaloneError]);
 
   const teamEnabled = Boolean(lab && lab.team && lab.team.enabled);
 
@@ -142,7 +171,9 @@ export function JoinLab() {
 
   const beginOAuth = () => {
     setIsRedirecting(true);
-    window.location.assign(getJoinStartUrl(courseId, labId));
+    window.location.assign(
+      isSecretLink ? getSecretJoinStartUrl(token) : getJoinStartUrl(courseId, labId)
+    );
   };
 
   const translatedError = (code) =>
@@ -150,6 +181,12 @@ export function JoinLab() {
 
   const view = resolveJoinView({ teamEnabled, teamsData, teamsError });
   const myTeam = findMyTeam(teamsData);
+  const secretView = resolveSecretJoinView({ lab, loadError });
+  const opensAt = formatMoment(
+    (loadErrorPayload && loadErrorPayload.opens_at) || (lab && lab.opens_at),
+    i18n.language
+  );
+  const closesAt = formatMoment(lab && lab.closes_at, i18n.language);
 
   const handleCreate = ({ title, description }) => {
     setActionError(null);
@@ -206,11 +243,21 @@ export function JoinLab() {
           </Description>
         )}
 
-        {!isLoading && loadError && (
+        {!isLoading && loadError && secretView !== "not_open" && (
           <ErrorPanel role="alert">
             <strong>{t("join.errorTitle")}</strong>
             <span>{translatedError(loadError)}</span>
           </ErrorPanel>
+        )}
+
+        {/* Работа ещё не опубликована: это не ошибка студента, и название
+            работы backend до открытия не раскрывает (§5, §7.3 плана). */}
+        {!isLoading && secretView === "not_open" && (
+          <Description role="status">
+            {opensAt
+              ? t("join.secret.notOpenAt", { moment: opensAt })
+              : t("join.secret.notOpen")}
+          </Description>
         )}
 
         {!isLoading && isStandaloneError && (
@@ -321,6 +368,14 @@ export function JoinLab() {
               </>
             )}
 
+            {isSecretLink && secretView === "closed" && (
+              <Description role="status">
+                {closesAt
+                  ? t("join.secret.closedAt", { moment: closesAt })
+                  : t("join.secret.closed")}
+              </Description>
+            )}
+
             {view === "individual" && (
               <>
                 {callbackStatus === "success" && repositoryUrl ? (
@@ -341,7 +396,9 @@ export function JoinLab() {
                     <strong>{t("join.errorTitle")}</strong>
                     <span>{t("join.errors.invalidRepositoryLink")}</span>
                   </ErrorPanel>
-                ) : callbackStatus === "error" ? null : (
+                ) : callbackStatus === "error" || secretView === "closed" ? null : (
+                  // При закрытом приёме общее описание («система создаст
+                  // репозиторий») противоречило бы сообщению выше.
                   <Description>{t("join.description")}</Description>
                 )}
 

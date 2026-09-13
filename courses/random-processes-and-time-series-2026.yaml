@@ -34,6 +34,8 @@ course:
         "1":
             github-prefix: 1
             short-name: ЛР1
+            template-repo: itmo-rts-2026/lab1-hmm
+            repo-provisioning: fork
             taskid-max: 10
             penalty-max: 10
             score:
@@ -50,6 +52,8 @@ course:
         "2":
             github-prefix: 2
             short-name: ЛР2
+            template-repo: itmo-rts-2026/lab2-arima
+            repo-provisioning: fork
             taskid-max: 10
             penalty-max: 10
             score:
@@ -66,6 +70,8 @@ course:
         "3":
             github-prefix: 3
             short-name: ЛР3
+            template-repo: itmo-rts-2026/lab3-spectral-filter
+            repo-provisioning: fork
             taskid-max: 8
             penalty-max: 10
             score:
@@ -82,6 +88,8 @@ course:
         "4":
             github-prefix: 4
             short-name: ЛР4
+            template-repo: itmo-rts-2026/lab4-evt
+            repo-provisioning: fork
             taskid-max: 9
             penalty-max: 10
             score:
@@ -95,22 +103,46 @@ course:
                 language: python
                 max-matches: 100
                 local-path: lab4
-        "5":
-           github-prefix: 5
-           short-name: ДЗ5
-           taskid-max: 10
-           penalty-max: 10
-           score:
-             patterns:
-               - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
-           ci:
-               - workflows
-           files:
-               - exercises.ipynb
-           moss:
-               language: python
-               max-matches: 100
-               local-path: lab5
+        # "5":
+        #    github-prefix: 5
+        #    short-name: ДЗ5
+        #    taskid-max: 10
+        #    penalty-max: 10
+        #    score:
+        #      patterns:
+        #        - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+        #    ci:
+        #        - workflows
+        #    files:
+        #        - exercises.ipynb
+        #    moss:
+        #        language: python
+        #        max-matches: 100
+        #        local-path: lab5
+        "quiz":
+            github-prefix: r
+            short-name: КР
+            template-repo: itmo-rts-2026/control-work-template
+            repo-provisioning: fork
+            # taskid-max: 9
+            ignore-task-id: true
+            join:
+                link: secret
+                opens-at: "2026-09-01 00:00"     # момент публикации
+                # closes-at: "2026-10-15 11:30"    # необязательно
+                revision: 1                      # увеличить, чтобы отозвать ссылку
+            penalty-max: 10
+            score:
+              patterns:
+                - 'Итоговая.*?оценка.*?:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "Итоговая оценка: 10.0"
+            ci:
+                - workflows
+            files:
+                - control_work.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab4
 
 misc:
     requests-timeout: 5

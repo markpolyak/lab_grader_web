@@ -91,3 +91,49 @@ class TestRateLimiting:
         # different IPs would have separate limits
         pass
 
+
+
+class TestProxyAwareRateLimiting:
+    """
+    Лимиты за обратным прокси (docs/SECRET_JOIN_LINKS_PLAN.md §11, этап 5а).
+
+    Корзина лимита выбирается по `request.client.host`. За прокси это адрес
+    прокси, поэтому вся группа делит одну корзину: в момент открытия
+    контрольной работы часть студентов получила бы 429, а перебор токена
+    ограничивался бы глобально. Лечится запуском uvicorn с --proxy-headers и
+    явным списком адресов прокси; доверять заголовку без списка нельзя -
+    тогда лимит обходится подделкой X-Forwarded-For.
+
+    Сам разбор заголовка делает uvicorn, поэтому здесь проверяется контракт
+    запуска образа: флаги на месте, а список по умолчанию пуст.
+    """
+
+    @pytest.fixture
+    def dockerfile(self):
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "backend.Dockerfile"), encoding="utf-8") as f:
+            return f.read()
+
+    def test_uvicorn_runs_with_proxy_headers(self, dockerfile):
+        assert "--proxy-headers" in dockerfile
+
+    def test_trusted_proxies_come_from_an_environment_variable(self, dockerfile):
+        assert '--forwarded-allow-ips "$FORWARDED_ALLOW_IPS"' in dockerfile
+
+    def test_trusted_proxies_default_to_empty(self, dockerfile):
+        assert 'ENV FORWARDED_ALLOW_IPS=""' in dockerfile
+
+    def test_secret_link_limit_fits_a_whole_group_at_once(self):
+        """
+        Лимит /j/{token} рассчитан на одновременный заход всей группы:
+        30 студентов в момент открытия контрольной не должны упереться в него
+        даже если все запросы придут с одного адреса.
+        """
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, "main.py"), encoding="utf-8") as f:
+            source = f.read()
+
+        marker = source.index('@app.get("/j/{token}")')
+        limit_line = source[marker:source.index("def secret_join_info", marker)]
+        limit = int(limit_line.split('limiter.limit("')[1].split("/")[0])
+        assert limit >= 30
