@@ -31,6 +31,7 @@
   "adminLabs": {
     "back": "← 返回课程列表",
     "title": "课程实验列表",
+      "titleWithCourse": "{{course}} 课程实验列表",
     "loading": "正在加载实验列表…",
     "errorLoadingLabs": "无法加载实验列表",
     "columns": {

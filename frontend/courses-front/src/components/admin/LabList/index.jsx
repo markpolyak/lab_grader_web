@@ -85,6 +85,10 @@ export const LabList = ({ courseId, onBack }) => {
   const { t } = useTranslation();
 
   const [labs, setLabs] = useState([]);
+  // Название курса для заголовка страницы. Админский список лаб его не
+  // отдаёт (это плоский список работ), поэтому берём из публичной карточки
+  // курса; до её загрузки заголовок остаётся без названия.
+  const [courseName, setCourseName] = useState(null);
   const [loading, setLoading] = useState(true);
   const [snackbar, setSnackbar] = useState({ open: false, message: "", severity: "info" });
 
@@ -151,6 +155,22 @@ export const LabList = ({ courseId, onBack }) => {
   useEffect(() => {
     loadLabs();
   }, [loadLabs]);
+
+  useEffect(() => {
+    let current = true;
+    fetchJson(`/api/v1/courses/${courseId}`)
+      .then((data) => {
+        if (current) setCourseName(data && data.name ? data.name : null);
+      })
+      .catch(() => {
+        // Название - украшение заголовка: без него страница полностью
+        // работоспособна, поэтому ошибку не показываем.
+        if (current) setCourseName(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [courseId]);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -266,7 +286,11 @@ export const LabList = ({ courseId, onBack }) => {
     <Container>
       <Panel>
         <BackButton onClick={onBack}>{t("adminLabs.back")}</BackButton>
-        <PageTitle>{t("adminLabs.title")}</PageTitle>
+        <PageTitle>
+          {courseName
+            ? t("adminLabs.titleWithCourse", { course: courseName })
+            : t("adminLabs.title")}
+        </PageTitle>
 
         {loading ? (
           <HintText>{t("adminLabs.loading")}</HintText>

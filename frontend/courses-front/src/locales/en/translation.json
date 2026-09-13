@@ -28,6 +28,7 @@
   "adminLabs": {
     "back": "← Back to courses",
     "title": "Course labs",
+      "titleWithCourse": "Labs of {{course}}",
     "loading": "Loading labs…",
     "errorLoadingLabs": "Could not load the list of labs",
     "columns": {
