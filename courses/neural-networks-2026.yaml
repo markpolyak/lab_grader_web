@@ -68,7 +68,7 @@ course:
         "2":
             github-prefix: 2
             short-name: ДЗ2
-            template-repo: itmo-nn-2026/lab1-cnn
+            template-repo: itmo-nn-2026/lab2-cnn
             repo-provisioning: fork
             taskid-max: 5
             penalty-max: 5
@@ -86,7 +86,7 @@ course:
         "3":
             github-prefix: 3
             short-name: ДЗ3
-            template-repo: itmo-nn-2026/lab1-transfer-learning
+            template-repo: itmo-nn-2026/lab3-transfer-learning
             repo-provisioning: fork
             taskid-max: 5
             penalty-max: 5
