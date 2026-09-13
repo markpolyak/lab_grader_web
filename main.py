@@ -16,7 +16,7 @@ import json
 import base64
 import logging
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -1999,9 +1999,14 @@ def _join_fields(
     Поля секции join для админского списка лаб: готовая ссылка целиком и
     состояние окна (§7.2, §9.1 плана).
 
+    Ссылка отдаётся для любой лабы, у которой настроен `template-repo`:
+    секретной - `/j/{token}`, обычной - `/join/{course_id}/{lab_key}`.
+    Секретную собрать руками нельзя, поэтому админка вообще единственный
+    способ её получить; обычную собрать можно, но раздавать ссылки удобнее
+    из одного места, не помня формат.
+
     Ссылка доступна с момента появления лабы в конфиге, задолго до
-    `opens-at`: преподавателю нужно подготовить рассылку заранее. Собрать её
-    руками нельзя, поэтому админка - основной способ её получить.
+    `opens-at`: преподавателю нужно подготовить рассылку заранее.
 
     Испорченная секция не роняет весь список: лаба приходит с текстом ошибки
     в `join_error`, чтобы преподаватель увидел её там же, где правит конфиг.
@@ -2023,6 +2028,13 @@ def _join_fields(
     link = None
     if settings.secret:
         link = f"{_public_base_url(request)}/j/{lab_token(SECRET_KEY, course_id, lab_key, lab_config)}"
+    elif lab_config.get("template-repo"):
+        # Без template-repo ссылка /join/... отдаёт ошибку конфигурации,
+        # показывать её в админке незачем.
+        link = (
+            f"{_public_base_url(request)}/join/"
+            f"{quote(course_id, safe='')}/{quote(lab_key, safe='')}"
+        )
 
     return {
         "join_link": link,

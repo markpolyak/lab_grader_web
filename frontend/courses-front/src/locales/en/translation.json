@@ -37,7 +37,7 @@
       "templateRepo": "template-repo",
       "provisioning": "Repository creation",
       "actions": "Actions",
-      "joinLink": "Secret link"
+      "joinLink": "Student link"
     },
     "provisioningTemplate": "template",
     "provisioningFork": "fork",

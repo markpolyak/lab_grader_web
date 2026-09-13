@@ -699,11 +699,21 @@ class TestAdminLabListJoinFields:
         labs = list_labs(mock_request, labs_course(join_section), monkeypatch)
         assert labs["7"]["join_state"] == expected
 
-    def test_ordinary_lab_has_no_link(self, mock_request, monkeypatch):
+    def test_lab_without_template_repo_has_no_link(self, mock_request, monkeypatch):
+        """Лаба "1" в фикстуре без template-repo: /join для неё не работает."""
         labs = list_labs(mock_request, labs_course({"link": "public"}), monkeypatch)
         assert labs["1"]["join_link"] is None
         assert labs["1"]["join_secret"] is False
         assert labs["1"]["join_state"] == "open"
+
+    def test_ordinary_lab_gets_the_public_link(self, mock_request, monkeypatch):
+        """Столбец со ссылками общий: обычная лаба показывает /join/{курс}/{лаба}."""
+        course = labs_course({"link": "public"})
+        course["labs"]["1"]["template-repo"] = "org/os-task1-template"
+        labs = list_labs(mock_request, course, monkeypatch)
+
+        assert labs["1"]["join_link"] == "https://labgrader.example.ru/join/test-course/1"
+        assert labs["1"]["join_secret"] is False
 
     def test_broken_join_section_does_not_break_the_list(self, mock_request, monkeypatch):
         labs = list_labs(mock_request, labs_course({"link": "secret", "revision": 0}), monkeypatch)

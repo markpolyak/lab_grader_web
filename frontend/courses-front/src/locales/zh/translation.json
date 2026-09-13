@@ -40,7 +40,7 @@
       "templateRepo": "template-repo",
       "provisioning": "仓库创建方式",
       "actions": "操作",
-      "joinLink": "私密链接"
+      "joinLink": "学生链接"
     },
     "provisioningTemplate": "template",
     "provisioningFork": "fork",

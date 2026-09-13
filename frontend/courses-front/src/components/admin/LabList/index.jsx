@@ -313,14 +313,16 @@ export const LabList = ({ courseId, onBack }) => {
                               </IconButton>
                             </Tooltip>
                           </JoinLinkLine>
-                          <div>
-                            <Chip
-                              size="small"
-                              color={JOIN_STATE_COLOR[lab.join_state] || "default"}
-                              label={joinStateLabel(lab)}
-                            />
-                          </div>
-                          <HintText>{t("adminLabs.join.revokeHint")}</HintText>
+                          {(lab.join_secret || lab.opens_at || lab.closes_at) && (
+                            <div>
+                              <Chip
+                                size="small"
+                                color={JOIN_STATE_COLOR[lab.join_state] || "default"}
+                                label={joinStateLabel(lab)}
+                              />
+                            </div>
+                          )}
+                          {lab.join_secret && <HintText>{t("adminLabs.join.revokeHint")}</HintText>}
                         </JoinLinkCell>
                       ) : lab.join_state && lab.join_state !== "open" ? (
                         <Chip
