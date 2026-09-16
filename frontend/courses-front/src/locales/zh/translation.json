@@ -80,8 +80,10 @@
         "link": "链接"
       },
       "openPr": "打开 PR",
+      "appliedWithOtherCommits": "模板的更改已通过其他提交合入（PR 以 squash 或 rebase 方式合并）",
       "statuses": {
         "pr_created": "已创建 PR",
+        "pr_updated": "PR 已更新",
         "up_to_date": "已是最新",
         "pr_exists": "PR 已存在",
         "not_a_fork": "不是模板的 fork",

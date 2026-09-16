@@ -77,8 +77,10 @@
         "link": "Link"
       },
       "openPr": "Open PR",
+      "appliedWithOtherCommits": "template changes are already there under other commits (PR merged via squash or rebase)",
       "statuses": {
         "pr_created": "PR created",
+        "pr_updated": "PR updated",
         "up_to_date": "already up to date",
         "pr_exists": "PR already open",
         "not_a_fork": "not a template fork",

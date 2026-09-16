@@ -742,6 +742,33 @@ class TestGitHubClientRefs:
         assert client.compare_commits("org", "os-task1-student1", "main", "abc123") is None
 
     @responses.activate
+    def test_get_tree_is_recursive(self):
+        call = responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/os-task1-student1/git/trees/main",
+            json={"truncated": False, "tree": [{"path": "lab1.cpp", "type": "blob", "sha": "abc"}]},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+
+        tree = client.get_tree("org", "os-task1-student1", "main")
+
+        assert tree["tree"][0]["sha"] == "abc"
+        assert "recursive=1" in call.calls[0].request.url
+
+    @responses.activate
+    def test_get_tree_failure_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/os-task1-student1/git/trees/main",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+
+        assert client.get_tree("org", "os-task1-student1", "main") is None
+
+    @responses.activate
     def test_create_ref_posts_full_ref_and_sha(self):
         call = responses.add(
             responses.POST,

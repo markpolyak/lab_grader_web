@@ -59,6 +59,7 @@ const JOIN_STATE_COLOR = {
 const RESULT_STATUS_COLOR = {
   needs_update: "primary",
   pr_created: "success",
+  pr_updated: "success",
   up_to_date: "info",
   pr_exists: "info",
   not_a_fork: "warning",
@@ -294,6 +295,10 @@ export const LabList = ({ courseId, onBack }) => {
     <>
       <Chip size="small" color={RESULT_STATUS_COLOR[r.status] || "default"} label={label} />
       {r.status === "error" && r.message && <HintText>{r.message}</HintText>}
+      {/* Коммитов шаблона нет, а изменения есть - PR влили через squash/rebase */}
+      {r.status === "up_to_date" && r.commits_behind > 0 && (
+        <HintText>{t("adminLabs.progress.appliedWithOtherCommits")}</HintText>
+      )}
       {withPrLink && r.pr_url && (
         <HintText>
           <a href={r.pr_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>

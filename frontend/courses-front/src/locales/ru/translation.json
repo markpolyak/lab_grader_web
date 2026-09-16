@@ -77,8 +77,10 @@
         "link": "Ссылка"
       },
       "openPr": "Открыть PR",
+      "appliedWithOtherCommits": "изменения шаблона уже внесены другими коммитами (PR влит через squash или rebase)",
       "statuses": {
         "pr_created": "PR создан",
+        "pr_updated": "PR обновлён",
         "up_to_date": "уже актуален",
         "pr_exists": "PR уже открыт",
         "not_a_fork": "не форк шаблона",
