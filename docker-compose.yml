@@ -16,3 +16,7 @@ services:
       - .:/app
     env_file:
       - .env
+    environment:
+      # Локально запросы приходят напрямую, доверять X-Forwarded-For некому.
+      # На сервере за обратным прокси - см. docs/DEPLOYMENT.md.
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-}

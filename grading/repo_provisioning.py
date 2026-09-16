@@ -8,6 +8,8 @@ docs/REPO_GENERATION_PLAN.md for the full design.
 """
 import logging
 import time
+
+import requests
 from dataclasses import dataclass
 from enum import Enum
 
@@ -60,24 +62,45 @@ class RepoProvisioner:
         template_repo: str,
         repo_suffix: str,
         mode: str = "template",
+        access_username: str | None = None,
+        force_invite: bool = False,
+        create: bool = True,
     ) -> ProvisionResult:
         """
         Ensure `{github_prefix}-{repo_suffix}` exists in `org` (created from
         `template_repo` if missing) and that the student has collaborator
         access to it.
 
-        `repo_suffix` is named generically (not `username`) so that a future
-        team-lab variant could pass a team name instead - the algorithm below
-        always handles exactly one suffix per call either way (see
-        docs/REPO_GENERATION_PLAN.md §9).
+        `repo_suffix` is named generically (not `username`) because a team lab
+        passes a team slug here instead - the algorithm below always handles
+        exactly one suffix per call either way (see
+        docs/REPO_GENERATION_PLAN.md §9). For an individual lab the suffix and
+        the student's username are the same value, which is why
+        `access_username` is optional and defaults to the suffix; a team lab
+        passes the two separately (docs/TEAM_ASSIGNMENTS_PLAN.md §9.1).
 
         Args:
             org: GitHub organization that owns student repositories
             github_prefix: Repo name prefix from lab config
             template_repo: Template repository as "owner/repo"
-            repo_suffix: Suffix identifying the student (their GitHub username)
+            repo_suffix: Suffix identifying the repository - the student's
+                GitHub username, or a team slug like "team-3"
             mode: "template" (default, current behavior - GitHub's `generate`
                 API) or "fork" (a real fork of the template, see issue #51)
+            access_username: Student to grant access to. Defaults to
+                `repo_suffix`, preserving the individual-lab behavior.
+            force_invite: Skip the "already has access" shortcut and always
+                (re-)issue a direct push invitation. Callers that keep their
+                own definition of membership pass True when the student does
+                not match it - see _ensure_access.
+            create: Whether a missing repository may still be created. False
+                is what a lab past its `join.closes-at` passes: a student who
+                already has the repository keeps repairing access through the
+                same link (an invitation expires in 7 days), while a student
+                who never claimed one gets JOIN_CLOSED instead of a fresh
+                repository handed out after the deadline
+                (docs/SECRET_JOIN_LINKS_PLAN.md §8). The default keeps the
+                behaviour of individual and team labs untouched.
 
         Returns:
             ProvisionResult describing success or the specific failure
@@ -93,11 +116,46 @@ class RepoProvisioner:
                 error_code="INVALID_TEMPLATE_CONFIG",
             )
 
-        create_error = self._ensure_repo_created(org, repo_name, template_owner, template_name, mode)
+        try:
+            return self._provision_steps(
+                org, repo_name, template_owner, template_name, mode,
+                access_username or repo_suffix, force_invite, create,
+            )
+        except requests.RequestException as e:
+            # Сетевую ошибку (таймаут, обрыв) не ловил никто: она проходила
+            # мимо ProvisionResult и всплывала как необработанное исключение,
+            # после чего студент видел «непредвиденную ошибку» вместо
+            # понятного «GitHub не ответил, повторите». Ни один метод
+            # GitHubClient такие исключения не перехватывает, поэтому ловим
+            # здесь - на границе всей операции.
+            logger.error(f"GitHub API request failed for {org}/{repo_name}: {e}")
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="GitHub не ответил вовремя. Попробуйте ещё раз через минуту",
+                error_code="GITHUB_UNAVAILABLE",
+            )
+
+    def _provision_steps(
+        self,
+        org: str,
+        repo_name: str,
+        template_owner: str,
+        template_name: str,
+        mode: str,
+        access_username: str,
+        force_invite: bool,
+        create: bool,
+    ) -> ProvisionResult:
+        """Шаги provision() без обработки сетевых ошибок - см. provision()."""
+        create_error = self._ensure_repo_created(
+            org, repo_name, template_owner, template_name, mode, create=create
+        )
         if create_error:
             return create_error
 
-        access_error = self._ensure_access(org, repo_name, repo_suffix)
+        access_error = self._ensure_access(
+            org, repo_name, access_username, force_invite=force_invite
+        )
         if access_error:
             return access_error
 
@@ -115,10 +173,16 @@ class RepoProvisioner:
         template_owner: str,
         template_name: str,
         mode: str = "template",
+        create: bool = True,
     ) -> ProvisionResult | None:
         """
         Create the repo (from the template, or as a fork of it per `mode`)
         if it doesn't already exist.
+
+        With `create=False` a missing repository is not created and answers
+        JOIN_CLOSED; an existing one goes through the usual checks and
+        repairs, which is exactly what "приём закрыт, но доступ чинится"
+        means (docs/SECRET_JOIN_LINKS_PLAN.md §8).
 
         Returns:
             ProvisionResult with an error, or None if the repo exists (or now does)
@@ -139,6 +203,14 @@ class RepoProvisioner:
                 # never had them applied at all.
                 return self._repair_fork(org, repo_name)
             return None
+
+        if not create:
+            logger.info(f"Repository {org}/{repo_name} is missing and the join window is closed")
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="Приём работ по этой ссылке закрыт, новый репозиторий не создаётся",
+                error_code="JOIN_CLOSED",
+            )
 
         if mode == "fork":
             return self._create_from_fork(org, repo_name, template_owner, template_name)
@@ -399,17 +471,34 @@ class RepoProvisioner:
 
         return None
 
-    def _ensure_access(self, org: str, repo_name: str, username: str) -> ProvisionResult | None:
+    def _ensure_access(
+        self,
+        org: str,
+        repo_name: str,
+        username: str,
+        force_invite: bool = False,
+    ) -> ProvisionResult | None:
         """
         Make sure `username` has direct collaborator access to the repo,
         re-issuing a pending invitation if one already exists (a plain PUT
         without deleting the stale invitation first does not resend the
         notification - see docs/REPO_GENERATION_PLAN.md §4).
 
+        The shortcut below answers "can this user reach the repository at
+        all", which is not the question a team lab asks. Read-only access, or
+        write access inherited from the organization's base permission, both
+        answer 204 here while leaving the student out of the roster
+        TeamRegistry builds from direct collaborators with push
+        (docs/TEAM_ASSIGNMENTS_PLAN.md §7.1) - so the student would be told
+        "access granted" on every attempt and still be graded as teamless.
+        Callers that have already consulted that roster pass force_invite=True
+        to skip the shortcut, which leaves the roster as the single definition
+        of membership.
+
         Returns:
             ProvisionResult with an error, or None if access is now in place
         """
-        if self.github.is_direct_collaborator(org, repo_name, username):
+        if not force_invite and self.github.is_direct_collaborator(org, repo_name, username):
             logger.info(f"{username} already has direct access to {org}/{repo_name}")
             return None
 

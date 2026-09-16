@@ -4,9 +4,17 @@ GitHub API client for lab grading.
 This module provides a client for interacting with GitHub API
 to check repositories, commits, and CI status.
 """
+import base64
+import binascii
+import logging
 import requests
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
+
+# Text files above this size are not fetched for content extraction
+MAX_TEXT_FILE_SIZE = 1024 * 1024
 
 
 @dataclass
@@ -59,6 +67,11 @@ class GitHubClient:
     # used for the OAuth requests in main.py (avoids a hung worker if api.github.com stalls).
     DEFAULT_TIMEOUT = 10
 
+    # Логи задания качаются целиком и весят мегабайты, поэтому десяти секунд
+    # им мало - для них отдельный таймаут. Остальные вызовы интерактивные:
+    # студент ждёт ответа в браузере, и там лучше быстро ответить ошибкой.
+    LOGS_TIMEOUT = 30
+
     def __init__(self, token: str):
         """
         Initialize GitHub client.
@@ -83,7 +96,7 @@ class GitHubClient:
             True if user exists, False otherwise
         """
         url = f"{self.BASE_URL}/users/{username}"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 200
 
     def file_exists(self, org: str, repo: str, path: str) -> bool:
@@ -99,8 +112,61 @@ class GitHubClient:
             True if file exists, False otherwise
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/contents/{path}"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 200
+
+    def get_file_content(
+        self,
+        org: str,
+        repo: str,
+        path: str,
+        max_size: int = MAX_TEXT_FILE_SIZE,
+    ) -> str | None:
+        """
+        Read a repository file as text.
+
+        Used by bulk grading to pull the student's full name out of the file
+        named by the lab's `student-name-file`.
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            path: File path within repository
+            max_size: Skip files larger than this many bytes
+
+        Returns:
+            Decoded text (BOM stripped), or None if the file is missing, too
+            large, a directory, or not valid UTF-8
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/contents/{path}"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+
+        if resp.status_code != 200:
+            return None
+
+        data = resp.json()
+
+        # A directory path comes back as a list of entries, not file content
+        if not isinstance(data, dict) or data.get("type") != "file":
+            return None
+
+        # GitHub omits the body of large files, answering with encoding "none"
+        if data.get("size", 0) > max_size or data.get("encoding") != "base64":
+            return None
+
+        content = data.get("content")
+        if content is None:
+            return None
+
+        try:
+            raw = base64.b64decode(content)
+        except (binascii.Error, ValueError):
+            return None
+
+        try:
+            return raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            return None
 
     def check_required_files(
         self,
@@ -151,7 +217,7 @@ class GitHubClient:
         """
         # Get commits list
         commits_url = f"{self.BASE_URL}/repos/{org}/{repo}/commits"
-        commits_resp = requests.get(commits_url, headers=self.headers)
+        commits_resp = requests.get(commits_url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if commits_resp.status_code != 200:
             return None
@@ -164,7 +230,7 @@ class GitHubClient:
 
         # Get commit details with files
         commit_url = f"{self.BASE_URL}/repos/{org}/{repo}/commits/{latest_sha}"
-        commit_resp = requests.get(commit_url, headers=self.headers)
+        commit_resp = requests.get(commit_url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if commit_resp.status_code != 200:
             return CommitInfo(sha=latest_sha, files=[])
@@ -193,7 +259,7 @@ class GitHubClient:
             List of check run dicts from GitHub API, or None on error
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/commits/{commit_sha}/check-runs"
-        resp = requests.get(url, headers=self.headers)
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
 
         if resp.status_code != 200:
             return None
@@ -457,6 +523,33 @@ class GitHubClient:
             return None
         return resp.json()
 
+    def compare_commits(self, owner: str, repo: str, base: str, head: str) -> dict[str, Any] | None:
+        """
+        Compare two commits (three-dot: what `head` has that `base` lacks).
+
+        See https://docs.github.com/en/rest/commits/commits#compare-two-commits
+
+        `head` may be a commit that only exists in another repository of the
+        same fork network - e.g. the template's tip compared against a student
+        fork's default branch (issue #52). `per_page=1` keeps the commit list
+        short: `ahead_by` still counts every commit, and the changed files
+        (up to 300) are returned on the first page regardless.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            base: Branch name or commit SHA to compare against
+            head: Branch name or commit SHA to compare
+
+        Returns:
+            The comparison dict (`status`, `ahead_by`, `files`, ...), or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/compare/{base}...{head}"
+        resp = requests.get(url, headers=self.headers, params={"per_page": 1}, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
     def create_ref(self, owner: str, repo: str, ref: str, sha: str) -> requests.Response:
         """
         Create a git reference pointing at an existing commit.
@@ -514,9 +607,13 @@ class GitHubClient:
         Note: GitHub's docs don't document an `affiliation` param for this
         single-user "check collaborator" endpoint (only for the list-collaborators
         one) - it's used here anyway per docs/REPO_GENERATION_PLAN.md §4, which
-        specifies this exact call. It's harmless for the current one-student-one-repo
-        model; a future team-lab variant relying on "direct only" here should
-        double check GitHub's actual behavior first.
+        specifies this exact call. A 204 therefore means "can reach the
+        repository", not "is a direct collaborator with push": read-only
+        access and write inherited from the organization's base permission
+        both answer 204. Team labs must not decide membership from it - they
+        read the roster through list_collaborators below (documented
+        `affiliation`, plus the `permissions` object) and pass force_invite to
+        RepoProvisioner when a student is missing from it.
 
         Args:
             org: Organization or user name
@@ -531,6 +628,32 @@ class GitHubClient:
             url, headers=self.headers, params={"affiliation": "direct"}, timeout=self.DEFAULT_TIMEOUT
         )
         return resp.status_code == 204
+
+    def list_collaborators(
+        self,
+        org: str,
+        repo: str,
+        affiliation: str = "direct",
+    ) -> list[dict[str, Any]] | None:
+        """
+        List a repository's collaborators (all pages).
+
+        See https://docs.github.com/en/rest/collaborators/collaborators
+        Used to read a team's roster: `affiliation` is documented for this
+        endpoint (unlike the single-user check above), and each entry carries
+        a `permissions` object, which is what separates students (push) from
+        organization owners (admin).
+
+        Args:
+            org: Organization or user name
+            repo: Repository name
+            affiliation: "direct" (default), "outside" or "all"
+
+        Returns:
+            List of collaborator dicts, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators"
+        return self._get_all_pages(url, params={"affiliation": affiliation})
 
     def list_invitations(self, org: str, repo: str) -> list[dict[str, Any]] | None:
         """
@@ -565,7 +688,13 @@ class GitHubClient:
         resp = requests.delete(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
         return resp.status_code == 204
 
-    def add_collaborator(self, org: str, repo: str, username: str) -> requests.Response:
+    def add_collaborator(
+        self,
+        org: str,
+        repo: str,
+        username: str,
+        permission: str = "push",
+    ) -> requests.Response:
         """
         Invite (or directly add) a user as a repository collaborator.
 
@@ -577,13 +706,20 @@ class GitHubClient:
             org: Organization or user name
             repo: Repository name
             username: GitHub username to invite
+            permission: Access level to grant. Sent explicitly rather than
+                relying on GitHub's default so that an existing collaborator
+                who only has read access is upgraded to push - a team member
+                who cannot push stays invisible to the roster (see
+                RepoProvisioner._ensure_access)
 
         Returns:
             The raw requests.Response (201 = invitation created,
             204 = user already had access and was added directly)
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/collaborators/{username}"
-        return requests.put(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        return requests.put(
+            url, headers=self.headers, json={"permission": permission}, timeout=self.DEFAULT_TIMEOUT
+        )
 
     def get_job_logs(self, org: str, repo: str, job_id: int) -> str | None:
         """
@@ -594,11 +730,19 @@ class GitHubClient:
             repo: Repository name
             job_id: Job ID from check run
 
+        Сетевая ошибка здесь не должна ронять проверку: без логов не
+        извлекутся баллы и TASKID, но результат CI уже известен, поэтому
+        возвращаем None и даём проверке продолжиться (PR #42).
+
         Returns:
             Log text or None if not available
         """
         url = f"{self.BASE_URL}/repos/{org}/{repo}/actions/jobs/{job_id}/logs"
-        resp = requests.get(url, headers=self.headers)
+        try:
+            resp = requests.get(url, headers=self.headers, timeout=self.LOGS_TIMEOUT)
+        except requests.RequestException as e:
+            logger.warning(f"Could not download logs of job {job_id} in {org}/{repo}: {e}")
+            return None
 
         if resp.status_code != 200:
             return None

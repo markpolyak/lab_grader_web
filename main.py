@@ -16,7 +16,7 @@ import json
 import base64
 import logging
 from datetime import datetime
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -42,7 +42,38 @@ from grading import (
     try_start_propagate_job,
     run_propagation,
     get_propagate_job,
+    SheetContext,
+    evaluate_student,
+    taskid_column,
+    try_start_bulk_job,
+    get_bulk_job,
+    request_bulk_job_cancel,
+    run_bulk_grading,
+    TeamActionStatus,
+    TeamConfig,
+    TeamConfigError,
+    TeamInfo,
+    TeamRegistry,
+    is_team_lab,
+    parse_team_config,
+    JoinConfigError,
+    JoinWindow,
+    STATE_CLOSED,
+    STATE_NOT_OPEN,
+    STATE_OPEN,
+    check_token_collisions,
+    is_secret_lab,
+    lab_token,
+    parse_join_config,
+    parse_window,
+    resolve_token,
 )
+from grading.course_index import (
+    course_meta,
+    iter_course_configs as _iter_course_configs,
+    load_course_index as _load_course_index,
+)
+import tempfile
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -106,8 +137,23 @@ GITHUB_OAUTH_CALLBACK_URL = os.getenv("GITHUB_OAUTH_CALLBACK_URL")
 # Where to send the student's browser after the /join/callback finishes (the frontend's
 # /join/:courseId/:labId route, which renders the "after" state from the query params).
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8080")
+# Public address of the service, used to build the secret /j/{token} links the
+# admin page shows. Behind a reverse proxy request.base_url can hold the
+# container's internal address, so production should set this explicitly
+# (docs/SECRET_JOIN_LINKS_PLAN.md §9.1).
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL")
 # Max age (seconds) for the signed OAuth `state` param - see docs/REPO_GENERATION_PLAN.md §3.3.
 JOIN_STATE_MAX_AGE = 600
+
+# Таймаут прямых обращений к GitHub из main.py. Без него requests ждёт ответа
+# бесконечно: зависшее соединение держало бы воркер, а студент - открытую
+# вкладку. Обращения через GitHubClient пользуются его собственными таймаутами.
+GITHUB_REQUEST_TIMEOUT = 10
+# Student session issued by /join/callback for team labs, so that the team
+# endpoints can take the confirmed username from a signed cookie and never
+# from the request - see docs/TEAM_ASSIGNMENTS_PLAN.md §6.
+JOIN_SESSION_COOKIE = "join_session"
+JOIN_SESSION_MAX_AGE = 1800
 
 # Rate limiting configuration
 limiter = Limiter(key_func=get_remote_address)
@@ -140,16 +186,76 @@ INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
 
 def load_course_index():
     """Load and validate course index file"""
-    if not os.path.exists(INDEX_FILE):
-        raise RuntimeError(f"Course index file not found: {INDEX_FILE}")
+    return _load_course_index(INDEX_FILE)
 
-    with open(INDEX_FILE, "r", encoding="utf-8") as f:
-        index_data = yaml.safe_load(f)
+def iter_course_configs():
+    """
+    Перечислить конфигурации всех курсов индекса - единственная точка
+    перечисления на весь проект (docs/SECRET_JOIN_LINKS_PLAN.md §6, §13).
 
-    if not isinstance(index_data, dict) or "courses" not in index_data:
-        raise RuntimeError("Invalid index.yaml structure: missing 'courses' key")
+    Резолв секретной ссылки и список курсов читают конфиги через неё, поэтому
+    перенос конфигов в отдельное хранилище (БД, приватный git) потребует
+    правки одного места, а не десятка чтений с диска. Там же потом появится
+    индекс `token -> (курс, лаба)`.
 
-    return index_data
+    Само чтение файлов живёт в grading/course_index.py: тем же кодом
+    пользуется scripts/join-link.py, которому сервер целиком не нужен.
+
+    Yields:
+        (course_id, course_info) - `course_info` с заполненным `_meta`
+    """
+    yield from _iter_course_configs(COURSES_DIR, INDEX_FILE)
+
+
+def warn_about_join_links(filename: str, course_info: dict) -> None:
+    """
+    Log problems in labs' `join` sections (see warn_about_team_labs).
+
+    A malformed section is answered per request by the endpoint that names
+    the lab; here it makes it into the startup log, where the teacher sees it
+    before a student does. Public paths hide such a lab rather than guess
+    what was meant - see find_public_lab_config.
+    """
+    labs = course_info.get("labs", {})
+    if not isinstance(labs, dict):
+        return
+
+    for lab_key, lab_config in labs.items():
+        try:
+            parse_join_config(lab_config, course_info.get("timezone"))
+        except JoinConfigError as e:
+            logger.warning(f"{filename}: лаба '{lab_key}' - {e}")
+
+
+def warn_about_team_labs(filename: str, course_info: dict) -> None:
+    """
+    Log config problems of team labs that are not fatal on their own.
+
+    A malformed `team` section is reported by /join for that lab (see
+    _load_lab_for_join); here it only makes it into the startup log, together
+    with `taskid-max`, which a team lab ignores - the variant number is
+    derived from the student's position in the sheet and a team has none
+    (docs/TEAM_ASSIGNMENTS_PLAN.md §4, §10.3).
+    """
+    labs = course_info.get("labs", {})
+    if not isinstance(labs, dict):
+        return
+
+    for lab_key, lab_config in labs.items():
+        if not is_team_lab(lab_config):
+            continue
+
+        try:
+            parse_team_config(lab_config)
+        except TeamConfigError as e:
+            logger.warning(f"{filename}: лаба '{lab_key}' - {e}")
+
+        if lab_config.get("taskid-max") is not None:
+            logger.warning(
+                f"{filename}: лаба '{lab_key}' - командная, поэтому taskid-max игнорируется "
+                "(проверка варианта для командных лаб не выполняется)"
+            )
+
 
 def validate_course_index():
     """Validate that index.yaml is synchronized with course files"""
@@ -197,6 +303,8 @@ def validate_course_index():
                 if not isinstance(data, dict) or "course" not in data:
                     print(f"❌ ERROR: Invalid course structure in {entry['file']}")
                     return False
+                warn_about_team_labs(entry["file"], data["course"])
+                warn_about_join_links(entry["file"], data["course"])
         except Exception as e:
             print(f"❌ ERROR: Failed to load {entry['file']}: {e}")
             return False
@@ -228,12 +336,7 @@ def get_course_by_id(course_id: str):
 
     # Merge index metadata with course data
     course_info = course_data.get("course", {})
-    course_info["_meta"] = {
-        "status": course_entry.get("status", "active"),
-        "priority": course_entry.get("priority", 0),
-        "featured": course_entry.get("featured", False),
-        "filename": course_entry["file"]
-    }
+    course_info["_meta"] = course_meta(course_entry)
 
     return course_info
 
@@ -241,6 +344,12 @@ def get_course_by_id(course_id: str):
 print("Validating course index...")
 if not validate_course_index():
     raise RuntimeError("Course index validation failed. Please fix index.yaml before starting.")
+
+# Two secret links resolving to the same lab would be silent; three lines turn
+# that into a startup log line a teacher can fix by raising join.revision
+# (docs/SECRET_JOIN_LINKS_PLAN.md §3.1).
+for _collision in check_token_collisions(SECRET_KEY, iter_course_configs()):
+    logger.error(f"Конфликт секретных ссылок: {_collision}")
 
 # Mount static files for course logos
 LOGOS_DIR = os.path.join(COURSES_DIR, "logos")
@@ -324,44 +433,26 @@ def get_courses(request: Request, status: str = "active"):
     Args:
         status: Filter by status (active, archived, all). Default: active
     """
-    index_data = load_course_index()
     courses = []
 
-    for entry in index_data.get("courses", []):
-        course_status = entry.get("status", "active")
+    for course_id, course_info in iter_course_configs():
+        meta = course_info["_meta"]
+        course_status = meta["status"]
 
         # Filter by status
         if status != "all" and course_status != status:
             continue
 
-        # Load course file
-        file_path = os.path.join(COURSES_DIR, entry["file"])
-        if not os.path.exists(file_path):
-            print(f"Warning: Course file {entry['file']} not found, skipping")
-            continue
-
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-        except yaml.YAMLError as e:
-            print(f"Error parsing YAML in {entry['file']}: {e}")
-            continue
-
-        if not isinstance(data, dict) or "course" not in data:
-            print(f"Skipping file {entry['file']}: invalid structure")
-            continue
-
-        course_info = data["course"]
         courses.append({
-            "id": entry["id"],
+            "id": course_id,
             "name": course_info.get("name", "Unknown"),
             "university": course_info.get("university", ""),
             "semester": course_info.get("semester", "Unknown"),
-            "logo": entry.get("logo", "/assets/default.png"),  # Logo from index, not course file
+            "logo": meta["logo"],  # Logo from index, not course file
             "email": course_info.get("email", ""),
             "status": course_status,
-            "priority": entry.get("priority", 0),
-            "featured": entry.get("featured", False),
+            "priority": meta["priority"],
+            "featured": meta["featured"],
         })
 
     # Sort by priority (descending), then by name
@@ -415,6 +506,87 @@ def find_lab_config(labs: dict, lab_id: str) -> tuple[str, dict] | None:
             return numeric_key, labs[numeric_key]
 
     return None
+
+def find_visible_lab_config(
+    course_info: dict,
+    lab_id: str,
+    now: datetime | None = None,
+) -> tuple[str, dict] | None:
+    """
+    Найти лабораторную, которая уже открыта для студентов.
+
+    Обёртка над find_lab_config, которая пропускает:
+      - лабы, не достигшие `join.opens-at` (у секретной лабы отсутствие
+        `opens-at` тоже означает «ещё не открыта», см. JoinWindow);
+      - лабы с неразбираемой секцией `join` - конфигурация сломана, и
+        безопаснее спрятать работу, чем гадать, что имелось в виду (ошибка
+        при этом попадает в лог при старте, см. warn_about_join_links).
+
+    После `closes-at` лаба остаётся видимой: работы сдают как раз после
+    окончания контрольной, закрывается только выдача репозиториев.
+
+    Вызывающий обязан ответить на None ровно так же, как на несуществующую
+    лабу: одинаковый код и одинаковое тело ответа. Иначе публичный эндпоинт
+    становится оракулом, подтверждающим существование контрольной, ради
+    устранения которого секретные ссылки и сделаны
+    (docs/SECRET_JOIN_LINKS_PLAN.md §5, §7.2).
+
+    Админские пути, /j/{token} и массовая проверка продолжают пользоваться
+    прямым find_lab_config: окно на них не распространяется.
+
+    Returns:
+        (ключ в конфиге, конфиг лабы) или None
+    """
+    resolved = find_lab_config(course_info.get("labs", {}), lab_id)
+    if not resolved:
+        return None
+
+    lab_key, lab_config = resolved
+    try:
+        window = parse_window(lab_config, course_info.get("timezone"))
+    except JoinConfigError as e:
+        logger.warning(f"Лаба '{lab_key}' скрыта из публичных путей: {e}")
+        return None
+
+    if not window.is_visible(now):
+        return None
+
+    return lab_key, lab_config
+
+
+def find_public_lab_config(
+    course_info: dict,
+    lab_id: str,
+    now: datetime | None = None,
+) -> tuple[str, dict] | None:
+    """
+    То же, что find_visible_lab_config, но дополнительно прячет лабы с
+    `join.link: secret`.
+
+    Разница нужна ровно в одном месте: адрес `/join/{курс}/{лаба}` для
+    секретной лабы не работает НИКОГДА, а список работ и самостоятельная
+    проверка после открытия работают - иначе студент не сдал бы контрольную
+    (§5 плана).
+    """
+    resolved = find_visible_lab_config(course_info, lab_id, now)
+    if resolved is None or is_secret_lab(resolved[1]):
+        return None
+    return resolved
+
+
+def visible_labs(course_info: dict, now: datetime | None = None) -> list[dict]:
+    """Конфиги лаб курса, открытых студенту сейчас (см. find_visible_lab_config)."""
+    labs = course_info.get("labs", {})
+    if not isinstance(labs, dict):
+        return []
+
+    visible = []
+    for lab_key in labs:
+        resolved = find_visible_lab_config(course_info, str(lab_key), now)
+        if resolved is not None:
+            visible.append(resolved[1])
+    return visible
+
 
 @app.get("/courses/{course_id}")
 @limiter.limit("100/minute")
@@ -482,6 +654,84 @@ def edit_course_get(request: Request, course_id: str, admin: str = Depends(requi
     return {"filename": filename, "content": content}
 
 
+def _labs_of(course_data) -> dict:
+    """Секция labs разобранного YAML курса, или пустой словарь."""
+    if not isinstance(course_data, dict):
+        return {}
+    course = course_data.get("course")
+    if not isinstance(course, dict):
+        return {}
+    labs = course.get("labs")
+    return labs if isinstance(labs, dict) else {}
+
+
+def _validate_join_sections(new_data, old_data) -> None:
+    """
+    Проверить секции `join` сохраняемого конфига (§7.2 плана).
+
+    Файл читается на каждый запрос и не кэшируется, поэтому сохранение с
+    испорченной секцией `join` ломает /j/{token} немедленно и до следующей
+    правки - проверять надо до записи, а не при старте.
+
+    Отдельно запрещается уменьшать `join.revision`: это воскресило бы уже
+    отозванную ссылку. Когда конфиги переедут в версионируемое хранилище,
+    та же проверка понадобится и восстановлению версии (§13).
+
+    Raises:
+        HTTPException(400): секция не разбирается или ревизия уменьшена
+    """
+    new_course = new_data.get("course") if isinstance(new_data, dict) else None
+    timezone_str = new_course.get("timezone") if isinstance(new_course, dict) else None
+
+    old_labs = _labs_of(old_data)
+
+    for lab_key, lab_config in _labs_of(new_data).items():
+        try:
+            settings = parse_join_config(lab_config, timezone_str)
+        except JoinConfigError as e:
+            raise HTTPException(status_code=400, detail=f"Лаба '{lab_key}': {e}")
+
+        try:
+            old_settings = parse_join_config(old_labs.get(str(lab_key)) or old_labs.get(lab_key))
+        except JoinConfigError:
+            # Прежний конфиг сам был испорчен - сравнивать не с чем,
+            # сохранение исправленной версии блокировать нельзя.
+            continue
+
+        if settings.revision < old_settings.revision:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Лаба '{lab_key}': join.revision нельзя уменьшать "
+                    f"({old_settings.revision} -> {settings.revision}) - это вернуло бы к жизни "
+                    "уже отозванную ссылку"
+                ),
+            )
+
+
+def _write_file_atomically(file_path: str, content: str) -> None:
+    """
+    Записать файл целиком или не записать вовсе.
+
+    Прежняя запись усечением оставляла обрезанный YAML, если процесс умирал
+    посреди неё; во время идущей контрольной это ломает ссылку сразу.
+    Временный файл создаётся рядом с целевым, чтобы os.replace был
+    атомарным переименованием в пределах одной файловой системы.
+    """
+    directory = os.path.dirname(os.path.abspath(file_path))
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".course-", suffix=".yaml.tmp")
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_file:
+            tmp_file.write(content)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, file_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+
 @app.put("/courses/{course_id}/edit")
 @limiter.limit("20/minute")
 def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, admin: str = Depends(require_admin)):
@@ -492,12 +742,19 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
     file_path = os.path.join(COURSES_DIR, filename)
 
     try:
-        yaml.safe_load(data.content)
+        new_data = yaml.safe_load(data.content)
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка в YAML формате: {str(e)}")
 
-    with open(file_path, "w", encoding="utf-8") as file:
-        file.write(data.content)
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            old_data = yaml.safe_load(file.read())
+    except (OSError, yaml.YAMLError):
+        old_data = None
+
+    _validate_join_sections(new_data, old_data)
+
+    _write_file_atomically(file_path, data.content)
 
     return {"message": "Изменения успешно сохранены"}
 
@@ -531,7 +788,9 @@ def get_course_groups(request: Request, course_id: str):
 def get_course_labs(request: Request, course_id: str, group_id: str):
     course_info = get_course_by_id(course_id)
     spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
-    labs = [lab["short-name"] for lab in course_info.get("labs", {}).values() if "short-name" in lab]
+    # Работа, не достигшая join.opens-at, в список не попадает: до публикации
+    # её не должно быть видно даже по названию столбца (§5, §7.2 плана).
+    labs = [lab["short-name"] for lab in visible_labs(course_info) if "short-name" in lab]
 
     if not spreadsheet_id or not labs:
         raise HTTPException(status_code=400, detail="Missing spreadsheet ID or labs in config")
@@ -616,7 +875,9 @@ def register_student(request: Request, course_id: str, group_id: str, student: S
             raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден в таблице")
 
         try:
-            github_response = requests.get(f"https://api.github.com/users/{student.github}")
+            github_response = requests.get(
+                f"https://api.github.com/users/{student.github}", timeout=GITHUB_REQUEST_TIMEOUT
+            )
             if github_response.status_code != 200:
                 logger.warning(f"GitHub user '{student.github}' not found (status: {github_response.status_code})")
                 raise HTTPException(status_code=404, detail="Пользователь GitHub не найден")
@@ -662,8 +923,9 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
     """
     Grade a lab submission by checking GitHub repository and CI status.
 
-    Uses the LabGrader orchestrator for GitHub checks and CI evaluation,
-    then updates the grade in Google Sheets.
+    The grading decision itself lives in grading.bulk.evaluate_student, shared
+    with the bulk admin run; this endpoint supplies the spreadsheet context and
+    translates the outcome into an HTTP response.
 
     Flow (preserves original behavior):
     1. GitHub checks (files, workflows, commits, forbidden mods)
@@ -679,12 +941,19 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         org = course_info.get("github", {}).get("organization")
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
 
-        labs = course_info.get("labs", {})
         # lab_id приходит из интерфейса как short-name ("ЛР0.1"), а из прочих
         # вызовов - как ключ конфига. Разбор по числу выбирал не ту лабу,
         # см. find_lab_config.
-        resolved = find_lab_config(labs, lab_id)
-        lab_key, lab_config_dict = resolved if resolved else (None, {})
+        #
+        # Лаба, не достигшая join.opens-at, отвечает здесь тем же, чем и
+        # несуществующая: публичная проверка не должна подтверждать, что
+        # контрольная существует (§5 плана). Массовая проверка из админки
+        # окном не ограничена и резолвит лабу напрямую.
+        resolved = find_visible_lab_config(course_info, lab_id)
+        if not resolved:
+            logger.info(f"Lab '{lab_id}' is not available in course {course_id}")
+            raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
+        lab_key, lab_config_dict = resolved
         repo_prefix = lab_config_dict.get("github-prefix")
 
         logger.debug(f"Looking for lab config by '{lab_id}', resolved key: {lab_key!r}, found: {bool(lab_config_dict)}")
@@ -698,203 +967,178 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         grader = LabGrader(github_client)
 
         username = grade_request.github
-        repo_name = f"{repo_prefix}-{username}"
-        logger.info(f"Checking repository: {org}/{repo_name}")
 
-        # Step 1: Check repository (required files, workflows, commits)
-        repo_error = grader.check_repository(org, repo_name, lab_config_dict)
-        if repo_error:
-            logger.warning(f"Repository check failed: {repo_error.message}")
-            # Use 404 for "no commits" to match original behavior
-            status_code = 404 if repo_error.error_code == "NO_COMMITS" else 400
-            raise HTTPException(status_code=status_code, detail=repo_error.message)
+        # Where the grade goes once evaluate_student produces one. Filled in by
+        # load_sheet_context(), which only runs if we get that far.
+        target: dict = {}
 
-        # Step 2: Check forbidden file modifications
-        forbidden_error = grader.check_forbidden_files(org, repo_name, lab_config_dict)
-        if forbidden_error:
-            logger.warning(f"Forbidden modification: {forbidden_error.message}")
-            raise HTTPException(status_code=403, detail=forbidden_error.message)
+        def load_sheet_context() -> SheetContext:
+            """Open the group's sheet and read everything the grading needs from it."""
+            logger.info(f"Connecting to Google Sheets for group {group_id}")
+            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+            creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+            sheets_client = gspread.authorize(creds)
 
-        # Step 3: Evaluate CI results
-        ci_evaluation = grader._evaluate_ci_internal(org, repo_name, lab_config_dict)
+            try:
+                spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+                sheet = spreadsheet.worksheet(group_id)
+                logger.info(f"Successfully opened worksheet '{group_id}'")
+            except Exception as e:
+                logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
+                raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
 
-        # Return early for errors (no Sheets needed)
-        if ci_evaluation.grade_result.status == GradeStatus.ERROR:
-            logger.warning(f"CI error: {ci_evaluation.grade_result.message}")
-            raise HTTPException(status_code=400, detail=ci_evaluation.grade_result.message)
+            # Get decimal separator from spreadsheet locale
+            decimal_separator = get_decimal_separator(spreadsheet)
+            logger.info(f"Using decimal separator: '{decimal_separator}'")
 
-        # Return early for pending (no Sheets needed)
-        if ci_evaluation.grade_result.status == GradeStatus.PENDING:
-            logger.info(f"CI pending: {ci_evaluation.grade_result.message}")
-            return {
-                "status": "pending",
-                "message": ci_evaluation.grade_result.message,
-                "passed": ci_evaluation.grade_result.passed,
-                "checks": ci_evaluation.grade_result.checks
-            }
+            # Find GitHub column and student row
+            header_row = sheet.row_values(1)
+            try:
+                github_col_idx = header_row.index("GitHub") + 1
+            except ValueError:
+                logger.error(f"'GitHub' column not found in spreadsheet headers")
+                raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден")
 
-        # CI evaluation complete - now connect to Sheets for writing result
-        logger.info(f"Connecting to Google Sheets for group {group_id}")
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-        sheets_client = gspread.authorize(creds)
+            github_values = sheet.col_values(github_col_idx)[2:]
+            row_idx = find_student_row(github_values, username)
 
-        try:
-            spreadsheet = sheets_client.open_by_key(spreadsheet_id)
-            sheet = spreadsheet.worksheet(group_id)
-            logger.info(f"Successfully opened worksheet '{group_id}'")
-        except Exception as e:
-            logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
-            raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
+            if row_idx is None:
+                logger.warning(f"GitHub username '{username}' not found in spreadsheet for group {group_id}")
+                raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
 
-        # Get decimal separator from spreadsheet locale
-        decimal_separator = get_decimal_separator(spreadsheet)
-        logger.info(f"Using decimal separator: '{decimal_separator}'")
-
-        # Find GitHub column and student row
-        header_row = sheet.row_values(1)
-        try:
-            github_col_idx = header_row.index("GitHub") + 1
-        except ValueError:
-            logger.error(f"'GitHub' column not found in spreadsheet headers")
-            raise HTTPException(status_code=400, detail="Столбец 'GitHub' не найден")
-
-        github_values = sheet.col_values(github_col_idx)[2:]
-        row_idx = find_student_row(github_values, username)
-
-        if row_idx is None:
-            logger.warning(f"GitHub username '{username}' not found in spreadsheet for group {group_id}")
-            raise HTTPException(status_code=404, detail="GitHub логин не найден в таблице. Зарегистрируйтесь.")
-
-        # Find lab column
-        lab_short_name = lab_config_dict.get("short-name")
-        if lab_short_name:
-            lab_col = find_lab_column_by_name(sheet, lab_short_name)
-            if lab_col:
-                logger.info(f"Found lab column '{lab_short_name}' at column {lab_col}")
+            # Find lab column
+            lab_short_name = lab_config_dict.get("short-name")
+            if lab_short_name:
+                lab_col = find_lab_column_by_name(sheet, lab_short_name)
+                if lab_col:
+                    logger.info(f"Found lab column '{lab_short_name}' at column {lab_col}")
+                else:
+                    logger.error(f"Lab column '{lab_short_name}' not found in spreadsheet")
+                    raise HTTPException(status_code=400, detail=f"Столбец '{lab_short_name}' не найден в таблице")
             else:
-                logger.error(f"Lab column '{lab_short_name}' not found in spreadsheet")
-                raise HTTPException(status_code=400, detail=f"Столбец '{lab_short_name}' не найден в таблице")
-        else:
-            logger.warning(f"Lab config for '{lab_id}' is missing 'short-name', using offset calculation")
-            lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
-            # Номер берём из ключа конфига: строка клиента может быть short-name.
-            lab_number = parse_lab_id(lab_key or lab_id)
-            lab_col = calculate_lab_column(lab_number, lab_offset)
-            logger.info(f"Calculated lab column using offset: {lab_offset} + {lab_number} = {lab_col}")
+                logger.warning(f"Lab config for '{lab_id}' is missing 'short-name', using offset calculation")
+                lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
+                # Номер берём из ключа конфига: строка клиента может быть short-name.
+                lab_number = parse_lab_id(lab_key or lab_id)
+                lab_col = calculate_lab_column(lab_number, lab_offset)
+                logger.info(f"Calculated lab column using offset: {lab_offset} + {lab_number} = {lab_col}")
 
-        # Get current cell value for protection check
-        current_value = sheet.cell(row_idx, lab_col).value or ""
-        logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
+            # Get current cell value for protection check
+            current_value = sheet.cell(row_idx, lab_col).value or ""
+            logger.info(f"Current cell value at row {row_idx}, column {lab_col}: '{current_value}'")
 
-        # Determine final grade
-        final_result = ci_evaluation.grade_result.result  # "v" or "x"
-        final_message = ci_evaluation.grade_result.message
-        score_value = ci_evaluation.score  # Extracted score from logs (if any)
-
-        # Additional checks only if CI passed
-        if ci_evaluation.ci_passed:
-            # Check TASKID if configured
-            task_id_column_config = course_info.get("google", {}).get("task-id-column")
-            taskid_max = lab_config_dict.get("taskid-max")
-            ignore_taskid = lab_config_dict.get("ignore-task-id", False)
-
-            if task_id_column_config is not None and taskid_max is not None and not ignore_taskid:
-                task_id_column = task_id_column_config + 1
+            # Student order is only read when the TASKID check applies to this lab
+            student_order = None
+            task_id_column = taskid_column(course_info, lab_config_dict)
+            if task_id_column is not None:
                 student_order = get_student_order(sheet, row_idx, task_id_column)
 
-                if student_order is not None:
-                    taskid_shift = lab_config_dict.get("taskid-shift", 0)
-                    expected_taskid = calculate_expected_taskid(student_order, taskid_shift, taskid_max)
-                    logger.info(f"Expected TASKID: {expected_taskid} (order={student_order}, shift={taskid_shift}, max={taskid_max})")
-
-                    taskid_error = grader.check_taskid(
-                        org, repo_name,
-                        ci_evaluation.successful_runs,
-                        expected_taskid,
-                    )
-                    if taskid_error:
-                        logger.warning(f"TASKID error: {taskid_error.message}")
-                        raise HTTPException(status_code=400, detail=taskid_error.message)
-
-            # Calculate penalty if deadline configured
-            # Get timezone from course config to apply to deadline from sheet
+            # Deadline for penalty calculation, in the course timezone
             timezone_str = course_info.get("timezone")
             deadline = get_deadline_from_sheet(sheet, lab_col, deadline_row=1, timezone_str=timezone_str)
-            penalty = 0
-            if deadline and ci_evaluation.latest_success_time:
-                from grading.penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
-                penalty_max = lab_config_dict.get("penalty-max", 0)
-                strategy_name = lab_config_dict.get("penalty-strategy", "weekly")
-                try:
-                    strategy = PenaltyStrategy(strategy_name)
-                except ValueError:
-                    strategy = PenaltyStrategy.WEEKLY
 
-                penalty = calculate_penalty(
-                    completed_at=ci_evaluation.latest_success_time,
-                    deadline=deadline,
-                    penalty_max=penalty_max,
-                    strategy=strategy,
+            target["sheet"] = sheet
+            target["row"] = row_idx
+            target["col"] = lab_col
+
+            return SheetContext(
+                current_cell_value=current_value,
+                student_order=student_order,
+                deadline=deadline,
+                decimal_separator=decimal_separator,
+            )
+
+        # A team lab has one repository per team, not per student: find the
+        # student's team and grade that repository, writing the result only
+        # into this student's own row (docs/TEAM_ASSIGNMENTS_PLAN.md §10.2).
+        team_repo_name = None
+        if is_team_lab(lab_config_dict):
+            registry = TeamRegistry(github_client)
+            teams = registry.list_teams(
+                org, repo_prefix, _course_teachers(course_info)
+            )
+            if teams is None:
+                raise HTTPException(
+                    status_code=502,
+                    detail="Не удалось получить список команд с GitHub. Попробуйте ещё раз позже",
                 )
+            team = registry.find_member_team(teams, username)
+            if team is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Вы ещё не состоите в команде для этой лабораторной работы",
+                )
+            team_repo_name = team.repo_name
+            logger.info(f"Grading team repository {org}/{team_repo_name} for '{username}'")
 
-                if penalty > 0:
-                    logger.info(f"Calculated penalty: {penalty}")
+        outcome = evaluate_student(
+            grader, org, username, lab_config_dict, course_info, load_sheet_context,
+            repo_name=team_repo_name,
+        )
 
-            # Format final result with score and penalty
-            if score_value is not None:
-                # Format grade with score (and penalty if present)
-                final_result = format_grade_with_score("v", score_value, penalty, decimal_separator)
-                logger.info(f"Formatted grade with score: {final_result}")
+        if outcome.status == "error":
+            # Use 404 for "no commits" and 403 for forbidden edits, as before
+            if outcome.error_code == "NO_COMMITS":
+                status_code = 404
+            elif outcome.error_code == "FORBIDDEN_MODIFICATION":
+                status_code = 403
+            else:
+                status_code = 400
+            raise HTTPException(status_code=status_code, detail=outcome.message)
 
-                # Build message
-                formatted_score = format_score(score_value, decimal_separator)
-                if penalty > 0:
-                    final_message = f"Результат CI: ✅ Все проверки пройдены (Баллы: {formatted_score}, штраф: -{penalty})"
-                else:
-                    final_message = f"Результат CI: ✅ Все проверки пройдены (Баллы: {formatted_score})"
-            elif penalty > 0:
-                # No score, but penalty exists
-                from grading.penalty import format_grade_with_penalty
-                final_result = format_grade_with_penalty("v", penalty)
-                final_message = f"Результат CI: ✅ Все проверки пройдены (штраф: -{penalty})"
-                logger.info(f"Applied penalty {penalty} for late submission: {final_result}")
+        if outcome.status == "pending":
+            return {
+                "status": "pending",
+                "message": outcome.message,
+                "passed": outcome.passed,
+                "checks": outcome.checks
+            }
 
-        # Check cell protection
-        if not can_overwrite_cell(current_value):
-            logger.warning(f"Update rejected: cell already contains '{current_value}'")
+        if outcome.status == "rejected":
             response = {
                 "status": "rejected",
-                "result": current_value,
-                "message": "⚠️ Работа уже была проверена ранее. Обратитесь к преподавателю для пересдачи.",
-                "passed": ci_evaluation.grade_result.passed,
-                "checks": ci_evaluation.grade_result.checks,
-                "current_grade": current_value
+                "result": outcome.current_grade,
+                "message": outcome.message,
+                "passed": outcome.passed,
+                "checks": outcome.checks,
+                "current_grade": outcome.current_grade
             }
-            if score_value is not None:
-                response["score"] = format_score(score_value, decimal_separator)
+            if outcome.score is not None:
+                response["score"] = outcome.score
             return response
 
         # Update Google Sheets with new grade
-        logger.info(f"Updating cell at row {row_idx}, column {lab_col} with result '{final_result}'")
-        sheet.update_cell(row_idx, lab_col, final_result)
+        logger.info(f"Updating cell at row {target['row']}, column {target['col']} with result '{outcome.cell_value}'")
+        target["sheet"].update_cell(target["row"], target["col"], outcome.cell_value)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
 
         response = {
             "status": "updated",
-            "result": final_result,
-            "message": final_message,
-            "passed": ci_evaluation.grade_result.passed,
-            "checks": ci_evaluation.grade_result.checks
+            "result": outcome.cell_value,
+            "message": outcome.message,
+            "passed": outcome.passed,
+            "checks": outcome.checks
         }
-        if score_value is not None:
-            response["score"] = format_score(score_value, decimal_separator)
+        if outcome.score is not None:
+            response["score"] = outcome.score
         return response
     except HTTPException:
         raise
+    except requests.RequestException as e:
+        # Таймаут или обрыв связи с GitHub - не внутренняя ошибка сервиса:
+        # студенту нужно предложить повторить, а не "Внутреннюю ошибку".
+        logger.error(
+            f"GitHub API request failed while grading {grade_request.github} "
+            f"in {course_id}/{lab_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=502,
+            detail="GitHub не ответил вовремя. Попробуйте запустить проверку ещё раз",
+        )
     except Exception as e:
         logger.exception(f"Unexpected error during grading: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
+
 
 
 # ---------------------------------------------------------------------------
@@ -908,25 +1152,48 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
 REPO_PROVISIONING_MODES = {"template", "fork"}
 
 
-def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
+def _load_lab_for_join(
+    course_id: str,
+    lab_id: str,
+    public: bool = True,
+) -> tuple[dict, str, dict, str, TeamConfig | None]:
     """
     Load course/lab config needed by the /join flow.
 
+    Args:
+        public: resolve the lab the way a student without a secret link sees
+            it - a lab with `join.link: secret` and a lab that has not
+            reached `join.opens-at` are then indistinguishable from a lab
+            that does not exist (same 404, same body). Callers that already
+            hold the secret (the /j/{token} endpoints and the OAuth callback,
+            which reads the lab out of a signed `state`) pass False and check
+            the window themselves.
+
     Returns:
-        (course_info, lab_config, github_organization)
+        (course_info, lab_key, lab_config, github_organization, team_config).
+        `lab_key` is the lab's canonical key in the course YAML: one lab is
+        reachable through several spellings of lab_id ("5", "05", "ЛР5"), and
+        anything that keys shared state by lab must use this value rather than
+        the raw path segment. team_config is None for an individual lab and a
+        TeamConfig for a team one (docs/TEAM_ASSIGNMENTS_PLAN.md §4).
 
     Raises:
         HTTPException: 404 for unknown course/lab, 400 if the lab has no
         `template-repo` configured, has an unrecognized `repo-provisioning`
-        value, or the course has no GitHub organization.
+        value, has a malformed `team` section, or the course has no GitHub
+        organization.
     """
     course_info = get_course_by_id(course_id)  # raises 404 if course unknown
 
     labs = course_info.get("labs", {})
-    resolved = find_lab_config(labs, lab_id)
+    resolved = (
+        find_public_lab_config(course_info, lab_id)
+        if public
+        else find_lab_config(labs, lab_id)
+    )
     if not resolved:
         raise HTTPException(status_code=404, detail="Лабораторная работа не найдена")
-    _lab_key, lab_config = resolved
+    lab_key, lab_config = resolved
 
     template_repo = lab_config.get("template-repo")
     if not template_repo:
@@ -945,11 +1212,18 @@ def _load_lab_for_join(course_id: str, lab_id: str) -> tuple[dict, dict, str]:
             ),
         )
 
+    try:
+        team_config = parse_team_config(lab_config)
+    except TeamConfigError as e:
+        # Same treatment as an unknown repo-provisioning value: a config
+        # mistake answers with a clear 400, never a 500.
+        raise HTTPException(status_code=400, detail=f"Некорректная настройка команд: {e}")
+
     org = course_info.get("github", {}).get("organization")
     if not org:
         raise HTTPException(status_code=400, detail="Для курса не настроена GitHub организация")
 
-    return course_info, lab_config, org
+    return course_info, lab_key, lab_config, org, team_config
 
 
 def _oauth_redirect_uri(request: Request) -> str:
@@ -991,11 +1265,119 @@ def _parse_join_state(state: str | None) -> dict:
     return payload
 
 
+def _build_join_session(username: str, course_id: str, lab_id: str) -> str:
+    """
+    Build the signed value of the `join_session` cookie.
+
+    An individual lab finishes inside the OAuth callback, but a team lab needs
+    a dialogue (show the teams, wait for the choice), so the confirmed
+    username is carried in a short-lived session instead
+    (docs/TEAM_ASSIGNMENTS_PLAN.md §6). Same signer and encoding as
+    _build_join_state.
+    """
+    payload = json.dumps({
+        "username": username,
+        "course_id": course_id,
+        "lab_id": lab_id,
+    }).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload).decode("ascii")
+    return signer.sign(payload_b64.encode("ascii")).decode("ascii")
+
+
+def _parse_join_session(cookie: str | None) -> dict | None:
+    """
+    Verify and decode a `join_session` cookie.
+
+    Returns:
+        The payload, or None if the cookie is missing, forged or expired
+    """
+    if not cookie:
+        return None
+    try:
+        payload_b64 = signer.unsign(cookie, max_age=JOIN_SESSION_MAX_AGE).decode("ascii")
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+    except (BadSignature, ValueError, TypeError, KeyError):
+        return None
+
+    if not isinstance(payload, dict) or not payload.get("username"):
+        return None
+    return payload
+
+
+def _set_join_session_cookie(response: Response, username: str, course_id: str, lab_id: str) -> None:
+    """Attach the `join_session` cookie to a response (§6 of the plan)."""
+    response.set_cookie(
+        key=JOIN_SESSION_COOKIE,
+        value=_build_join_session(username, course_id, lab_id),
+        httponly=True,
+        samesite="lax",
+        max_age=JOIN_SESSION_MAX_AGE,
+        path="/join",
+        secure=False,
+    )
+
+
+def require_join_session(request: Request, course_id: str, lab_id: str) -> str:
+    """
+    The confirmed GitHub username of the student behind a team request.
+
+    The username comes from this cookie and from nowhere else - never from the
+    request body, a query parameter or the path. That is the same requirement
+    as §3.2 of docs/REPO_GENERATION_PLAN.md: an identity is only ever
+    established by the server-side `code -> access_token -> GET /user`
+    exchange. Accepting a username from the request would hand out access to a
+    private repository under someone else's login.
+
+    The course and lab in the cookie must match the ones in the path, so a
+    session obtained for one lab cannot act on another.
+
+    Raises:
+        HTTPException(401): with the stable code SESSION_REQUIRED
+    """
+    payload = _parse_join_session(request.cookies.get(JOIN_SESSION_COOKIE))
+    if payload is None:
+        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
+
+    if payload.get("course_id") != course_id or payload.get("lab_id") != lab_id:
+        logger.warning(
+            "join_session for %s/%s presented for %s/%s",
+            payload.get("course_id"), payload.get("lab_id"), course_id, lab_id,
+        )
+        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
+
+    return payload["username"]
+
+
 def _join_result_redirect(course_id: str, lab_id: str, status: str, **extra) -> str:
     """Build the frontend result URL (/join/:courseId/:labId) the student's browser lands on."""
     params = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
     base = FRONTEND_URL.rstrip("/")
     return f"{base}/join/{course_id}/{lab_id}?{urlencode(params)}"
+
+
+def _secret_join_result_redirect(token: str, status: str, **extra) -> str:
+    """
+    Same, for a lab reached through a secret link: the student must land back
+    on /j/{token} and never on /join/{course}/{lab}, which for such a lab is
+    indistinguishable from a lab that does not exist.
+    """
+    params = {"status": status, **{k: v for k, v in extra.items() if v is not None}}
+    return f"{FRONTEND_URL.rstrip('/')}/j/{token}?{urlencode(params)}"
+
+
+def _result_redirect_for(
+    course_id: str,
+    lab_id: str,
+    lab_key: str,
+    lab_config: dict,
+    status: str,
+    **extra,
+) -> str:
+    """Result URL for either kind of lab - the token is recomputed, never carried in `state`."""
+    if is_secret_lab(lab_config):
+        token = lab_token(SECRET_KEY, course_id, lab_key, lab_config)
+        return _secret_join_result_redirect(token, status, **extra)
+    return _join_result_redirect(course_id, lab_id, status, **extra)
 
 
 def _join_error_redirect(reason: str) -> str:
@@ -1064,16 +1446,191 @@ def _exchange_code_for_username(code: str, redirect_uri: str) -> str | None:
     return username
 
 
+# ---------------------------------------------------------------------------
+# /j/{token}: the same flow behind a secret, unguessable link.
+# See docs/SECRET_JOIN_LINKS_PLAN.md. The prefix is deliberately not /join/:
+# /join/{token} would collide with /join/{course_id}/{lab_id} and
+# /join/callback.
+# ---------------------------------------------------------------------------
+
+# Никакой ответ по секретной ссылке не должен утащить токен в заголовке
+# Referer при переходе на github.com (§10 плана). Заголовок ставится и на
+# ответы backend, и на саму страницу фронтенда (index.html).
+NO_REFERRER_HEADERS = {"Referrer-Policy": "no-referrer"}
+
+
+def _join_error(status_code: int, code: str, **extra) -> JSONResponse:
+    """
+    Стабильный код ошибки секретной ссылки (§7.3 плана) - фронтенд переводит
+    его сам, как и коды провижининга.
+    """
+    # `None` остаётся в теле намеренно: у секретной лабы без opens-at времени
+    # открытия нет, и фронтенду нужно отличать «времени нет» от «поля нет».
+    return JSONResponse(
+        status_code=status_code,
+        content={"detail": code, **extra},
+        headers=NO_REFERRER_HEADERS,
+    )
+
+
+def _iso(moment: datetime | None) -> str | None:
+    return moment.isoformat() if moment is not None else None
+
+
+def _load_lab_by_token(token: str) -> tuple[str, dict, str, dict]:
+    """
+    Найти лабораторную по токену секретной ссылки.
+
+    Returns:
+        (course_id, course_info, lab_key, lab_config)
+
+    Raises:
+        HTTPException(404): токен не совпал ни с одной лабой - испорчен,
+        отозван увеличением revision или просто ничей. Все три случая
+        отвечают одинаково: различать их снаружи нельзя.
+    """
+    resolved = resolve_token(SECRET_KEY, token, iter_course_configs())
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="LINK_NOT_FOUND")
+
+    course_id, lab_key = resolved
+    course_info = get_course_by_id(course_id)
+    labs = course_info.get("labs", {})
+    lab_config = labs.get(lab_key)
+    if not isinstance(lab_config, dict):
+        # iter_secret_labs приводит ключ к строке, а незакавыченный ключ в
+        # YAML разбирается в число - сверяем по строковому представлению.
+        lab_config = next(
+            (cfg for key, cfg in labs.items() if str(key) == lab_key and isinstance(cfg, dict)),
+            None,
+        )
+    if not isinstance(lab_config, dict):
+        # Конфиг изменился между перечислением и чтением курса.
+        raise HTTPException(status_code=404, detail="LINK_NOT_FOUND")
+
+    # Токен в лог не пишется - только курс и ключ лабы.
+    logger.info(f"Secret join link resolved to {course_id}/{lab_key}")
+    return course_id, course_info, lab_key, lab_config
+
+
+def _lab_window(course_info: dict, lab_config: dict) -> JoinWindow:
+    """
+    Окно доступности лабы.
+
+    Raises:
+        HTTPException(400): секция join не разбирается - это ошибка
+        конфигурации, а не 500
+    """
+    try:
+        return parse_window(lab_config, course_info.get("timezone"))
+    except JoinConfigError as e:
+        logger.error(f"Некорректная секция join: {e}")
+        raise HTTPException(status_code=400, detail="LAB_MISCONFIGURED")
+
+
+@app.get("/j/{token}")
+@limiter.limit("120/minute")
+def secret_join_info(request: Request, token: str):
+    """
+    Публичная информация для лендинга секретной ссылки.
+
+    Лимит намеренно высокий: в момент открытия контрольной вся группа
+    заходит сюда одновременно, а за обратным прокси без --proxy-headers все
+    30 студентов делят одну корзину (§11 плана). Перебор токена
+    ограничивается не этим лимитом, а его длиной - 50 бит.
+    """
+    try:
+        course_id, course_info, lab_key, lab_config = _load_lab_by_token(token)
+    except HTTPException as e:
+        return _join_error(e.status_code, str(e.detail))
+
+    try:
+        window = _lab_window(course_info, lab_config)
+    except HTTPException as e:
+        return _join_error(e.status_code, str(e.detail))
+
+    state = window.state()
+    if state == STATE_NOT_OPEN:
+        # До публикации ссылка не раскрывает даже названия работы.
+        return _join_error(403, "JOIN_NOT_OPEN", opens_at=_iso(window.opens_at))
+
+    return JSONResponse(
+        content={
+            "token": token,
+            "course_name": course_info.get("name", "Unknown"),
+            "lab_short_name": lab_config.get("short-name", lab_key),
+            "join_state": state,
+            "opens_at": _iso(window.opens_at),
+            "closes_at": _iso(window.closes_at),
+        },
+        headers=NO_REFERRER_HEADERS,
+    )
+
+
+@app.get("/j/{token}/start")
+@limiter.limit("20/minute")
+def secret_join_start(request: Request, token: str):
+    """
+    Начинает GitHub OAuth для секретной ссылки.
+
+    После closes-at вход остаётся открытым: новый репозиторий не создастся,
+    но студент с уже созданным чинит по этой же ссылке доступ (§8 плана).
+    """
+    try:
+        course_id, course_info, lab_key, lab_config = _load_lab_by_token(token)
+        window = _lab_window(course_info, lab_config)
+    except HTTPException as e:
+        return _join_error(e.status_code, str(e.detail))
+
+    if window.state() == STATE_NOT_OPEN:
+        return _join_error(403, "JOIN_NOT_OPEN", opens_at=_iso(window.opens_at))
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        return _join_error(503, "OAUTH_NOT_CONFIGURED")
+
+    # В state кладётся канонический ключ лабы, а не токен: колбэк вычислит
+    # токен заново из конфига (§7.1 плана).
+    params = {
+        "client_id": GITHUB_OAUTH_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri(request),
+        "scope": "read:user",
+        "state": _build_join_state(course_id, lab_key),
+    }
+    logger.info(f"Redirecting to GitHub OAuth for secret join {course_id}/{lab_key}")
+    return RedirectResponse(
+        url=f"https://github.com/login/oauth/authorize?{urlencode(params)}",
+        headers=NO_REFERRER_HEADERS,
+    )
+
+
 @app.get("/join/{course_id}/{lab_id}")
 @limiter.limit("30/minute")
 def join_lab_info(request: Request, course_id: str, lab_id: str):
     """Публичная информация для лендинга страницы присоединения к лабе (без аутентификации)."""
-    course_info, lab_config, _org = _load_lab_for_join(course_id, lab_id)
+    course_info, _lab_key, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
+
+    teams_count = None
+    if team_config is not None:
+        # Read from the cache only, never fetching: this endpoint is public
+        # and unauthenticated, and the count is decorative - the authenticated
+        # /teams endpoint below is what actually collects the teams (§8.1).
+        cached = _team_registry().cached_teams(org, lab_config.get("github-prefix", ""))
+        teams_count = len(cached) if cached is not None else None
+
     return {
         "course_id": course_id,
         "lab_id": lab_id,
         "course_name": course_info.get("name", "Unknown"),
         "lab_short_name": lab_config.get("short-name", lab_id),
+        # Rosters are deliberately absent - this endpoint is public. Only the
+        # fact that the lab is a team one, and its limits.
+        "team": {
+            "enabled": team_config is not None,
+            "size_max": team_config.size_max if team_config else None,
+            "count_max": team_config.count_max if team_config else None,
+            "teams_count": teams_count,
+        },
     }
 
 
@@ -1128,43 +1685,303 @@ def join_callback(
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="missing_code"))
 
     try:
-        course_info, lab_config, org = _load_lab_for_join(course_id, lab_id)
+        # public=False: for a secret lab the state is the proof that the
+        # student came through the secret link, and the window is checked
+        # right below instead.
+        course_info, lab_key, lab_config, org, team_config = _load_lab_for_join(
+            course_id, lab_id, public=False
+        )
     except HTTPException:
         return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="config"))
 
+    def result_url(status: str, **extra) -> str:
+        return _result_redirect_for(course_id, lab_id, lab_key, lab_config, status, **extra)
+
+    try:
+        window = _lab_window(course_info, lab_config)
+    except HTTPException:
+        return RedirectResponse(url=result_url("error", reason="LAB_MISCONFIGURED"))
+
+    if window.state() == STATE_NOT_OPEN:
+        # Ссылка ещё не опубликована (или окно сдвинули, пока студент был на
+        # github.com) - репозиторий не создаётся.
+        logger.info(f"Join attempt before opens-at for {course_id}/{lab_key}")
+        return RedirectResponse(url=result_url("error", reason="JOIN_NOT_OPEN"))
+
     if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
         logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
-        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_not_configured"))
+        return RedirectResponse(url=result_url("error", reason="oauth_not_configured"))
 
     username = _exchange_code_for_username(code, _oauth_redirect_uri(request))
     if username is None:
-        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="oauth_exchange_failed"))
+        return RedirectResponse(url=result_url("error", reason="oauth_exchange_failed"))
 
     logger.info(f"Confirmed GitHub username '{username}' for join {course_id}/{lab_id}")
+
+    if team_config is not None:
+        # A team lab creates nothing here: the student still has to pick or
+        # create a team. The confirmed username is carried onward in the
+        # signed join_session cookie (§8.1 of the team plan).
+        response = RedirectResponse(
+            url=_join_result_redirect(course_id, lab_id, "authenticated", username=username)
+        )
+        _set_join_session_cookie(response, username, course_id, lab_id)
+        return response
 
     github_prefix = lab_config.get("github-prefix")
     template_repo = lab_config.get("template-repo")
     repo_provisioning = lab_config.get("repo-provisioning", "template")
 
+    # После closes-at новый репозиторий не создаётся, но студент с уже
+    # созданным чинит доступ по той же ссылке (§8 плана).
+    create = window.accepts_new_repos()
+
     try:
         # Server-side token, never the student's OAuth token (see §3.2/§6 of the plan).
         github_client = GitHubClient(GITHUB_TOKEN)
         provisioner = RepoProvisioner(github_client)
-        result = provisioner.provision(org, github_prefix, template_repo, username, repo_provisioning)
+        result = provisioner.provision(
+            org, github_prefix, template_repo, username, repo_provisioning, create=create
+        )
     except Exception:
         logger.exception(f"Unexpected error provisioning repo for {username} in {course_id}/{lab_id}")
-        return RedirectResponse(url=_join_result_redirect(course_id, lab_id, "error", reason="provision_failed"))
+        return RedirectResponse(url=result_url("error", reason="provision_failed"))
 
     if result.status != ProvisionStatus.OK:
         logger.warning(f"Provisioning failed for {username} in {course_id}/{lab_id}: {result.error_code}")
         return RedirectResponse(
-            url=_join_result_redirect(course_id, lab_id, "error", reason=result.error_code or "provision_failed")
+            url=result_url("error", reason=result.error_code or "provision_failed")
         )
 
     logger.info(f"Provisioned {result.repo_url} for {username} ({course_id}/{lab_id})")
     return RedirectResponse(
-        url=_join_result_redirect(course_id, lab_id, "success", repo_url=result.repo_url, username=username)
+        url=result_url("success", repo_url=result.repo_url, username=username)
     )
+
+
+# ---------------------------------------------------------------------------
+# /join: team (group) lab assignments - one repository per team
+# See docs/TEAM_ASSIGNMENTS_PLAN.md for the full design.
+# ---------------------------------------------------------------------------
+
+
+def _team_registry() -> TeamRegistry:
+    """TeamRegistry on the server's token - never the student's OAuth token."""
+    return TeamRegistry(GitHubClient(GITHUB_TOKEN))
+
+
+def _course_teachers(course_info: dict) -> list[str]:
+    """`course.github.teachers` - a mixed list of names and GitHub logins."""
+    teachers = course_info.get("github", {}).get("teachers") or []
+    return [str(entry) for entry in teachers if entry]
+
+
+def _load_team_lab(course_id: str, lab_id: str) -> tuple[dict, str, dict, str, TeamConfig]:
+    """
+    Like _load_lab_for_join, but only for a lab that really is a team lab.
+
+    Returns:
+        (course_info, lab_key, lab_config, github_organization, team_config).
+        `lab_key` is what the team mutations must lock on - see
+        _load_lab_for_join.
+
+    Raises:
+        HTTPException(400): NOT_A_TEAM_LAB for an individual lab, or
+        LAB_NOT_CONFIGURED when the lab has no github-prefix to build team
+        repository names from
+    """
+    course_info, lab_key, lab_config, org, team_config = _load_lab_for_join(course_id, lab_id)
+    if team_config is None:
+        raise HTTPException(status_code=400, detail="NOT_A_TEAM_LAB")
+    if not lab_config.get("github-prefix"):
+        raise HTTPException(status_code=400, detail="LAB_NOT_CONFIGURED")
+    return course_info, lab_key, lab_config, org, team_config
+
+
+# Provisioning failures that a student can retry (GitHub-side or transient)
+# answer 502; the rest are configuration mistakes and answer 400.
+_TEAM_GATEWAY_ERROR_CODES = {
+    "TEAMS_UNAVAILABLE",
+    "RATE_LIMITED",
+    "CREATE_FAILED",
+    "FORK_TIMEOUT",
+    "FORK_CHECK_FAILED",
+    "ACTIONS_ENABLE_FAILED",
+    "INVITATIONS_FETCH_FAILED",
+    "REINVITE_DELETE_FAILED",
+    "INVITE_FAILED",
+    "PROVISION_FAILED",
+}
+
+# Codes with an HTTP status of their own (§8.3 of the plan).
+_TEAM_ERROR_STATUS = {
+    "NOT_A_TEAM_LAB": 400,
+    "INVALID_TITLE": 400,
+    "LAB_NOT_CONFIGURED": 400,
+    "TEAM_LIMIT_REACHED": 403,
+    "TEAM_NOT_FOUND": 404,
+    "ALREADY_IN_TEAM": 409,
+    "TEAM_FULL": 409,
+    "TITLE_TAKEN": 409,
+    "SLUG_RACE": 409,
+}
+
+
+def _team_error_status(error_code: str | None) -> int:
+    if error_code in _TEAM_ERROR_STATUS:
+        return _TEAM_ERROR_STATUS[error_code]
+    return 502 if error_code in _TEAM_GATEWAY_ERROR_CODES else 400
+
+
+def _team_payload(team: TeamInfo, is_mine: bool, size_max: int | None) -> dict:
+    """
+    One team as the student's picker sees it.
+
+    `repo_url` is only filled in for the student's own team: a link to a
+    private repository they have no access to is useless and misleading.
+    Member logins are shown - they are public GitHub identifiers, and they are
+    how a student recognizes their groupmates' team. Full names are not: the
+    /join flow does not know the student's group and never opens the
+    spreadsheet.
+    """
+    return {
+        "slug": team.slug,
+        "title": team.title,
+        "description": team.description,
+        "members": list(team.members),
+        "pending": list(team.pending),
+        # Subset of `pending`: the invitation expired, yet the place stays held
+        # (see TeamRegistry._read_roster).
+        "expired": list(team.expired),
+        "size": team.size,
+        "is_full": size_max is not None and team.size >= size_max,
+        "is_mine": is_mine,
+        "members_unknown": team.members_unknown,
+        "repo_url": team.repo_url if is_mine else None,
+    }
+
+
+@app.get("/join/{course_id}/{lab_id}/teams")
+@limiter.limit("30/minute")
+def join_lab_teams(request: Request, course_id: str, lab_id: str):
+    """Список команд лабы, команда студента и лимиты (см. §8.2 плана)."""
+    course_info, _lab_key, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    username = require_join_session(request, course_id, lab_id)
+
+    registry = _team_registry()
+    teams = registry.list_teams(
+        org, lab_config["github-prefix"], _course_teachers(course_info)
+    )
+    if teams is None:
+        raise HTTPException(status_code=502, detail="TEAMS_UNAVAILABLE")
+
+    my_team = registry.find_member_team(teams, username)
+
+    return {
+        "course_id": course_id,
+        "lab_id": lab_id,
+        "course_name": course_info.get("name", "Unknown"),
+        "lab_short_name": lab_config.get("short-name", lab_id),
+        "username": username,
+        "size_max": team_config.size_max,
+        "count_max": team_config.count_max,
+        "can_create": (
+            my_team is None
+            and (team_config.count_max is None or len(teams) < team_config.count_max)
+        ),
+        "my_team": my_team.slug if my_team else None,
+        "teams": [
+            _team_payload(
+                team,
+                is_mine=my_team is not None and team.slug == my_team.slug,
+                size_max=team_config.size_max,
+            )
+            for team in teams
+        ],
+    }
+
+
+class CreateTeamRequest(BaseModel):
+    """
+    Body of POST /join/{course_id}/{lab_id}/teams.
+
+    There is deliberately no `username` field: the student's identity comes
+    from the signed join_session cookie and nowhere else (§6 of the plan).
+    Title validation is done by hand in grading/teams.py rather than by a
+    pydantic validator - FastAPI would answer its own 422 with a list of
+    errors instead of the stable INVALID_TITLE code the frontend translates.
+    """
+    title: str | None = None
+    description: str | None = None
+
+
+def _team_action_response(result, status_code: int = 200) -> JSONResponse | dict:
+    """Turn a TeamActionResult into an HTTP response (§8.3)."""
+    if result.status == TeamActionStatus.OK:
+        return {
+            "status": "ok",
+            "slug": result.team.slug if result.team else None,
+            "repo_url": result.repo_url,
+            "message": result.message,
+        }
+
+    payload = {"detail": result.error_code or "PROVISION_FAILED"}
+    if result.team is not None:
+        # ALREADY_IN_TEAM is actionable only if the student is told which team
+        # is theirs, so the slug and the link travel next to the stable code.
+        payload["my_team"] = result.team.slug
+        payload["repo_url"] = result.repo_url
+    return JSONResponse(status_code=_team_error_status(result.error_code), content=payload)
+
+
+@app.post("/join/{course_id}/{lab_id}/teams")
+@limiter.limit("10/minute")
+def create_join_team(request: Request, course_id: str, lab_id: str, body: CreateTeamRequest):
+    """Создаёт команду и выдаёт доступ к её репозиторию создателю (§7.3 плана)."""
+    course_info, lab_key, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    username = require_join_session(request, course_id, lab_id)
+
+    result = _team_registry().create_team(
+        course_id=course_id,
+        lab_key=lab_key,
+        org=org,
+        github_prefix=lab_config["github-prefix"],
+        template_repo=lab_config["template-repo"],
+        username=username,
+        title=body.title,
+        description=body.description,
+        mode=lab_config.get("repo-provisioning", "template"),
+        teachers=_course_teachers(course_info),
+        team_config=team_config,
+    )
+    return _team_action_response(result)
+
+
+@app.post("/join/{course_id}/{lab_id}/teams/{slug}/join")
+@limiter.limit("10/minute")
+def join_join_team(request: Request, course_id: str, lab_id: str, slug: str):
+    """
+    Присоединяет студента к команде либо чинит его доступ, если он уже в ней.
+
+    Имя репозитория собирается сервером из префикса лабы и slug'а, прошедшего
+    TEAM_SLUG_RE; из запроса имя репозитория не принимается никогда (§7.4).
+    """
+    course_info, lab_key, lab_config, org, team_config = _load_team_lab(course_id, lab_id)
+    username = require_join_session(request, course_id, lab_id)
+
+    result = _team_registry().join_team(
+        course_id=course_id,
+        lab_key=lab_key,
+        org=org,
+        github_prefix=lab_config["github-prefix"],
+        template_repo=lab_config["template-repo"],
+        username=username,
+        slug=slug,
+        mode=lab_config.get("repo-provisioning", "template"),
+        teachers=_course_teachers(course_info),
+        team_config=team_config,
+    )
+    return _team_action_response(result)
 
 
 # ---------------------------------------------------------------------------
@@ -1174,12 +1991,86 @@ def join_callback(
 # ---------------------------------------------------------------------------
 
 
+def _public_base_url(request: Request) -> str:
+    """
+    Адрес сервиса, из которого собирается секретная ссылка.
+
+    Порядок важен: за обратным прокси `request.base_url` содержит внутренний
+    адрес контейнера, поэтому в продакшене задаётся PUBLIC_BASE_URL, а
+    FRONTEND_URL - разумный запасной вариант (§9.1 плана).
+    """
+    if PUBLIC_BASE_URL:
+        return PUBLIC_BASE_URL.rstrip("/")
+    if FRONTEND_URL:
+        return FRONTEND_URL.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def _join_fields(
+    request: Request,
+    course_id: str,
+    lab_key: str,
+    lab_config: dict,
+    timezone_str: str | None,
+) -> dict:
+    """
+    Поля секции join для админского списка лаб: готовая ссылка целиком и
+    состояние окна (§7.2, §9.1 плана).
+
+    Ссылка отдаётся для любой лабы, у которой настроен `template-repo`:
+    секретной - `/j/{token}`, обычной - `/join/{course_id}/{lab_key}`.
+    Секретную собрать руками нельзя, поэтому админка вообще единственный
+    способ её получить; обычную собрать можно, но раздавать ссылки удобнее
+    из одного места, не помня формат.
+
+    Ссылка доступна с момента появления лабы в конфиге, задолго до
+    `opens-at`: преподавателю нужно подготовить рассылку заранее.
+
+    Испорченная секция не роняет весь список: лаба приходит с текстом ошибки
+    в `join_error`, чтобы преподаватель увидел её там же, где правит конфиг.
+    """
+    try:
+        settings = parse_join_config(lab_config, timezone_str)
+    except JoinConfigError as e:
+        return {
+            "join_link": None,
+            "join_state": None,
+            "join_secret": is_secret_lab(lab_config),
+            "opens_at": None,
+            "closes_at": None,
+            "join_error": str(e),
+        }
+
+    window = JoinWindow(settings.opens_at, settings.closes_at, settings.secret)
+
+    link = None
+    if settings.secret:
+        link = f"{_public_base_url(request)}/j/{lab_token(SECRET_KEY, course_id, lab_key, lab_config)}"
+    elif lab_config.get("template-repo"):
+        # Без template-repo ссылка /join/... отдаёт ошибку конфигурации,
+        # показывать её в админке незачем.
+        link = (
+            f"{_public_base_url(request)}/join/"
+            f"{quote(course_id, safe='')}/{quote(lab_key, safe='')}"
+        )
+
+    return {
+        "join_link": link,
+        "join_state": window.state(),
+        "join_secret": settings.secret,
+        "opens_at": _iso(settings.opens_at),
+        "closes_at": _iso(settings.closes_at),
+        "join_error": None,
+    }
+
+
 @app.get("/admin/courses/{course_id}/labs")
 @limiter.limit("30/minute")
 def admin_list_course_labs(request: Request, course_id: str, admin: str = Depends(require_admin)):
     """Labs of a course with the fields the admin lab list page needs."""
     course_info = get_course_by_id(course_id)
     labs = course_info.get("labs", {})
+    timezone_str = course_info.get("timezone")
 
     result = []
     for lab_number, lab_config in labs.items():
@@ -1192,6 +2083,11 @@ def admin_list_course_labs(request: Request, course_id: str, admin: str = Depend
             "template_repo": template_repo,
             "repo_provisioning": repo_provisioning,
             "can_propagate": bool(template_repo) and repo_provisioning == "fork",
+            # Bulk grading: candidates for the file holding the student's full
+            # name, and the one preselected via `student-name-file`.
+            "files": lab_config.get("files", []),
+            "name_file": lab_config.get("student-name-file"),
+            **_join_fields(request, course_id, str(lab_number), lab_config, timezone_str),
         })
 
     # Порядок как у преподавателя в таблице: ЛР0, ЛР0.1, ЛР1... Сортировка по
@@ -1309,6 +2205,147 @@ def propagate_template_update(
 @limiter.limit("60/minute")
 def get_propagate_job_status(request: Request, job_id: str, admin: str = Depends(require_admin)):
     job = get_propagate_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Работа не найдена")
+    return job.to_dict()
+
+
+# ---------------------------------------------------------------------------
+# Admin: bulk grading of a whole group's submissions for one lab.
+# Same job machinery as propagate above - a group takes minutes, so the run is
+# backgrounded and polled. See docs/PROJECT_DESCRIPTION.md.
+# ---------------------------------------------------------------------------
+
+
+class BulkGradeRequest(BaseModel):
+    # Файл, из первой строки которого берётся ФИО студента. Задан - обходятся
+    # все репозитории лабы в организации и логины проставляются в таблицу;
+    # пуст - проверяются только студенты с уже указанным логином.
+    name_file: str | None = None
+    # Прогнать все проверки и собрать отчёт, ничего не записывая в таблицу.
+    dry_run: bool = False
+
+
+def _open_group_worksheet(spreadsheet_id: str, group_id: str):
+    """
+    Open a group's worksheet, returning (spreadsheet, worksheet).
+
+    Opened by the endpoint rather than inside the job, so that a wrong group
+    fails the request with 404 instead of a job that dies immediately.
+    """
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
+    sheets_client = gspread.authorize(creds)
+
+    try:
+        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+        worksheet = spreadsheet.worksheet(group_id)
+    except Exception as e:
+        logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
+        raise HTTPException(status_code=404, detail="Группа не найдена в Google Таблице")
+
+    return spreadsheet, worksheet
+
+
+@app.post("/admin/courses/{course_id}/groups/{group_id}/labs/{lab_id}/bulk-grade")
+@limiter.limit("10/minute")
+def start_bulk_grade(
+    request: Request,
+    course_id: str,
+    group_id: str,
+    lab_id: str,
+    background_tasks: BackgroundTasks,
+    body: BulkGradeRequest = BulkGradeRequest(),
+    admin: str = Depends(require_admin),
+):
+    """
+    Start grading a whole group for one lab in the background.
+
+    Every student goes through the same checks as a self-submitted work
+    (grading.bulk.evaluate_student). Unlike propagate's read-only dry run,
+    dry_run here still runs the full CI checks, so it is a background job too;
+    it just writes nothing to the spreadsheet.
+
+    Returns 202 with a job_id to poll via GET /admin/bulk-grade-jobs/{job_id};
+    only one run per (course_id, group_id, lab_id) at a time - a second POST
+    while one is in flight gets HTTP 409.
+    """
+    name_file = (body.name_file or "").strip() or None
+    mode = "by_file" if name_file else "by_sheet"
+
+    course_info = get_course_by_id(course_id)
+    org = course_info.get("github", {}).get("organization")
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+
+    resolved = find_lab_config(course_info.get("labs", {}), lab_id)
+    lab_key, lab_config_dict = resolved if resolved else (None, {})
+    repo_prefix = lab_config_dict.get("github-prefix")
+
+    if not all([org, spreadsheet_id, repo_prefix]):
+        logger.error(
+            f"Missing course configuration for {course_id}: org={org}, "
+            f"spreadsheet={spreadsheet_id}, repo_prefix={repo_prefix}"
+        )
+        raise HTTPException(status_code=400, detail="Missing course configuration")
+
+    if mode == "by_file" and is_team_lab(lab_config_dict):
+        # One repository holds one name file for several students, so a name
+        # cannot resolve a row for the whole team (§10.3 of the team plan).
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Для командной лабораторной работы сопоставление по файлу с ФИО неприменимо: "
+                "проверяются студенты с указанным в таблице логином GitHub"
+            ),
+        )
+
+    spreadsheet, worksheet = _open_group_worksheet(spreadsheet_id, group_id)
+
+    job = try_start_bulk_job(course_id, group_id, lab_id, mode, body.dry_run, name_file)
+    if job is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Проверка этой лабораторной для этой группы уже выполняется",
+        )
+
+    logger.info(
+        f"Starting bulk grading job {job.job_id} for {course_id}/{group_id}/{lab_id} "
+        f"(mode={mode}, dry_run={body.dry_run}, admin={admin})"
+    )
+    github_client = GitHubClient(GITHUB_TOKEN)
+    background_tasks.add_task(
+        run_bulk_grading,
+        job,
+        LabGrader(github_client),
+        github_client,
+        worksheet,
+        spreadsheet,
+        course_info,
+        lab_config_dict,
+        parse_lab_id(lab_key or lab_id),
+    )
+    return JSONResponse(status_code=202, content={"job_id": job.job_id})
+
+
+@app.get("/admin/bulk-grade-jobs/{job_id}")
+@limiter.limit("120/minute")
+def get_bulk_grade_job_status(request: Request, job_id: str, admin: str = Depends(require_admin)):
+    job = get_bulk_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Работа не найдена")
+    return job.to_dict()
+
+
+@app.post("/admin/bulk-grade-jobs/{job_id}/cancel")
+@limiter.limit("30/minute")
+def cancel_bulk_grade_job(request: Request, job_id: str, admin: str = Depends(require_admin)):
+    """
+    Ask a running bulk grading job to stop.
+
+    It finishes the student it is on, flushes the grades buffered so far and
+    ends with status "cancelled".
+    """
+    job = request_bulk_job_cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Работа не найдена")
     return job.to_dict()

@@ -28,6 +28,7 @@
   "adminLabs": {
     "back": "← Back to courses",
     "title": "Course labs",
+    "titleWithCourse": "Labs of {{course}}",
     "loading": "Loading labs…",
     "errorLoadingLabs": "Could not load the list of labs",
     "columns": {
@@ -36,7 +37,8 @@
       "githubPrefix": "github-prefix",
       "templateRepo": "template-repo",
       "provisioning": "Repository creation",
-      "actions": "Actions"
+      "actions": "Actions",
+      "joinLink": "Student link"
     },
     "provisioningTemplate": "template",
     "provisioningFork": "fork",
@@ -45,13 +47,23 @@
     "dryRun": {
       "title": "Preview update rollout",
       "summary": "{{count}} student repositories will receive an update proposal",
-      "notAFork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected",
+      "counts": {
+        "pr_exists": "{{count}} repositories already have an open PR with the current template",
+        "up_to_date": "{{count}} repositories have nothing to update: all template changes are already there",
+        "error": "{{count}} repositories couldn't be compared with the template",
+        "not_a_fork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected"
+      },
       "selectAll": "Select all",
       "selectedCount": "Selected {{selected}} of {{total}}",
       "cancel": "Cancel",
       "confirm": "Send the update ({{count}})",
-      "statusWillProcess": "will be processed",
-      "statusNotAFork": "not a template fork"
+      "statuses": {
+        "needs_update": "needs update (new commits: {{count}})",
+        "pr_exists": "PR already open",
+        "up_to_date": "nothing to update",
+        "error": "check failed",
+        "not_a_fork": "not a template fork"
+      }
     },
     "progress": {
       "title": "Update rollout",
@@ -77,6 +89,60 @@
       "dryRunFailed": "Could not load the rollout preview. Please try again.",
       "startFailed": "Could not start the update rollout. Please try again.",
       "alreadyRunning": "An update rollout for this lab is already running."
+    },
+    "bulk": {
+      "button": "Fill in the sheet",
+      "title": "Bulk grading: {{lab}}",
+      "group": "Group",
+      "nameFile": "File with the student's full name",
+      "modeByFile": "Every repository of this lab in the course organization will be inspected. The full name comes from the first line of the given file; the GitHub username found is written into the sheet, then the work is graded.",
+      "modeBySheet": "The file field is empty: only students who already have a GitHub username in the sheet will be graded.",
+      "dryRun": "Dry run (do not write to the sheet)",
+      "dryRunBadge": "Dry run",
+      "start": "Start grading",
+      "cancelRun": "Stop",
+      "close": "Close",
+      "inProgress": "Processed {{processed}} of {{total}}",
+      "done": "Grading finished",
+      "cancelled": "Grading stopped",
+      "failed": "Grading failed",
+      "registered": "username recorded",
+      "columns": {
+        "student": "Full name",
+        "github": "GitHub",
+        "status": "Status",
+        "grade": "Grade",
+        "message": "Message",
+        "team": "Team"
+      },
+      "statuses": {
+        "updated": "graded",
+        "rejected": "already graded",
+        "pending": "CI running",
+        "error": "error",
+        "conflict": "username conflict",
+        "unmatched": "name not matched",
+        "ambiguous": "ambiguous name",
+        "no_team": "no team"
+      },
+      "errors": {
+        "groupsFailed": "Failed to load groups",
+        "startFailed": "Failed to start grading. Please try again.",
+        "alreadyRunning": "Grading of this lab for this group is already running.",
+        "cancelFailed": "Failed to stop grading"
+      }
+    },
+    "join": {
+      "copy": "Copy",
+      "copied": "Link copied",
+      "copyPrompt": "Copy the link:",
+      "opensAt": "opens on {{moment}}",
+      "notScheduled": "not open: join.opens-at is not set",
+      "open": "open, no end date",
+      "openUntil": "open, accepting until {{moment}}",
+      "closed": "closed",
+      "closedAt": "closed on {{moment}}",
+      "revokeHint": "To revoke: raise join.revision in the course config and hand out the new link."
     }
   },
   "join": {
@@ -114,7 +180,65 @@
       "actionsEnableFailed": "Could not enable checks in the repository. Contact the teacher.",
       "nameTaken": "A repository with this name is already taken. Contact the teacher.",
       "forkCheckFailed": "Could not verify the repository. Please try again in a few minutes.",
-      "unknown": "An unexpected error occurred. Try again or contact the teacher."
+      "unknown": "An unexpected error occurred. Try again or contact the teacher.",
+      "notATeamLab": "This lab is done individually, not as a team.",
+      "sessionRequired": "Your sign-in session has expired. Sign in with GitHub again.",
+      "teamsUnavailable": "Could not get the list of teams from GitHub. Try again in a minute.",
+      "teamNotFound": "Team not found. Refresh the list of teams.",
+      "alreadyInTeam": "You are already in a team for this lab. Contact your teacher to change teams.",
+      "teamFull": "This team has no free places left. Pick another one.",
+      "teamLimitReached": "The maximum number of teams has been reached. Join one of the existing teams.",
+      "titleTaken": "A team with this name already exists. Pick another name.",
+      "invalidTitle": "The team name is not acceptable. Check its length and remove unusual characters.",
+      "slugRace": "Someone created a team at the same moment. Please try again.",
+      "titleTooShort": "The team name must be at least 3 characters long.",
+      "titleTooLong": "The team name must be at most 60 characters long.",
+      "titleHasSeparator": "The team name must not contain “ — ”.",
+      "descriptionTooLong": "The team description must be at most 200 characters long.",
+      "linkNotFound": "This link was not found or is no longer valid. Check the address or ask your instructor for a new link.",
+      "notOpen": "The assignment behind this link is not open yet.",
+      "closed": "This link no longer hands out repositories. Access to a repository you already have is restored through the same link."
+    },
+    "team": {
+      "badge": "Team assignment",
+      "limits": "Maximum team members: {{size}}. Maximum teams: {{count}}.",
+      "noLimit": "unlimited",
+      "landing": "Sign in with GitHub to see this lab's teams and join one of them, or create your own.",
+      "loading": "Loading the list of teams…",
+      "retry": "Try again",
+      "pickTitle": "Teams of this lab",
+      "pickDescription": "Join your groupmates' team or create your own. One repository per team, shared by all its members.",
+      "empty": "There are no teams yet. Create the first one.",
+      "join": "Join",
+      "joining": "Joining…",
+      "full": "Team is full",
+      "size": "Members: {{count}}",
+      "sizeOf": "{{size}} of {{max}}",
+      "pending": "invitation sent",
+      "pendingHint": "The student has not accepted the invitation yet, but the place is already taken.",
+      "expired": "invitation expired",
+      "expiredHint": "The invitation has expired, but the place is still taken. The student can restore access through the lab link; the teacher can free the place.",
+      "membersUnknown": "The team roster is unavailable right now. Refresh the page in a minute.",
+      "createTitle": "Create a team",
+      "nameLabel": "Team name",
+      "namePlaceholder": "For example: Penguins",
+      "descriptionLabel": "Description (optional)",
+      "descriptionPlaceholder": "What the team is working on",
+      "create": "Create team",
+      "creating": "Creating…",
+      "creationClosed": "Creating new teams is closed. Join one of the existing teams.",
+      "creationClosedLimit": "The maximum number of teams ({{count}}) has been reached. Join one of the existing teams.",
+      "myTeamTitle": "Your team",
+      "openRepository": "Open the team repository",
+      "memberHint": "If the repository invitation never arrived or has expired, press “Restore access” and it will be sent again.",
+      "repairAccess": "Restore access",
+      "repairing": "Restoring…"
+    },
+    "secret": {
+      "notOpen": "The assignment is not open yet. The link will start working once your instructor publishes it.",
+      "notOpenAt": "The assignment is not open yet. The link will start working on {{moment}}.",
+      "closed": "Submissions are closed: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored.",
+      "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
     }
   }
 }
