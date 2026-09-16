@@ -523,6 +523,33 @@ class GitHubClient:
             return None
         return resp.json()
 
+    def compare_commits(self, owner: str, repo: str, base: str, head: str) -> dict[str, Any] | None:
+        """
+        Compare two commits (three-dot: what `head` has that `base` lacks).
+
+        See https://docs.github.com/en/rest/commits/commits#compare-two-commits
+
+        `head` may be a commit that only exists in another repository of the
+        same fork network - e.g. the template's tip compared against a student
+        fork's default branch (issue #52). `per_page=1` keeps the commit list
+        short: `ahead_by` still counts every commit, and the changed files
+        (up to 300) are returned on the first page regardless.
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            base: Branch name or commit SHA to compare against
+            head: Branch name or commit SHA to compare
+
+        Returns:
+            The comparison dict (`status`, `ahead_by`, `files`, ...), or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/compare/{base}...{head}"
+        resp = requests.get(url, headers=self.headers, params={"per_page": 1}, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
     def create_ref(self, owner: str, repo: str, ref: str, sha: str) -> requests.Response:
         """
         Create a git reference pointing at an existing commit.

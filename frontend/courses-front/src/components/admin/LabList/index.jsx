@@ -57,12 +57,23 @@ const JOIN_STATE_COLOR = {
 };
 
 const RESULT_STATUS_COLOR = {
-  will_process: "default",
+  needs_update: "primary",
   pr_created: "success",
   up_to_date: "info",
   pr_exists: "info",
   not_a_fork: "warning",
   error: "error",
+};
+
+// Порядок групп в предпросмотре: сначала строки, которые можно выбрать для
+// рассылки, затем те, где делать нечего, и в конце - требующие внимания.
+const PREVIEW_STATUS_ORDER = ["needs_update", "pr_exists", "up_to_date", "error", "not_a_fork"];
+
+const byRepoName = (a, b) => a.repo.localeCompare(b.repo, undefined, { sensitivity: "base" });
+
+const previewRank = (r) => {
+  const index = PREVIEW_STATUS_ORDER.indexOf(r.status);
+  return index === -1 ? PREVIEW_STATUS_ORDER.length : index;
 };
 
 async function fetchJson(url, options) {
@@ -97,7 +108,7 @@ export const LabList = ({ courseId, onBack }) => {
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [dryRunResult, setDryRunResult] = useState(null);
   // Имена репозиториев, которым уйдёт обновление. Заполняется всеми
-  // will_process при получении предпросмотра; выбор живёт только пока
+  // needs_update при получении предпросмотра; выбор живёт только пока
   // открыт диалог - при повторном открытии список перезапрашивается.
   const [selectedRepos, setSelectedRepos] = useState([]);
   const [starting, setStarting] = useState(false);
@@ -212,7 +223,7 @@ export const LabList = ({ courseId, onBack }) => {
       .then((data) => {
         setDryRunResult(data);
         setSelectedRepos(
-          data.results.filter((r) => r.status === "will_process").map((r) => r.repo)
+          data.results.filter((r) => r.status === "needs_update").map((r) => r.repo)
         );
         setDryRunLoading(false);
       })
@@ -271,12 +282,28 @@ export const LabList = ({ courseId, onBack }) => {
     setSelectedLab(null);
   };
 
-  const willProcess = dryRunResult
-    ? dryRunResult.results.filter((r) => r.status === "will_process")
+  const previewRows = dryRunResult
+    ? [...dryRunResult.results].sort((a, b) => previewRank(a) - previewRank(b) || byRepoName(a, b))
     : [];
-  const notAFork = dryRunResult
-    ? dryRunResult.results.filter((r) => r.status === "not_a_fork")
-    : [];
+  const countByStatus = (status) => previewRows.filter((r) => r.status === status).length;
+  const willProcess = previewRows.filter((r) => r.status === "needs_update");
+  // Статус строки; текст ошибки показывается целиком - по нему преподаватель
+  // понимает, что чинить (например, права токена). Ссылка на PR - только в
+  // предпросмотре: в таблице итогов для неё есть отдельная колонка.
+  const renderStatus = (r, label, withPrLink = false) => (
+    <>
+      <Chip size="small" color={RESULT_STATUS_COLOR[r.status] || "default"} label={label} />
+      {r.status === "error" && r.message && <HintText>{r.message}</HintText>}
+      {withPrLink && r.pr_url && (
+        <HintText>
+          <a href={r.pr_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+            {t("adminLabs.progress.openPr")}
+          </a>
+        </HintText>
+      )}
+    </>
+  );
+
   const allSelected = willProcess.length > 0 && selectedRepos.length === willProcess.length;
   const someSelected = selectedRepos.length > 0 && !allSelected;
   const toggleAll = () =>
@@ -399,9 +426,12 @@ export const LabList = ({ courseId, onBack }) => {
             <>
               <p>{t("adminLabs.dryRun.summary", { count: willProcess.length })}</p>
               <p>{t("adminLabs.dryRun.selectedCount", { selected: selectedRepos.length, total: willProcess.length })}</p>
-              {notAFork.length > 0 && (
-                <p>{t("adminLabs.dryRun.notAFork", { count: notAFork.length })}</p>
-              )}
+              {["pr_exists", "up_to_date", "error", "not_a_fork"].map((status) => {
+                const count = countByStatus(status);
+                return count > 0 ? (
+                  <p key={status}>{t(`adminLabs.dryRun.counts.${status}`, { count })}</p>
+                ) : null;
+              })}
               <SelectableTableWrapper>
                 <Table size="small" stickyHeader>
                   <TableHead>
@@ -421,35 +451,39 @@ export const LabList = ({ courseId, onBack }) => {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {willProcess.map((r) => (
-                      <TableRow key={r.repo} hover onClick={() => toggleRepo(r.repo)}>
-                        <TableCell padding="checkbox">
-                          <Checkbox
-                            size="small"
-                            checked={selectedRepos.includes(r.repo)}
-                            inputProps={{ "aria-label": r.repo }}
-                          />
-                        </TableCell>
-                        <TableCell>{r.repo}</TableCell>
-                        <TableCell>
-                          <Chip size="small" label={t("adminLabs.dryRun.statusWillProcess")} />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {notAFork.map((r) => (
-                      <TableRow key={r.repo}>
-                        {/* Форк-связи нет, рассылать нечего - строка без чекбокса */}
-                        <TableCell padding="checkbox" />
-                        <TableCell>{r.repo}</TableCell>
-                        <TableCell>
-                          <Chip
-                            size="small"
-                            color="warning"
-                            label={t("adminLabs.dryRun.statusNotAFork")}
-                          />
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {previewRows.map((r) => {
+                      // Выбрать можно только то, чему обновление действительно
+                      // нужно; остальные строки объясняют, почему их не трогают.
+                      const selectable = r.status === "needs_update";
+                      return (
+                        <TableRow
+                          key={r.repo}
+                          hover={selectable}
+                          onClick={selectable ? () => toggleRepo(r.repo) : undefined}
+                        >
+                          <TableCell padding="checkbox">
+                            {selectable && (
+                              <Checkbox
+                                size="small"
+                                checked={selectedRepos.includes(r.repo)}
+                                inputProps={{ "aria-label": r.repo }}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell>{r.repo}</TableCell>
+                          <TableCell>
+                            {renderStatus(
+                              r,
+                              t(`adminLabs.dryRun.statuses.${r.status}`, {
+                                count: r.commits_behind,
+                                defaultValue: r.status,
+                              }),
+                              true
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </SelectableTableWrapper>
@@ -496,15 +530,11 @@ export const LabList = ({ courseId, onBack }) => {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {job.results.map((r) => (
+                      {[...job.results].sort(byRepoName).map((r) => (
                         <TableRow key={r.repo}>
                           <TableCell>{r.repo}</TableCell>
                           <TableCell>
-                            <Chip
-                              size="small"
-                              color={RESULT_STATUS_COLOR[r.status] || "default"}
-                              label={t(`adminLabs.progress.statuses.${r.status}`, r.status)}
-                            />
+                            {renderStatus(r, t(`adminLabs.progress.statuses.${r.status}`, r.status))}
                           </TableCell>
                           <TableCell>
                             {r.pr_url && (

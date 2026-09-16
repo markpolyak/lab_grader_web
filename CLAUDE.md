@@ -28,7 +28,7 @@ pytest tests/ --cov=. --cov-report=term-missing
 ### Required Environment Variables
 
 ```bash
-GITHUB_TOKEN=ghp_...      # GitHub API token
+GITHUB_TOKEN=ghp_...      # GitHub API token (scopes: repo, read:org, workflow)
 ADMIN_LOGIN=admin         # Admin panel login
 ADMIN_PASSWORD=...        # Admin panel password
 SECRET_KEY=...            # Cookie signing key AND secret /j/{token} links (changing it revokes every link)

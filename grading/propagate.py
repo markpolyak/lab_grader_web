@@ -13,12 +13,17 @@ PROJECT_DESCRIPTION.md) so this is safe as long as `--workers` is never
 added. A restart loses the status of an in-flight job, but not its work -
 PRs already created stay created, and re-running is safe (an already-open
 PR is reported back as `pr_exists`).
+
+Every repository is first compared with the template's tip, in the preview
+and again in the real run: a fork that already contains every template commit
+is reported as `up_to_date` and left untouched - no service branch, no PR.
 """
 import logging
 import threading
 import time
 import uuid
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -31,6 +36,14 @@ logger = logging.getLogger(__name__)
 # 0 instead of actually sleeping through a 200-repo run.
 PR_CREATE_PAUSE_SECONDS = 1
 
+# Concurrent read-only checks in the preview. The preview is a synchronous
+# request, and a compare + PR lookup takes ~1.3 s per fork (measured on a live
+# course): serially, a 200-student course would run for minutes. Ten parallel
+# checks bring 65 forks down to ~12 s; twenty measured no faster, GitHub
+# evidently serializes one token's requests beyond that. Ten reads also stay
+# well within the secondary rate limit (100 concurrent requests).
+PREVIEW_WORKERS = 10
+
 # How many finished jobs to keep around for GET /admin/propagate-jobs/{id}.
 MAX_JOBS_KEPT = 20
 
@@ -42,6 +55,13 @@ MAX_JOBS_KEPT = 20
 # opening an ordinary same-repo PR is what actually works, and it only works
 # because a fork shares object storage with its template.
 TEMPLATE_UPDATE_BRANCH = "template-update"
+
+# A commit that touches workflow files can only be referenced by a token with
+# the `workflow` scope (fine-grained: Workflows read/write). Without it GitHub
+# answers the ref creation with a bare 404, indistinguishable from "no access".
+WORKFLOWS_DIR = ".github/workflows/"
+
+COMPARE_FAILED_MESSAGE = "Не удалось сравнить репозиторий с шаблоном"
 
 PR_TITLE = "Обновление стартового кода лабораторной работы"
 PR_BODY = (
@@ -67,9 +87,12 @@ class PropagateSetupError(Exception):
 class PropagateResult:
     """Outcome of processing a single repository."""
     repo: str
-    status: str  # will_process (dry-run only) | pr_created | up_to_date | pr_exists | not_a_fork | error
+    status: str  # needs_update (dry-run only) | pr_created | up_to_date | pr_exists | not_a_fork | error
     pr_url: str | None = None
     message: str = ""
+    # Template commits missing from the fork's default branch; None when the
+    # repository was never compared (not_a_fork, or the comparison failed).
+    commits_behind: int | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -77,6 +100,7 @@ class PropagateResult:
             "status": self.status,
             "pr_url": self.pr_url,
             "message": self.message,
+            "commits_behind": self.commits_behind,
         }
 
 
@@ -168,6 +192,10 @@ def _finish_job_locked(job: PropagateJob, status: str, error: str | None = None)
     _running_lab_keys.discard((job.course_id, job.lab_id))
 
 
+def _by_name(repos: list[dict]) -> list[dict]:
+    return sorted(repos, key=lambda repo: repo.get("name", "").lower())
+
+
 def _list_target_forks(
     github_client: GitHubClient,
     org: str,
@@ -179,7 +207,8 @@ def _list_target_forks(
     Resolve which repositories a propagate run would touch.
 
     Returns:
-        (target_forks, not_a_fork_repos, template_head_sha)
+        (target_forks, not_a_fork_repos, template_head_sha), both lists sorted
+        by name - it is the order the admin page shows and processes them in
 
     Raises:
         PropagateSetupError: template unreadable, its branch tip unreadable,
@@ -229,7 +258,82 @@ def _list_target_forks(
         and repo.get("name", "").lower() != template_own_name
     ]
 
-    return target_forks, not_a_fork, template_head_sha
+    return _by_name(target_forks), _by_name(not_a_fork), template_head_sha
+
+
+@dataclass
+class _TemplateDiff:
+    """What a fork's default branch lacks compared to the template's tip."""
+    commits_behind: int
+    touches_workflows: bool
+
+
+def _compare_with_template(
+    github_client: GitHubClient,
+    org: str,
+    fork: dict,
+    template_head_sha: str,
+) -> _TemplateDiff | None:
+    """
+    Compare a fork's default branch with the template's tip commit.
+
+    Commit-based, exactly like the PR it decides about: `ahead_by` counts the
+    template commits not reachable from the fork's default branch, so 0 means
+    there is nothing to propose - the template hasn't changed since the fork
+    was made, or the student already merged an earlier update.
+
+    Returns:
+        The difference, or None if GitHub couldn't compare
+    """
+    fork_default_branch = fork.get("default_branch") or "main"
+    comparison = github_client.compare_commits(org, fork["name"], fork_default_branch, template_head_sha)
+    if comparison is None:
+        logger.error(f"Failed to compare {org}/{fork['name']}:{fork_default_branch} with template {template_head_sha}")
+        return None
+    return _TemplateDiff(
+        commits_behind=int(comparison.get("ahead_by") or 0),
+        touches_workflows=any(
+            (f.get("filename") or "").startswith(WORKFLOWS_DIR) for f in comparison.get("files") or []
+        ),
+    )
+
+
+def _preview_fork(
+    github_client: GitHubClient,
+    org: str,
+    fork: dict,
+    template_head_sha: str,
+) -> PropagateResult:
+    """
+    Read-only answer to "what would a real run do with this fork".
+
+    `pr_exists` only when the open PR is already built on the template's tip -
+    an older open PR still `needs_update` (a run moves its branch), and its
+    link is passed along.
+    """
+    fork_name = fork["name"]
+    try:
+        diff = _compare_with_template(github_client, org, fork, template_head_sha)
+        if diff is None:
+            return PropagateResult(repo=fork_name, status="error", message=COMPARE_FAILED_MESSAGE)
+        if diff.commits_behind == 0:
+            return PropagateResult(repo=fork_name, status="up_to_date", commits_behind=0)
+
+        # A failed lookup only loses the hint: the real run finds the PR anyway.
+        open_prs = github_client.list_pull_requests(org, fork_name, head=TEMPLATE_UPDATE_BRANCH, state="open") or []
+    except Exception:
+        logger.exception(f"Unexpected error previewing propagation for {org}/{fork_name}")
+        return PropagateResult(repo=fork_name, status="error", message=COMPARE_FAILED_MESSAGE)
+
+    pr = open_prs[0] if open_prs else None
+    pr_url = pr.get("html_url") if pr else None
+    if pr and (pr.get("head") or {}).get("sha") == template_head_sha:
+        return PropagateResult(
+            repo=fork_name, status="pr_exists", pr_url=pr_url, commits_behind=diff.commits_behind
+        )
+    return PropagateResult(
+        repo=fork_name, status="needs_update", pr_url=pr_url, commits_behind=diff.commits_behind
+    )
 
 
 def dry_run_propagation(
@@ -242,20 +346,24 @@ def dry_run_propagation(
     """
     Synchronous, read-only preview of who a real run would send PRs to.
 
-    Does not check whether each fork's code is actually behind the template -
-    that would mean a request per repository. It only answers "who is in the
-    fork network under this prefix" vs "who isn't" (`not_a_fork`).
+    Every fork is compared with the template (see _preview_fork), a few at a
+    time: `needs_update` rows are the ones worth selecting, the rest say why
+    not. Results are sorted by repository name.
 
     Raises:
         PropagateSetupError: see _list_target_forks
     """
-    target_forks, not_a_fork, _template_head_sha = _list_target_forks(
+    target_forks, not_a_fork, template_head_sha = _list_target_forks(
         github_client, org, github_prefix, template_owner, template_name
     )
-    results = [PropagateResult(repo=f["name"], status="will_process") for f in target_forks]
+    with ThreadPoolExecutor(max_workers=PREVIEW_WORKERS) as pool:
+        results = list(
+            pool.map(lambda fork: _preview_fork(github_client, org, fork, template_head_sha), target_forks)
+        )
     results += [PropagateResult(repo=r["name"], status="not_a_fork") for r in not_a_fork]
+    results.sort(key=lambda r: r.repo.lower())
     return {
-        "total": len(target_forks),
+        "total": sum(1 for r in results if r.status == "needs_update"),
         "not_a_fork_count": len(not_a_fork),
         "results": [r.to_dict() for r in results],
     }
@@ -295,7 +403,26 @@ def _response_message(resp) -> str:
     return " ".join(part for part in parts if part)
 
 
-def _place_template_branch(github_client: GitHubClient, org: str, fork_name: str, sha: str) -> str | None:
+def _branch_error_message(resp, touches_workflows: bool) -> str:
+    """Teacher-facing reason a service branch couldn't be placed (details go to the log)."""
+    if resp.status_code == 404 and touches_workflows:
+        return (
+            "Обновление меняет файлы в .github/workflows, а у токена сервиса (GITHUB_TOKEN) "
+            "нет на это права. Добавьте токену scope workflow (для fine-grained токена - "
+            "разрешение Workflows: Read and write) и запустите рассылку ещё раз"
+        )
+    if resp.status_code in (403, 404):
+        return "У токена сервиса (GITHUB_TOKEN) нет права записи в этот репозиторий"
+    return f"Не удалось создать ветку {TEMPLATE_UPDATE_BRANCH}: GitHub ответил {resp.status_code}"
+
+
+def _place_template_branch(
+    github_client: GitHubClient,
+    org: str,
+    fork_name: str,
+    sha: str,
+    touches_workflows: bool = False,
+) -> str | None:
     """
     Point TEMPLATE_UPDATE_BRANCH in the fork at the template's tip commit,
     creating the branch or moving an existing one.
@@ -320,13 +447,13 @@ def _place_template_branch(github_client: GitHubClient, org: str, fork_name: str
             f"Failed to move {TEMPLATE_UPDATE_BRANCH} in {org}/{fork_name}: "
             f"{update_resp.status_code} {update_resp.text[:500]}"
         )
-        return update_resp.text[:500]
+        return _branch_error_message(update_resp, touches_workflows)
 
     logger.error(
         f"Failed to create {TEMPLATE_UPDATE_BRANCH} in {org}/{fork_name}: "
         f"{resp.status_code} {resp.text[:500]}"
     )
-    return resp.text[:500]
+    return _branch_error_message(resp, touches_workflows)
 
 
 def _create_pr_for_fork(
@@ -338,14 +465,27 @@ def _create_pr_for_fork(
     """
     Open (or discover the state of) a single update PR, per the response
     table in issue #52. One rate-limit retry; anything else is final.
+
+    The fork is compared with the template first, again even after a preview
+    (a student may have merged in between): with nothing to propose, nothing
+    is written to the repository.
     """
     fork_name = fork["name"]
     fork_default_branch = fork.get("default_branch") or "main"
     head = TEMPLATE_UPDATE_BRANCH
 
-    branch_error = _place_template_branch(github_client, org, fork_name, template_head_sha)
+    diff = _compare_with_template(github_client, org, fork, template_head_sha)
+    if diff is None:
+        return PropagateResult(repo=fork_name, status="error", message=COMPARE_FAILED_MESSAGE)
+    if diff.commits_behind == 0:
+        return PropagateResult(repo=fork_name, status="up_to_date", commits_behind=0)
+    behind = diff.commits_behind
+
+    branch_error = _place_template_branch(
+        github_client, org, fork_name, template_head_sha, diff.touches_workflows
+    )
     if branch_error:
-        return PropagateResult(repo=fork_name, status="error", message=branch_error)
+        return PropagateResult(repo=fork_name, status="error", message=branch_error, commits_behind=behind)
 
     resp = github_client.create_pull_request(
         org, fork_name, head=head, base=fork_default_branch, title=PR_TITLE, body=PR_BODY
@@ -360,16 +500,20 @@ def _create_pr_for_fork(
         )
 
     if resp.status_code == 201:
-        return PropagateResult(repo=fork_name, status="pr_created", pr_url=resp.json().get("html_url"))
+        return PropagateResult(
+            repo=fork_name, status="pr_created", pr_url=resp.json().get("html_url"), commits_behind=behind
+        )
 
     if resp.status_code == 422:
         message = _response_message(resp)
         if "No commits between" in message:
-            return PropagateResult(repo=fork_name, status="up_to_date", message=message)
+            return PropagateResult(repo=fork_name, status="up_to_date", message=message, commits_behind=0)
         if "A pull request already exists" in message:
             existing = github_client.list_pull_requests(org, fork_name, head=head, state="open")
             pr_url = existing[0].get("html_url") if existing else None
-            return PropagateResult(repo=fork_name, status="pr_exists", pr_url=pr_url, message=message)
+            return PropagateResult(
+                repo=fork_name, status="pr_exists", pr_url=pr_url, message=message, commits_behind=behind
+            )
         logger.error(f"PR creation validation failed for {org}/{fork_name}: {resp.text[:500]}")
         return PropagateResult(repo=fork_name, status="error", message=resp.text[:500])
 

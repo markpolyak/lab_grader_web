@@ -28,7 +28,7 @@
   "adminLabs": {
     "back": "← Back to courses",
     "title": "Course labs",
-      "titleWithCourse": "Labs of {{course}}",
+    "titleWithCourse": "Labs of {{course}}",
     "loading": "Loading labs…",
     "errorLoadingLabs": "Could not load the list of labs",
     "columns": {
@@ -47,13 +47,23 @@
     "dryRun": {
       "title": "Preview update rollout",
       "summary": "{{count}} student repositories will receive an update proposal",
-      "notAFork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected",
+      "counts": {
+        "pr_exists": "{{count}} repositories already have an open PR with the current template",
+        "up_to_date": "{{count}} repositories have nothing to update: all template changes are already there",
+        "error": "{{count}} repositories couldn't be compared with the template",
+        "not_a_fork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected"
+      },
       "selectAll": "Select all",
       "selectedCount": "Selected {{selected}} of {{total}}",
       "cancel": "Cancel",
       "confirm": "Send the update ({{count}})",
-      "statusWillProcess": "will be processed",
-      "statusNotAFork": "not a template fork"
+      "statuses": {
+        "needs_update": "needs update (new commits: {{count}})",
+        "pr_exists": "PR already open",
+        "up_to_date": "nothing to update",
+        "error": "check failed",
+        "not_a_fork": "not a template fork"
+      }
     },
     "progress": {
       "title": "Update rollout",

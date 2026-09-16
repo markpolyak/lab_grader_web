@@ -714,6 +714,34 @@ class TestGitHubClientRefs:
         assert client.get_ref("org", "template", "heads/nope") is None
 
     @responses.activate
+    def test_compare_commits_returns_ahead_by_and_files(self):
+        call = responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/os-task1-student1/compare/main...abc123",
+            json={"status": "diverged", "ahead_by": 2, "behind_by": 1, "files": [{"filename": "lab1.cpp"}]},
+            status=200,
+        )
+        client = GitHubClient("test_token")
+
+        comparison = client.compare_commits("org", "os-task1-student1", "main", "abc123")
+
+        assert comparison["ahead_by"] == 2
+        assert comparison["files"] == [{"filename": "lab1.cpp"}]
+        assert "per_page=1" in call.calls[0].request.url
+
+    @responses.activate
+    def test_compare_commits_failure_returns_none(self):
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/org/os-task1-student1/compare/main...abc123",
+            json={"message": "Not Found"},
+            status=404,
+        )
+        client = GitHubClient("test_token")
+
+        assert client.compare_commits("org", "os-task1-student1", "main", "abc123") is None
+
+    @responses.activate
     def test_create_ref_posts_full_ref_and_sha(self):
         call = responses.add(
             responses.POST,

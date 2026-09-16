@@ -230,6 +230,15 @@ class TestPropagateTemplateUpdateEndpointNoBody:
             status=200,
         )
         responses.add(responses.GET, "https://api.github.com/orgs/test-org/repos", json=[], status=200)
+        # The fork lacks one template commit, and no update PR is open yet.
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-student1/compare/main..." + "a" * 40,
+            json={"ahead_by": 1, "files": [{"filename": "lab1.cpp"}]}, status=200,
+        )
+        responses.add(
+            responses.GET, "https://api.github.com/repos/test-org/test-task1-student1/pulls", json=[], status=200,
+        )
         responses.add(
             responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/git/refs",
             json={}, status=201,
@@ -288,6 +297,15 @@ class TestPropagateTemplateUpdateEndpoint:
         responses.add(
             responses.GET, "https://api.github.com/orgs/test-org/repos", json=[], status=200,
         )
+        # The fork lacks one template commit, and no update PR is open yet.
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-student1/compare/main..." + "a" * 40,
+            json={"ahead_by": 1, "files": [{"filename": "lab1.cpp"}]}, status=200,
+        )
+        responses.add(
+            responses.GET, "https://api.github.com/repos/test-org/test-task1-student1/pulls", json=[], status=200,
+        )
         responses.add(
             responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/git/refs",
             json={}, status=201,
@@ -324,6 +342,15 @@ class TestPropagateTemplateUpdateEndpoint:
         )
         responses.add(
             responses.GET, "https://api.github.com/orgs/test-org/repos", json=[], status=200,
+        )
+        # The fork lacks one template commit, and no update PR is open yet.
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-student1/compare/main..." + "a" * 40,
+            json={"ahead_by": 1, "files": [{"filename": "lab1.cpp"}]}, status=200,
+        )
+        responses.add(
+            responses.GET, "https://api.github.com/repos/test-org/test-task1-student1/pulls", json=[], status=200,
         )
         responses.add(
             responses.POST, "https://api.github.com/repos/test-org/test-task1-student1/git/refs",
