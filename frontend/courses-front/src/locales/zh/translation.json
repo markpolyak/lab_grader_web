@@ -31,6 +31,7 @@
   "adminLabs": {
     "back": "← 返回课程列表",
     "title": "课程实验列表",
+    "titleWithCourse": "{{course}} 课程实验列表",
     "loading": "正在加载实验列表…",
     "errorLoadingLabs": "无法加载实验列表",
     "columns": {
@@ -39,7 +40,8 @@
       "githubPrefix": "github-prefix",
       "templateRepo": "template-repo",
       "provisioning": "仓库创建方式",
-      "actions": "操作"
+      "actions": "操作",
+      "joinLink": "学生链接"
     },
     "provisioningTemplate": "template",
     "provisioningFork": "fork",
@@ -48,13 +50,23 @@
     "dryRun": {
       "title": "预览更新分发",
       "summary": "将有 {{count}} 个学生仓库收到更新提议",
-      "notAFork": "有 {{count}} 个使用此前缀的仓库与模板没有 fork 关系（在切换到 fork 之前创建），不会受到影响",
+      "counts": {
+        "pr_exists": "有 {{count}} 个仓库已存在包含模板最新版本的 PR",
+        "up_to_date": "有 {{count}} 个仓库无需更新：模板的所有更改都已包含在内",
+        "error": "有 {{count}} 个仓库无法与模板进行比较",
+        "not_a_fork": "有 {{count}} 个使用此前缀的仓库与模板没有 fork 关系（在切换到 fork 之前创建），不会受到影响"
+      },
       "selectAll": "全选",
       "selectedCount": "已选择 {{selected}} / {{total}}",
       "cancel": "取消",
       "confirm": "发送更新（{{count}}）",
-      "statusWillProcess": "将被处理",
-      "statusNotAFork": "不是模板的 fork"
+      "statuses": {
+        "needs_update": "需要更新（新提交：{{count}}）",
+        "pr_exists": "PR 已存在",
+        "up_to_date": "无需更新",
+        "error": "检查失败",
+        "not_a_fork": "不是模板的 fork"
+      }
     },
     "progress": {
       "title": "更新分发",
@@ -103,7 +115,8 @@
         "github": "GitHub",
         "status": "状态",
         "grade": "成绩",
-        "message": "信息"
+        "message": "信息",
+        "team": "小组"
       },
       "statuses": {
         "updated": "已评定",
@@ -112,7 +125,8 @@
         "error": "错误",
         "conflict": "用户名冲突",
         "unmatched": "姓名未匹配",
-        "ambiguous": "姓名有歧义"
+        "ambiguous": "姓名有歧义",
+        "no_team": "无小组"
       },
       "errors": {
         "groupsFailed": "加载班级失败",
@@ -120,6 +134,18 @@
         "alreadyRunning": "该实验对该班级的评定已在进行中。",
         "cancelFailed": "停止评定失败"
       }
+    },
+    "join": {
+      "copy": "复制",
+      "copied": "链接已复制",
+      "copyPrompt": "请复制链接：",
+      "opensAt": "将于 {{moment}} 开放",
+      "notScheduled": "未开放：未设置 join.opens-at",
+      "open": "已开放，无截止时间",
+      "openUntil": "已开放，截止 {{moment}}",
+      "closed": "已截止",
+      "closedAt": "已于 {{moment}} 截止",
+      "revokeHint": "如需撤销：在课程配置中增大 join.revision，并重新分发新链接。"
     }
   },
   "join": {
@@ -157,7 +183,65 @@
       "actionsEnableFailed": "无法在仓库中启用检查，请联系教师。",
       "nameTaken": "该名称的仓库已被占用，请联系教师。",
       "forkCheckFailed": "无法验证仓库，请几分钟后重试。",
-      "unknown": "发生未知错误，请重试或联系教师。"
+      "unknown": "发生未知错误，请重试或联系教师。",
+      "notATeamLab": "本实验为个人完成，不是小组实验。",
+      "sessionRequired": "登录会话已过期，请重新使用 GitHub 登录。",
+      "teamsUnavailable": "无法从 GitHub 获取小组列表，请一分钟后重试。",
+      "teamNotFound": "未找到该小组，请刷新小组列表。",
+      "alreadyInTeam": "您已加入本实验的某个小组。如需更换小组，请联系教师。",
+      "teamFull": "该小组已满员，请选择其他小组。",
+      "teamLimitReached": "小组数量已达上限，请加入已有小组。",
+      "titleTaken": "该小组名称已被占用，请换一个名称。",
+      "invalidTitle": "小组名称不合适，请检查长度并删除特殊字符。",
+      "slugRace": "有人同时创建了小组，请重试。",
+      "titleTooShort": "小组名称至少需要 3 个字符。",
+      "titleTooLong": "小组名称不能超过 60 个字符。",
+      "titleHasSeparator": "小组名称不能包含“ — ”。",
+      "descriptionTooLong": "小组描述不能超过 200 个字符。",
+      "linkNotFound": "未找到该链接，或该链接已失效。请检查地址，或向老师索取新链接。",
+      "notOpen": "该链接对应的作业尚未开放。",
+      "closed": "该链接已停止发放仓库。如果您已有仓库，可通过同一链接恢复访问权限。"
+    },
+    "team": {
+      "badge": "小组作业",
+      "limits": "每组最多 {{size}} 人，最多 {{count}} 个小组。",
+      "noLimit": "不限",
+      "landing": "使用 GitHub 登录后即可查看本实验的小组，加入其中一个或创建自己的小组。",
+      "loading": "正在加载小组列表…",
+      "retry": "重试",
+      "pickTitle": "本实验的小组",
+      "pickDescription": "加入同学的小组或创建自己的小组。每个小组共用一个仓库，所有成员都有访问权限。",
+      "empty": "目前还没有小组，创建第一个吧。",
+      "join": "加入",
+      "joining": "正在加入…",
+      "full": "小组已满",
+      "size": "成员：{{count}}",
+      "sizeOf": "{{size}} / {{max}}",
+      "pending": "邀请已发送",
+      "pendingHint": "该学生尚未接受邀请，但名额已被占用。",
+      "expired": "邀请已过期",
+      "expiredHint": "邀请已过期，但名额仍被占用。学生可通过实验链接恢复访问，教师可以释放该名额。",
+      "membersUnknown": "暂时无法获取小组成员，请一分钟后刷新页面。",
+      "createTitle": "创建小组",
+      "nameLabel": "小组名称",
+      "namePlaceholder": "例如：企鹅队",
+      "descriptionLabel": "描述（可选）",
+      "descriptionPlaceholder": "小组的研究方向",
+      "create": "创建小组",
+      "creating": "正在创建…",
+      "creationClosed": "已停止创建新小组，请加入已有小组。",
+      "creationClosedLimit": "小组数量已达上限（{{count}}），请加入已有小组。",
+      "myTeamTitle": "您的小组",
+      "openRepository": "打开小组仓库",
+      "memberHint": "如果没有收到仓库邀请或邀请已过期，请点击“恢复访问”重新发送。",
+      "repairAccess": "恢复访问",
+      "repairing": "正在恢复…"
+    },
+    "secret": {
+      "notOpen": "作业尚未开放。老师发布后，该链接才会生效。",
+      "notOpenAt": "作业尚未开放，该链接将于 {{moment}} 生效。",
+      "closed": "提交已截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。",
+      "closedAt": "提交已于 {{moment}} 截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。"
     }
   }
 }

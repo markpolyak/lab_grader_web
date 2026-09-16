@@ -9,6 +9,8 @@ This module contains functions for various aspects of lab grading:
 - sheets_client: Google Sheets helpers
 - grader: Orchestrator for grading workflow
 - repo_provisioning: Orchestrator for the /join student repo creation flow
+- teams: Team (group) lab assignments - one repository per team
+- join_links: Secret /j/{token} links and lab availability windows
 - propagate: Orchestrator for propagating template updates via fork PRs (admin)
 """
 
@@ -74,6 +76,47 @@ from .repo_provisioning import (
     RepoProvisioner,
     ProvisionResult,
     ProvisionStatus,
+)
+
+from .teams import (
+    TeamConfig,
+    TeamConfigError,
+    TeamActionResult,
+    TeamActionStatus,
+    TeamInfo,
+    TeamRegistry,
+    TeamTitleError,
+    TEAMS_CACHE_TTL_SECONDS,
+    TEAM_SLUG_RE,
+    is_team_lab,
+    parse_team_config,
+    clean_team_title,
+    clean_team_description,
+    compose_description,
+    parse_description,
+    reset_teams_state,
+)
+
+from .join_links import (
+    JoinConfigError,
+    JoinSettings,
+    JoinWindow,
+    LINK_PUBLIC,
+    LINK_SECRET,
+    STATE_CLOSED,
+    STATE_NOT_OPEN,
+    STATE_OPEN,
+    TOKEN_LENGTH,
+    TOKEN_RE,
+    check_token_collisions,
+    compute_token,
+    is_secret_lab,
+    iter_secret_labs,
+    join_identity,
+    lab_token,
+    parse_join_config,
+    parse_window,
+    resolve_token,
 )
 
 from .propagate import (
@@ -166,6 +209,43 @@ __all__ = [
     "RepoProvisioner",
     "ProvisionResult",
     "ProvisionStatus",
+    # teams
+    "TeamConfig",
+    "TeamConfigError",
+    "TeamActionResult",
+    "TeamActionStatus",
+    "TeamInfo",
+    "TeamRegistry",
+    "TeamTitleError",
+    "TEAMS_CACHE_TTL_SECONDS",
+    "TEAM_SLUG_RE",
+    "is_team_lab",
+    "parse_team_config",
+    "clean_team_title",
+    "clean_team_description",
+    "compose_description",
+    "parse_description",
+    "reset_teams_state",
+    # join_links
+    "JoinConfigError",
+    "JoinSettings",
+    "JoinWindow",
+    "LINK_PUBLIC",
+    "LINK_SECRET",
+    "STATE_CLOSED",
+    "STATE_NOT_OPEN",
+    "STATE_OPEN",
+    "TOKEN_LENGTH",
+    "TOKEN_RE",
+    "check_token_collisions",
+    "compute_token",
+    "is_secret_lab",
+    "iter_secret_labs",
+    "join_identity",
+    "lab_token",
+    "parse_join_config",
+    "parse_window",
+    "resolve_token",
     # propagate
     "PropagateJob",
     "PropagateResult",

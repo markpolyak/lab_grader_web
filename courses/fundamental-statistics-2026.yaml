@@ -1,0 +1,220 @@
+---
+# Configuration file for lab-grader
+
+course:
+    name: Основы статистики
+    alt-names:
+        - FS
+        - Fundamental statistics
+        - ОснСтат
+    semester: Осень 2026
+    university: ИТМО
+    email: mdpoliak@itmo.ru
+    timezone: UTC+3
+    github:
+        organization: itmo-fs-2026
+        teachers:
+            - "Mark Polyak"
+            - markpolyak
+    google:
+        spreadsheet: 1pyhiHi4yv3nlugR8lq6U-MojwkLAO5J9H5PA8-XD2Pg
+        info-sheet: График
+        task-id-column: 0
+        student-name-column: 1
+        lab-column-offset: 1
+    staff:
+        - name: Поляк Марк Дмитриевич
+          title: преподаватель практики
+          status: лектор
+        - name: Поляк Марк Дмитриевич
+          title: преподаватель практики
+          status: лабораторные работы
+    labs:
+        "0":
+            github-prefix: fs-lab0
+            short-name: ЛР0
+            template-repo: itmo-fs-2026/github-starter-course
+            repo-provisioning: fork
+            penalty-max: 5
+            ignore-task-id: True
+            # score:
+            #   patterns:
+            #     - '##\[notice\]Points\s+(\d+(?:[.,]\d+)?)/\d+'  # "##[notice]Points 10/10" -> 10
+            #     - 'Score\s+is\s+(\d+(?:[.,]\d+)?)'              # "Score is 10.5" -> 10.5
+            #     - 'Total:\s+(\d+(?:[.,]\d+)?)'                  # "Total: 10" -> 10
+            ci:
+                - workflows
+            files:
+                - goals.md
+                - info.md
+                - report.pdf
+            moss:
+                language: c
+            report:
+                - Задание
+                - Результат
+            validation:
+                commits:
+                    -
+                        filter: console
+                        min-count: 1
+        "1":
+            github-prefix: fs-lab1
+            short-name: ЛР1
+            template-repo: itmo-fs-2026/lab1-eda
+            repo-provisioning: fork
+            taskid-max: 10
+            # ignore-task-id: True
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - data_analysis.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab1
+            report:
+                - Цель работы
+                - Индивидуальное задание
+                - Описание входных данных
+                - Результат выполнения работы
+                - Исходный код программы с комментариями
+                - Выводы
+        "2":
+            github-prefix: fs-lab2
+            short-name: ЛР2
+            template-repo: itmo-fs-2026/lab2-distributions
+            repo-provisioning: fork
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - lab2_distributions.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab2
+        "3":
+            github-prefix: fs-lab3
+            short-name: ЛР3
+            template-repo: itmo-fs-2026/lab3-params-estimation
+            repo-provisioning: fork
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab3
+        "4":
+            github-prefix: fs-lab4
+            short-name: ЛР4
+            template-repo: itmo-fs-2026/lab4-hypothesis-testing
+            repo-provisioning: fork
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab4
+        "5":
+            github-prefix: fs-lab5
+            short-name: ЛР5
+            template-repo: itmo-fs-2026/lab5-regression
+            repo-provisioning: fork
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab5
+        "6":
+            github-prefix: fs-lab6
+            short-name: ЛР6
+            template-repo: itmo-fs-2026/lab6-classification
+            repo-provisioning: fork
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab6
+        "7":
+            github-prefix: fs-lab7
+            short-name: ЛР7
+            template-repo: itmo-fs-2026/lab7-multiclass-classification
+            repo-provisioning: fork
+            taskid-max: 10
+            penalty-max: 5
+            score:
+              patterns:
+                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
+            ci:
+                - workflows
+            files:
+                - exercises.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: lab7
+        "quiz":
+            github-prefix: quiz
+            short-name: "Тест / КР"
+            template-repo: itmo-fs-2026/control-work-template
+            repo-provisioning: fork
+            # taskid-max: 15
+            ignore-task-id: true
+            join:
+                link: secret
+                opens-at: "2026-09-01 00:00"     # момент публикации
+                # closes-at: "2026-10-15 11:30"    # необязательно
+                revision: 1                      # увеличить, чтобы отозвать ссылку
+            penalty-max: 5
+            score:
+              patterns:
+                - 'Итоговая оценка:\s*(\d+(?:[.,]\d+)?)'
+            ci:
+                - workflows
+            files:
+                - control_work.ipynb
+            moss:
+                language: python
+                max-matches: 100
+                local-path: test
+misc:
+    requests-timeout: 5

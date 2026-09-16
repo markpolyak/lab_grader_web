@@ -32,6 +32,7 @@ const RESULT_STATUS_COLOR = {
   conflict: "error",
   unmatched: "warning",
   ambiguous: "warning",
+  no_team: "warning",
 };
 
 async function fetchJson(url, options) {
@@ -140,6 +141,9 @@ export const BulkGradeDialog = ({ courseId, lab, onClose, onError }) => {
 
   const running = job && job.status === "running";
   const results = (job && job.results) || [];
+  // Колонка команды появляется только у командной лабы: у индивидуальной
+  // поле team пустое у всех строк, и лишний столбец только мешает.
+  const hasTeams = results.some((result) => result.team);
 
   return (
     <Dialog open onClose={running ? undefined : handleClose} maxWidth="md" fullWidth>
@@ -228,6 +232,7 @@ export const BulkGradeDialog = ({ courseId, lab, onClose, onError }) => {
                     <TableRow>
                       <TableCell>{t("adminLabs.bulk.columns.student")}</TableCell>
                       <TableCell>{t("adminLabs.bulk.columns.github")}</TableCell>
+                      {hasTeams && <TableCell>{t("adminLabs.bulk.columns.team")}</TableCell>}
                       <TableCell>{t("adminLabs.bulk.columns.status")}</TableCell>
                       <TableCell>{t("adminLabs.bulk.columns.grade")}</TableCell>
                       <TableCell>{t("adminLabs.bulk.columns.message")}</TableCell>
@@ -241,6 +246,7 @@ export const BulkGradeDialog = ({ courseId, lab, onClose, onError }) => {
                           {r.github || "—"}
                           {r.registered && ` (${t("adminLabs.bulk.registered")})`}
                         </TableCell>
+                        {hasTeams && <TableCell>{r.team || "—"}</TableCell>}
                         <TableCell>
                           <Chip
                             size="small"

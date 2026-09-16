@@ -8,6 +8,8 @@ mocked with `responses`.
 
 See docs/REPO_GENERATION_PLAN.md §7, §10, §11 (stage 2/3/4 acceptance).
 """
+import base64
+import json
 import sys
 import os
 import time
@@ -91,6 +93,36 @@ class TestJoinInfo:
         with patch("main.get_course_by_id", return_value=join_course_config):
             data = main_module.join_lab_info(mock_request, "test-course", "1")
         assert data["course_name"] == "Test Course"
+
+    def test_individual_lab_reports_teams_disabled(self, mock_request, mock_get_course_by_id):
+        data = main_module.join_lab_info(mock_request, "test-course", "1")
+        assert data["team"]["enabled"] is False
+        assert data["team"]["size_max"] is None
+        assert data["team"]["count_max"] is None
+
+    def test_team_lab_reports_its_limits(self, mock_request, join_course_config):
+        join_course_config["labs"]["1"]["team"] = {"size-max": 4, "count-max": 8}
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            data = main_module.join_lab_info(mock_request, "test-course", "1")
+        assert data["team"]["enabled"] is True
+        assert data["team"]["size_max"] == 4
+        assert data["team"]["count_max"] == 8
+
+    def test_invalid_team_limit_returns_400(self, mock_request, join_course_config):
+        """A bad limit must be a clear config error, not a 500 (stage 1 checklist)."""
+        join_course_config["labs"]["1"]["team"] = {"size-max": 0}
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_info(mock_request, "test-course", "1")
+        assert exc_info.value.status_code == 400
+        assert "size-max" in exc_info.value.detail
+
+    def test_team_limit_of_wrong_type_returns_400(self, mock_request, join_course_config):
+        join_course_config["labs"]["1"]["team"] = {"count-max": "восемь"}
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_info(mock_request, "test-course", "1")
+        assert exc_info.value.status_code == 400
 
 
 class TestJoinStart:
@@ -347,6 +379,45 @@ class TestJoinCallback:
         assert generate_call.call_count == 0
 
     @responses.activate
+    def test_team_lab_sets_a_session_and_creates_nothing(self, mock_request, join_course_config):
+        """A team lab needs a dialogue, so the callback only authenticates
+        the student - the repository is created later, by the team endpoints
+        (docs/TEAM_ASSIGNMENTS_PLAN.md §8.1)."""
+        join_course_config["labs"]["1"]["team"] = {"size-max": 4}
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            state = _get_state(mock_request)
+
+            responses.add(
+                responses.POST,
+                "https://github.com/login/oauth/access_token",
+                json={"access_token": "gho_student_token"},
+                status=200,
+            )
+            responses.add(
+                responses.GET, "https://api.github.com/user",
+                json={"login": "student1"}, status=200,
+            )
+            generate_call = responses.add(
+                responses.POST,
+                "https://api.github.com/repos/test-org/os-task1-template/generate",
+                json={}, status=201,
+            )
+
+            resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["authenticated"]
+        assert generate_call.call_count == 0
+
+        cookie = resp.headers["set-cookie"]
+        assert "join_session=" in cookie
+        assert "HttpOnly" in cookie
+        assert "SameSite=lax" in cookie.replace("samesite", "SameSite")
+        assert "Path=/join" in cookie
+        assert f"Max-Age={main_module.JOIN_SESSION_MAX_AGE}" in cookie
+        assert main_module.JOIN_SESSION_MAX_AGE == 1800
+
+    @responses.activate
     def test_student_access_token_is_never_exposed_in_redirect(self, mock_request, mock_get_course_by_id):
         """The student's one-shot OAuth access token must never leak into the final redirect."""
         state = _get_state(mock_request)
@@ -370,3 +441,924 @@ class TestJoinCallback:
         resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
 
         assert "gho_super_secret_token" not in resp.headers["location"]
+
+
+class TestJoinSession:
+    """The signed cookie carrying the confirmed username (§6 of the team plan)."""
+
+    def _request_with_cookie(self, cookie_value):
+        from starlette.requests import Request
+
+        headers = []
+        if cookie_value is not None:
+            headers.append((b"cookie", f"join_session={cookie_value}".encode()))
+        scope = {
+            "type": "http", "method": "GET", "path": "/join",
+            "headers": headers, "client": ("127.0.0.1", 12345),
+        }
+        return Request(scope, lambda: None)
+
+    def test_round_trip(self):
+        cookie = main_module._build_join_session("student1", "test-course", "1")
+        request = self._request_with_cookie(cookie)
+
+        assert main_module.require_join_session(request, "test-course", "1") == "student1"
+
+    def test_missing_cookie_is_401(self):
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(self._request_with_cookie(None), "test-course", "1")
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "SESSION_REQUIRED"
+
+    def test_forged_cookie_is_401(self):
+        request = self._request_with_cookie("not-a-signed-value")
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(request, "test-course", "1")
+        assert exc_info.value.status_code == 401
+
+    def test_expired_cookie_is_401(self):
+        backdated = time.time() - (main_module.JOIN_SESSION_MAX_AGE + 10)
+        with patch("itsdangerous.timed.time.time", return_value=backdated):
+            cookie = main_module._build_join_session("student1", "test-course", "1")
+
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(self._request_with_cookie(cookie), "test-course", "1")
+        assert exc_info.value.status_code == 401
+
+    def test_cookie_of_another_lab_is_rejected(self):
+        """A session obtained for one lab must not act on another."""
+        cookie = main_module._build_join_session("student1", "test-course", "2")
+
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(self._request_with_cookie(cookie), "test-course", "1")
+        assert exc_info.value.status_code == 401
+
+    def test_cookie_of_another_course_is_rejected(self):
+        cookie = main_module._build_join_session("student1", "other-course", "1")
+
+        with pytest.raises(HTTPException) as exc_info:
+            main_module.require_join_session(self._request_with_cookie(cookie), "test-course", "1")
+        assert exc_info.value.status_code == 401
+
+
+@pytest.fixture
+def team_course_config(join_course_config):
+    """join_course_config with lab '1' turned into a team lab."""
+    join_course_config["labs"]["1"]["team"] = {"size-max": 3, "count-max": 2}
+    join_course_config["github"]["teachers"] = ["Mark Polyak", "teacher1"]
+    return join_course_config
+
+
+@pytest.fixture(autouse=True)
+def clean_teams_state():
+    from grading.teams import reset_teams_state
+
+    reset_teams_state()
+    yield
+    reset_teams_state()
+
+
+def _session_request(username="student1", course_id="test-course", lab_id="1"):
+    """A Request carrying a valid join_session cookie."""
+    from starlette.requests import Request
+
+    cookie = main_module._build_join_session(username, course_id, lab_id)
+    scope = {
+        "type": "http", "method": "GET", "path": "/join",
+        "headers": [(b"cookie", f"join_session={cookie}".encode())],
+        "client": ("127.0.0.1", 12345),
+    }
+    request = Request(scope, lambda: None)
+    request.state.view_rate_limit = None
+    return request
+
+
+def _team_repo_responses(org="test-org", prefix="test-task1"):
+    """Register org repos plus a roster for two teams."""
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/orgs/{org}/repos",
+        json=[
+            {"name": f"{prefix}-team-1", "description": "Пингвины — учим планировщик"},
+            {"name": f"{prefix}-team-2", "description": "Тюлени"},
+            {"name": f"{prefix}-student9", "description": "личный репозиторий"},
+        ],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{org}/{prefix}-team-1/collaborators",
+        json=[
+            {"login": "alice", "permissions": {"push": True, "admin": False}},
+            {"login": "teacher1", "permissions": {"push": True, "admin": True}},
+        ],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{org}/{prefix}-team-1/invitations",
+        json=[{"id": 1, "invitee": {"login": "carol"}}],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{org}/{prefix}-team-2/collaborators",
+        json=[{"login": "student1", "permissions": {"push": True, "admin": False}}],
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{org}/{prefix}-team-2/invitations",
+        json=[],
+        status=200,
+    )
+
+
+class TestJoinLabTeams:
+    """GET /join/{course}/{lab}/teams (§8.2 of the team plan)."""
+
+    @responses.activate
+    def test_lists_teams_with_rosters(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert data["username"] == "student1"
+        assert data["size_max"] == 3 and data["count_max"] == 2
+        assert [team["slug"] for team in data["teams"]] == ["team-1", "team-2"]
+
+        first = data["teams"][0]
+        assert first["title"] == "Пингвины"
+        assert first["description"] == "учим планировщик"
+        # The organization owner (admin) and the teacher stay out of the roster
+        assert first["members"] == ["alice"]
+        assert first["pending"] == ["carol"]
+        assert first["expired"] == []
+        assert first["size"] == 2
+
+    @responses.activate
+    def test_repo_url_only_for_my_own_team(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert data["my_team"] == "team-2"
+        assert data["teams"][0]["repo_url"] is None
+        assert data["teams"][0]["is_mine"] is False
+        assert data["teams"][1]["repo_url"] == "https://github.com/test-org/test-task1-team-2"
+        assert data["teams"][1]["is_mine"] is True
+
+    @responses.activate
+    def test_member_of_a_team_cannot_create_another(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request(), "test-course", "1")
+        assert data["can_create"] is False
+
+    @responses.activate
+    def test_count_max_closes_creation(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request("dave"), "test-course", "1")
+
+        assert data["my_team"] is None
+        # count-max is 2 and two teams already exist
+        assert data["can_create"] is False
+
+    @responses.activate
+    def test_stranger_can_create_while_below_count_max(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request("dave"), "test-course", "1")
+        assert data["can_create"] is True
+
+    @responses.activate
+    def test_is_full_reflects_size_max(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["size-max"] = 2
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_lab_teams(_session_request("dave"), "test-course", "1")
+
+        assert data["teams"][0]["is_full"] is True   # alice + pending carol
+        assert data["teams"][1]["is_full"] is False
+
+    @responses.activate
+    def test_repeat_request_within_ttl_does_not_hit_github_again(self, team_course_config):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            main_module.join_lab_teams(_session_request(), "test-course", "1")
+            calls_after_first = len(responses.calls)
+            main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert len(responses.calls) == calls_after_first
+
+    @responses.activate
+    def test_unavailable_org_repos_return_502(self, team_course_config):
+        responses.add(responses.GET, "https://api.github.com/orgs/test-org/repos", status=500)
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert exc_info.value.status_code == 502
+        assert exc_info.value.detail == "TEAMS_UNAVAILABLE"
+
+    def test_without_a_session_returns_401(self, team_course_config, mock_request):
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_teams(mock_request, "test-course", "1")
+
+        assert exc_info.value.status_code == 401
+        assert exc_info.value.detail == "SESSION_REQUIRED"
+
+    def test_session_of_another_lab_returns_401(self, team_course_config):
+        request = _session_request(lab_id="2")
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_teams(request, "test-course", "1")
+
+        assert exc_info.value.status_code == 401
+
+    def test_individual_lab_returns_not_a_team_lab(self, join_course_config):
+        with patch("main.get_course_by_id", return_value=join_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_lab_teams(_session_request(), "test-course", "1")
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "NOT_A_TEAM_LAB"
+
+    @responses.activate
+    def test_teams_count_appears_in_the_public_info_after_a_read(
+        self, team_course_config, mock_request
+    ):
+        _team_repo_responses()
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            before = main_module.join_lab_info(mock_request, "test-course", "1")
+            assert before["team"]["teams_count"] is None
+
+            main_module.join_lab_teams(_session_request(), "test-course", "1")
+            after = main_module.join_lab_info(mock_request, "test-course", "1")
+
+        assert after["team"]["teams_count"] == 2
+
+
+def _created_team_responses(username="dave", org="test-org", prefix="test-task1", slug="team-3"):
+    """GitHub calls made while creating a team from a template."""
+    repo = f"{prefix}-{slug}"
+    responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo}", status=404)
+    responses.add(
+        responses.POST,
+        f"https://api.github.com/repos/{org}/os-task1-template/generate",
+        json={}, status=201,
+    )
+    responses.add(
+        responses.GET, f"https://api.github.com/repos/{org}/{repo}/collaborators/{username}",
+        status=404,
+    )
+    responses.add(
+        responses.GET, f"https://api.github.com/repos/{org}/{repo}/invitations",
+        json=[], status=200,
+    )
+    responses.add(
+        responses.PUT, f"https://api.github.com/repos/{org}/{repo}/collaborators/{username}",
+        status=201,
+    )
+    responses.add(responses.PATCH, f"https://api.github.com/repos/{org}/{repo}", status=200)
+
+
+class TestCreateJoinTeam:
+    """POST /join/{course}/{lab}/teams."""
+
+    @responses.activate
+    def test_creates_a_team_and_returns_its_repository(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        _created_team_responses()
+        body = main_module.CreateTeamRequest(title="Моржи", description="третья команда")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.create_join_team(
+                _session_request("dave"), "test-course", "1", body,
+            )
+
+        assert data["status"] == "ok"
+        assert data["slug"] == "team-3"
+        assert data["repo_url"] == "https://github.com/test-org/test-task1-team-3"
+
+        patches = [
+            call for call in responses.calls
+            if call.request.method == "PATCH"
+            and call.request.url.endswith("/test-task1-team-3")
+        ]
+        assert json.loads(patches[0].request.body)["description"] == "Моржи — третья команда"
+
+    @responses.activate
+    def test_invalid_title_returns_400_with_a_stable_code(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        body = main_module.CreateTeamRequest(title="ab")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.create_join_team(
+                _session_request("dave"), "test-course", "1", body,
+            )
+
+        assert response.status_code == 400
+        assert json.loads(response.body)["detail"] == "INVALID_TITLE"
+
+    @responses.activate
+    def test_count_max_returns_403(self, team_course_config):
+        _team_repo_responses()  # two teams already exist, count-max is 2
+        body = main_module.CreateTeamRequest(title="Моржи")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.create_join_team(
+                _session_request("dave"), "test-course", "1", body,
+            )
+
+        assert response.status_code == 403
+        assert json.loads(response.body)["detail"] == "TEAM_LIMIT_REACHED"
+
+    @responses.activate
+    def test_member_of_a_team_gets_409_with_their_team(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        body = main_module.CreateTeamRequest(title="Моржи")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.create_join_team(
+                _session_request("student1"), "test-course", "1", body,
+            )
+
+        assert response.status_code == 409
+        payload = json.loads(response.body)
+        assert payload["detail"] == "ALREADY_IN_TEAM"
+        assert payload["my_team"] == "team-2"
+
+    def test_without_a_session_returns_401(self, team_course_config, mock_request):
+        body = main_module.CreateTeamRequest(title="Моржи")
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.create_join_team(mock_request, "test-course", "1", body)
+        assert exc_info.value.status_code == 401
+
+    def test_the_request_body_has_no_username_field(self):
+        """The identity comes from the cookie only, so there is nothing to forge."""
+        assert "username" not in main_module.CreateTeamRequest.model_fields
+        body = main_module.CreateTeamRequest(title="Моржи", username="victim")
+        assert not hasattr(body, "username")
+
+    @responses.activate
+    def test_access_is_granted_to_the_session_user_only(self, team_course_config):
+        """Whatever the body says, the invitation goes to the cookie's user."""
+        team_course_config["labs"]["1"]["team"]["count-max"] = 5
+        _team_repo_responses()
+        _created_team_responses(username="dave")
+        body = main_module.CreateTeamRequest(title="Моржи")
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.create_join_team(
+                _session_request("dave"), "test-course", "1", body,
+            )
+
+        assert data["status"] == "ok"
+        invited = [
+            call for call in responses.calls
+            if call.request.method == "PUT" and "/collaborators/" in call.request.url
+        ]
+        assert invited and invited[0].request.url.endswith("/collaborators/dave")
+
+
+class TestJoinJoinTeam:
+    """POST /join/{course}/{lab}/teams/{slug}/join."""
+
+    def _access_responses(self, org="test-org", repo="test-task1-team-1", username="dave"):
+        responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo}", status=200)
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo}/collaborators/{username}",
+            status=404,
+        )
+        responses.add(
+            responses.GET, f"https://api.github.com/repos/{org}/{repo}/invitations",
+            json=[], status=200,
+        )
+        responses.add(
+            responses.PUT,
+            f"https://api.github.com/repos/{org}/{repo}/collaborators/{username}",
+            status=201,
+        )
+
+    @responses.activate
+    def test_joins_a_team(self, team_course_config):
+        _team_repo_responses()
+        self._access_responses()
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_join_team(
+                _session_request("dave"), "test-course", "1", "team-1",
+            )
+
+        assert data["status"] == "ok"
+        assert data["repo_url"] == "https://github.com/test-org/test-task1-team-1"
+
+    @responses.activate
+    def test_full_team_returns_409(self, team_course_config):
+        team_course_config["labs"]["1"]["team"]["size-max"] = 2
+        _team_repo_responses()
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.join_join_team(
+                _session_request("dave"), "test-course", "1", "team-1",
+            )
+
+        assert response.status_code == 409
+        assert json.loads(response.body)["detail"] == "TEAM_FULL"
+
+    @responses.activate
+    def test_unknown_slug_returns_404(self, team_course_config):
+        _team_repo_responses()
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.join_join_team(
+                _session_request("dave"), "test-course", "1", "team-9",
+            )
+
+        assert response.status_code == 404
+        assert json.loads(response.body)["detail"] == "TEAM_NOT_FOUND"
+
+    def test_slug_outside_the_pattern_never_reaches_github(self, team_course_config):
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.join_join_team(
+                _session_request("dave"), "test-course", "1", "../os-task1-student9",
+            )
+
+        assert response.status_code == 404
+        assert json.loads(response.body)["detail"] == "TEAM_NOT_FOUND"
+
+    @responses.activate
+    def test_own_team_repairs_access(self, team_course_config):
+        """The "restore access" button re-issues a stale invitation."""
+        _team_repo_responses()
+        responses.add(
+            responses.GET, "https://api.github.com/repos/test-org/test-task1-team-2", status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-team-2/collaborators/student1",
+            status=404,
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-team-2/invitations",
+            json=[{"id": 7, "invitee": {"login": "student1"}}], status=200,
+        )
+        responses.add(
+            responses.DELETE,
+            "https://api.github.com/repos/test-org/test-task1-team-2/invitations/7",
+            status=204,
+        )
+        responses.add(
+            responses.PUT,
+            "https://api.github.com/repos/test-org/test-task1-team-2/collaborators/student1",
+            status=201,
+        )
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            data = main_module.join_join_team(
+                _session_request("student1"), "test-course", "1", "team-2",
+            )
+
+        assert data["status"] == "ok"
+        assert any(call.request.method == "DELETE" for call in responses.calls)
+
+    @responses.activate
+    def test_member_of_another_team_returns_409(self, team_course_config):
+        _team_repo_responses()
+
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            response = main_module.join_join_team(
+                _session_request("alice"), "test-course", "1", "team-2",
+            )
+
+        assert response.status_code == 409
+        payload = json.loads(response.body)
+        assert payload["detail"] == "ALREADY_IN_TEAM"
+        assert payload["my_team"] == "team-1"
+
+    def test_without_a_session_returns_401(self, team_course_config, mock_request):
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            with pytest.raises(HTTPException) as exc_info:
+                main_module.join_join_team(mock_request, "test-course", "1", "team-1")
+        assert exc_info.value.status_code == 401
+
+
+class TestLabKeyCanonicalization:
+    """
+    One lab is reachable through several spellings of lab_id, and the mutation
+    lock must not depend on which one the student's URL used.
+    """
+
+    def test_load_team_lab_returns_the_canonical_key(self, team_course_config):
+        with patch("main.get_course_by_id", return_value=team_course_config):
+            _course, by_key, _config, _org, _team = main_module._load_team_lab("test-course", "1")
+            _course, by_name, _config, _org, _team = main_module._load_team_lab("test-course", "ЛР1")
+
+        assert by_key == "1"
+        assert by_name == "1"
+
+    @responses.activate
+    def test_both_spellings_take_the_same_lock(self, team_course_config):
+        """
+        Regression: keying the lock by the raw path segment handed "1" and
+        "ЛР1" two different locks, so two students could pass count-max,
+        size-max and ALREADY_IN_TEAM at the same time.
+        """
+        import grading.teams as teams_module
+
+        _team_repo_responses()
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-team-1",
+            json={"name": "test-task1-team-1"},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            "https://api.github.com/repos/test-org/test-task1-team-1/collaborators/dave",
+            status=404,
+        )
+        responses.add(
+            responses.PUT,
+            "https://api.github.com/repos/test-org/test-task1-team-1/collaborators/dave",
+            status=201,
+        )
+        responses.add(
+            responses.DELETE,
+            "https://api.github.com/repos/test-org/test-task1-team-1/invitations/1",
+            status=204,
+        )
+
+        keys = []
+        real_lab_lock = teams_module.lab_lock
+
+        def recording_lab_lock(course_id, lab_key):
+            keys.append((course_id, lab_key))
+            return real_lab_lock(course_id, lab_key)
+
+        with patch("grading.teams.lab_lock", recording_lab_lock), \
+             patch("main.get_course_by_id", return_value=team_course_config):
+            for lab_id in ("1", "ЛР1"):
+                main_module.join_join_team(
+                    _session_request("dave", lab_id=lab_id), "test-course", lab_id, "team-1",
+                )
+
+        assert len(keys) == 2
+        assert keys[0] == keys[1] == ("test-course", "1")
+
+
+# ---------------------------------------------------------------------------
+# Секретная ссылка /j/{token} и окно доступности
+# (docs/SECRET_JOIN_LINKS_PLAN.md §5, §7, §8, §14).
+# ---------------------------------------------------------------------------
+
+from grading.join_links import lab_token  # noqa: E402
+
+
+PAST = "2000-01-01 10:00"
+FUTURE = "2099-01-01 10:00"
+FURTHER_FUTURE = "2099-01-01 11:30"
+
+
+@pytest.fixture
+def secret_course_config(join_course_config):
+    """Курс с контрольной работой (лаба "7") за секретной ссылкой."""
+    join_course_config["labs"]["7"] = {
+        "github-prefix": "kr1",
+        "short-name": "Тест / КР",
+        "template-repo": "test-org/kr1-template",
+        "ignore-task-id": True,
+        "join": {"link": "secret", "opens-at": PAST, "revision": 1},
+    }
+    join_course_config["timezone"] = "UTC+3"
+    return join_course_config
+
+
+@pytest.fixture
+def secret_env(secret_course_config, monkeypatch):
+    """
+    Курс подставляется и в поиск по id, и в перечисление курсов, через
+    которое резолвится токен.
+    """
+    monkeypatch.setattr(main_module, "get_course_by_id", lambda _cid: secret_course_config)
+    monkeypatch.setattr(
+        main_module, "iter_course_configs", lambda: iter([("test-course", secret_course_config)])
+    )
+    return secret_course_config
+
+
+def token_of(config, lab_key="7"):
+    return lab_token(main_module.SECRET_KEY, "test-course", lab_key, config["labs"][lab_key])
+
+
+def body(response):
+    return json.loads(response.body)
+
+
+class TestSecretLabIsIndistinguishableFromAMissingOne:
+    """
+    §5, §7.2: публичные пути отвечают на секретную лабу ровно тем же, чем и
+    на несуществующую - иначе перебор адресов подтверждает существование
+    контрольной, ради чего всё и делается.
+    """
+
+    def _error(self, call):
+        with pytest.raises(HTTPException) as exc_info:
+            call()
+        return exc_info.value.status_code, exc_info.value.detail
+
+    def test_join_info_for_secret_lab_matches_missing_lab(self, mock_request, secret_env):
+        secret = self._error(lambda: main_module.join_lab_info(mock_request, "test-course", "7"))
+        missing = self._error(lambda: main_module.join_lab_info(mock_request, "test-course", "99"))
+        assert secret == missing == (404, "Лабораторная работа не найдена")
+
+    def test_join_info_by_short_name_matches_missing_lab(self, mock_request, secret_env):
+        """Короткое имя - второй способ адресации той же лабы."""
+        secret = self._error(
+            lambda: main_module.join_lab_info(mock_request, "test-course", "Тест / КР")
+        )
+        assert secret == (404, "Лабораторная работа не найдена")
+
+    def test_join_start_for_secret_lab_matches_missing_lab(self, mock_request, secret_env):
+        secret = self._error(lambda: main_module.join_lab_start(mock_request, "test-course", "7"))
+        missing = self._error(lambda: main_module.join_lab_start(mock_request, "test-course", "99"))
+        assert secret == missing == (404, "Лабораторная работа не найдена")
+
+    def test_public_lab_before_opens_at_matches_missing_lab(self, mock_request, secret_env):
+        """Не достигшая opens-at обычная лаба прячется так же."""
+        secret_env["labs"]["1"]["join"] = {"opens-at": FUTURE}
+        not_open = self._error(lambda: main_module.join_lab_info(mock_request, "test-course", "1"))
+        missing = self._error(lambda: main_module.join_lab_info(mock_request, "test-course", "99"))
+        assert not_open == missing == (404, "Лабораторная работа не найдена")
+
+    def test_public_lab_without_join_section_still_works(self, mock_request, secret_env):
+        """Обратная совместимость: лаба без секции join открыта, как и раньше."""
+        data = main_module.join_lab_info(mock_request, "test-course", "1")
+        assert data["lab_short_name"] == "ЛР1"
+
+
+class TestSecretJoinInfo:
+    def test_returns_course_and_lab_and_window_state(self, mock_request, secret_env):
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.status_code == 200
+        data = body(response)
+        assert data["course_name"] == "Test Course"
+        assert data["lab_short_name"] == "Тест / КР"
+        assert data["join_state"] == "open"
+        assert data["closes_at"] is None
+
+    def test_reports_closed_window(self, mock_request, secret_env):
+        secret_env["labs"]["7"]["join"]["closes-at"] = PAST
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.status_code == 200
+        assert body(response)["join_state"] == "closed"
+
+    def test_before_opens_at_is_join_not_open_with_the_opening_time(self, mock_request, secret_env):
+        secret_env["labs"]["7"]["join"]["opens-at"] = FUTURE
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.status_code == 403
+        data = body(response)
+        assert data["detail"] == "JOIN_NOT_OPEN"
+        assert data["opens_at"].startswith("2099-01-01T10:00")
+        # Название работы до публикации не раскрывается
+        assert "lab_short_name" not in data
+
+    def test_secret_lab_without_opens_at_is_not_open(self, mock_request, secret_env):
+        del secret_env["labs"]["7"]["join"]["opens-at"]
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.status_code == 403
+        assert body(response)["detail"] == "JOIN_NOT_OPEN"
+        assert body(response)["opens_at"] is None
+
+    @pytest.mark.parametrize("token", ["короткий", "AAAAAAAAAA", "0000000000", "../../etc", ""])
+    def test_malformed_token_is_link_not_found(self, mock_request, secret_env, token):
+        response = main_module.secret_join_info(mock_request, token)
+        assert response.status_code == 404
+        assert body(response) == {"detail": "LINK_NOT_FOUND"}
+
+    def test_revoked_token_is_link_not_found(self, mock_request, secret_env):
+        """Увеличение revision отзывает ссылку немедленно."""
+        old_token = token_of(secret_env)
+        secret_env["labs"]["7"]["join"]["revision"] = 2
+        response = main_module.secret_join_info(mock_request, old_token)
+        assert response.status_code == 404
+        assert body(response) == {"detail": "LINK_NOT_FOUND"}
+        # ...а новая ссылка работает
+        assert main_module.secret_join_info(mock_request, token_of(secret_env)).status_code == 200
+
+    def test_unknown_token_answers_exactly_like_a_malformed_one(self, mock_request, secret_env):
+        unknown = main_module.secret_join_info(mock_request, "aaaaaaaaaa")
+        malformed = main_module.secret_join_info(mock_request, "AAAAAAAAAA")
+        assert unknown.status_code == malformed.status_code == 404
+        assert body(unknown) == body(malformed)
+
+    def test_broken_join_section_is_a_config_error_not_500(self, mock_request, secret_env):
+        token = token_of(secret_env)
+        secret_env["labs"]["7"]["join"]["closes-at"] = "когда-нибудь"
+        response = main_module.secret_join_info(mock_request, token)
+        assert response.status_code == 400
+        assert body(response) == {"detail": "LAB_MISCONFIGURED"}
+
+    def test_response_carries_no_referrer_policy(self, mock_request, secret_env):
+        """Токен не должен уехать в Referer при переходе на github.com (§10)."""
+        response = main_module.secret_join_info(mock_request, token_of(secret_env))
+        assert response.headers["referrer-policy"] == "no-referrer"
+
+
+class TestSecretJoinStart:
+    def test_redirects_to_github_with_signed_state(self, mock_request, secret_env):
+        resp = main_module.secret_join_start(mock_request, token_of(secret_env))
+        location = resp.headers["location"]
+        assert urlparse(location).netloc == "github.com"
+        params = qs(location)
+        assert params["scope"] == ["read:user"]
+        # В state уезжает канонический ключ лабы, не токен
+        payload = json.loads(
+            base64.urlsafe_b64decode(
+                main_module.signer.unsign(params["state"][0]).decode("ascii").encode("ascii")
+            )
+        )
+        assert payload == {"course_id": "test-course", "lab_id": "7"}
+        assert "j/" not in params["state"][0]
+        assert resp.headers["referrer-policy"] == "no-referrer"
+
+    def test_before_opens_at_refuses(self, mock_request, secret_env):
+        secret_env["labs"]["7"]["join"]["opens-at"] = FUTURE
+        resp = main_module.secret_join_start(mock_request, token_of(secret_env))
+        assert resp.status_code == 403
+        assert body(resp)["detail"] == "JOIN_NOT_OPEN"
+
+    def test_after_closes_at_still_starts(self, mock_request, secret_env):
+        """Приём закрыт, но доступ к уже созданному репозиторию чинится (§8)."""
+        secret_env["labs"]["7"]["join"]["closes-at"] = PAST
+        resp = main_module.secret_join_start(mock_request, token_of(secret_env))
+        assert urlparse(resp.headers["location"]).netloc == "github.com"
+
+    def test_unknown_token_is_link_not_found(self, mock_request, secret_env):
+        resp = main_module.secret_join_start(mock_request, "aaaaaaaaaa")
+        assert resp.status_code == 404
+        assert body(resp) == {"detail": "LINK_NOT_FOUND"}
+
+
+def _secret_state(mock_request, config):
+    """Реальный state из /j/{token}/start - подписанный, как у настоящего запроса."""
+    resp = main_module.secret_join_start(mock_request, token_of(config))
+    return qs(resp.headers["location"])["state"][0]
+
+
+def _oauth_success():
+    responses.add(
+        responses.POST,
+        "https://github.com/login/oauth/access_token",
+        json={"access_token": "gho_student_token"},
+        status=200,
+    )
+    responses.add(
+        responses.GET,
+        "https://api.github.com/user",
+        json={"login": "student1"},
+        status=200,
+    )
+
+
+class TestSecretJoinCallback:
+    ORG = "test-org"
+    REPO = "kr1-student1"
+
+    @responses.activate
+    def test_success_redirects_back_to_the_secret_link(self, mock_request, secret_env):
+        state = _secret_state(mock_request, secret_env)
+        _oauth_success()
+        responses.add(responses.GET, f"https://api.github.com/repos/{self.ORG}/{self.REPO}", status=404)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{self.ORG}/kr1-template/generate",
+            json={},
+            status=201,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/collaborators/student1",
+            status=204,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        location = resp.headers["location"]
+        assert location.startswith(f"https://front.example.com/j/{token_of(secret_env)}?")
+        # Адрес /join/{курс}/{лаба} для секретной лабы не используется никогда
+        assert "/join/test-course/" not in location
+        params = qs(location)
+        assert params["status"] == ["success"]
+        assert params["repo_url"] == [f"https://github.com/{self.ORG}/{self.REPO}"]
+
+    @responses.activate
+    def test_after_closes_at_no_repository_is_created(self, mock_request, secret_env):
+        state = _secret_state(mock_request, secret_env)
+        secret_env["labs"]["7"]["join"]["closes-at"] = PAST
+        _oauth_success()
+        responses.add(responses.GET, f"https://api.github.com/repos/{self.ORG}/{self.REPO}", status=404)
+        create_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{self.ORG}/kr1-template/generate",
+            json={},
+            status=201,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        assert create_call.call_count == 0
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["error"]
+        assert params["reason"] == ["JOIN_CLOSED"]
+
+    @responses.activate
+    def test_after_closes_at_access_to_an_existing_repository_is_repaired(self, mock_request, secret_env):
+        state = _secret_state(mock_request, secret_env)
+        secret_env["labs"]["7"]["join"]["closes-at"] = PAST
+        _oauth_success()
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}",
+            json={"full_name": f"{self.ORG}/{self.REPO}"},
+            status=200,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/collaborators/student1",
+            status=404,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/invitations",
+            json=[{"id": 7, "invitee": {"login": "student1"}}],
+            status=200,
+        )
+        responses.add(
+            responses.DELETE,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/invitations/7",
+            status=204,
+        )
+        responses.add(
+            responses.PUT,
+            f"https://api.github.com/repos/{self.ORG}/{self.REPO}/collaborators/student1",
+            status=201,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["success"]
+        assert resp.headers["location"].startswith(f"https://front.example.com/j/{token_of(secret_env)}?")
+
+    @responses.activate
+    def test_window_closed_before_opens_at_stops_the_callback(self, mock_request, secret_env):
+        """Окно сдвинули, пока студент был на github.com."""
+        state = _secret_state(mock_request, secret_env)
+        secret_env["labs"]["7"]["join"]["opens-at"] = FUTURE
+        create_call = responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{self.ORG}/kr1-template/generate",
+            json={},
+            status=201,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        assert create_call.call_count == 0
+        params = qs(resp.headers["location"])
+        assert params["status"] == ["error"]
+        assert params["reason"] == ["JOIN_NOT_OPEN"]
+
+    @responses.activate
+    def test_ordinary_lab_still_lands_on_the_public_result_page(self, mock_request, secret_env):
+        """Обычная лаба ведёт себя ровно как раньше."""
+        state = _get_state(mock_request)
+        _oauth_success()
+        repo = "test-task1-student1"
+        responses.add(responses.GET, f"https://api.github.com/repos/{self.ORG}/{repo}", status=404)
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{self.ORG}/os-task1-template/generate",
+            json={},
+            status=201,
+        )
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{self.ORG}/{repo}/collaborators/student1",
+            status=204,
+        )
+
+        resp = main_module.join_callback(mock_request, code="abc", state=state, error=None)
+
+        assert resp.headers["location"].startswith("https://front.example.com/join/test-course/1?")

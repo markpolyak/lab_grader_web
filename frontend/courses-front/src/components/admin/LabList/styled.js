@@ -73,3 +73,44 @@ export const HintText = styled.p`
   font-size: ${sizes.fontSizeSmall};
   margin: 0;
 `;
+
+
+// Ячейка с готовой секретной ссылкой: её показывают целиком, чтобы её можно
+// было и скопировать кнопкой, и прочитать глазами при сверке
+// (docs/SECRET_JOIN_LINKS_PLAN.md §9.1).
+export const JoinLinkCell = styled.div`
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 260px;
+`;
+
+export const JoinLinkText = styled.code`
+  font-size: ${sizes.fontSizeSmall};
+  word-break: break-all;
+`;
+
+// Ссылка и кнопка копирования - одной строкой, кнопка сразу за ссылкой.
+// Flex, а не обычный инлайн-поток: у инлайна кнопка - неразрывный блок,
+// и если текст ссылки занял строку до самого края, кнопка переносится на
+// следующую - ровно то, чего здесь быть не должно.
+//
+// `flex: 0 1 auto` у ссылки означает "своя ширина, но ужимайся при нехватке":
+// короткая ссылка не растягивается, и кнопка стоит вплотную к ней, а длинная
+// переносится внутри своей колонки, оставляя кнопку на первой строке.
+// `min-width: 0` снимает флексбоксовый минимум, иначе перенос по символам
+// (word-break: break-all) не сработает.
+export const JoinLinkLine = styled.div`
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+
+  & > code {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  & > button {
+    flex: 0 0 auto;
+  }
+`;

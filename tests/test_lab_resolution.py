@@ -155,11 +155,11 @@ class TestJoinResolvesFractionalLab:
         }
         monkeypatch.setattr(main_module, "get_course_by_id", lambda _cid: course)
 
-        _course, lab_config, _org = main_module._load_lab_for_join("os", "01")
+        _course, _key, lab_config, _org, _team = main_module._load_lab_for_join("os", "01")
         assert lab_config["short-name"] == "ЛР0.1"
         assert lab_config["template-repo"] == "org/t01"
 
-        _course, lab_config, _org = main_module._load_lab_for_join("os", "1")
+        _course, _key, lab_config, _org, _team = main_module._load_lab_for_join("os", "1")
         assert lab_config["short-name"] == "ЛР1"
 
     def test_unknown_lab_still_404(self, monkeypatch):
@@ -170,3 +170,114 @@ class TestJoinResolvesFractionalLab:
         with pytest.raises(HTTPException) as exc_info:
             main_module._load_lab_for_join("os", "99")
         assert exc_info.value.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Видимость лабы: секретная ссылка и окно доступности
+# (docs/SECRET_JOIN_LINKS_PLAN.md §5, §7.2, §14).
+# ---------------------------------------------------------------------------
+
+PAST = "2000-01-01 10:00"
+FUTURE = "2099-01-01 10:00"
+
+
+def course_with_labs(labs):
+    return {"name": "ОС", "timezone": "UTC+3", "github": {"organization": "org"}, "labs": labs}
+
+
+SECRET_OPEN = {
+    "short-name": "Тест / КР",
+    "github-prefix": "kr1",
+    "join": {"link": "secret", "opens-at": PAST},
+}
+SECRET_NOT_OPEN = {
+    "short-name": "Тест / КР2",
+    "github-prefix": "kr2",
+    "join": {"link": "secret", "opens-at": FUTURE},
+}
+SECRET_NO_WINDOW = {
+    "short-name": "Тест / КР3",
+    "github-prefix": "kr3",
+    "join": {"link": "secret"},
+}
+PUBLIC_NOT_OPEN = {
+    "short-name": "ЛР9",
+    "github-prefix": "os-task9",
+    "join": {"opens-at": FUTURE},
+}
+PUBLIC_PLAIN = {"short-name": "ЛР1", "github-prefix": "os-task1"}
+BROKEN = {"short-name": "ЛР8", "github-prefix": "os-task8", "join": {"link": "sekret"}}
+
+
+class TestFindPublicLabConfig:
+    """`/join/{курс}/{лаба}` - адрес, которого у секретной лабы нет вовсе."""
+
+    def test_ordinary_lab_resolves_as_before(self):
+        course = course_with_labs({"1": PUBLIC_PLAIN})
+        assert main_module.find_public_lab_config(course, "1")[0] == "1"
+        assert main_module.find_public_lab_config(course, "ЛР1")[0] == "1"
+
+    def test_secret_lab_is_hidden_even_when_open(self):
+        course = course_with_labs({"7": SECRET_OPEN})
+        assert main_module.find_public_lab_config(course, "7") is None
+        assert main_module.find_public_lab_config(course, "Тест / КР") is None
+
+    def test_lab_before_opens_at_is_hidden(self):
+        course = course_with_labs({"9": PUBLIC_NOT_OPEN})
+        assert main_module.find_public_lab_config(course, "9") is None
+
+    def test_lab_with_broken_join_section_is_hidden(self):
+        course = course_with_labs({"8": BROKEN})
+        assert main_module.find_public_lab_config(course, "8") is None
+
+    def test_find_lab_config_still_finds_all_of_them(self):
+        """Админка, /j/{token} и массовая проверка окном не ограничены."""
+        labs = {"1": PUBLIC_PLAIN, "7": SECRET_OPEN, "9": PUBLIC_NOT_OPEN, "8": BROKEN}
+        for key in labs:
+            assert main_module.find_lab_config(labs, key)[0] == key
+
+
+class TestFindVisibleLabConfig:
+    """Список работ и самостоятельная проверка - окно, но не секретность."""
+
+    def test_open_secret_lab_is_visible(self):
+        """Иначе студент не сдал бы контрольную после её окончания."""
+        course = course_with_labs({"7": SECRET_OPEN})
+        assert main_module.find_visible_lab_config(course, "7")[0] == "7"
+
+    def test_secret_lab_before_opens_at_is_not_visible(self):
+        course = course_with_labs({"7": SECRET_NOT_OPEN})
+        assert main_module.find_visible_lab_config(course, "7") is None
+
+    def test_secret_lab_without_opens_at_is_not_visible(self):
+        course = course_with_labs({"7": SECRET_NO_WINDOW})
+        assert main_module.find_visible_lab_config(course, "7") is None
+
+    def test_closed_lab_stays_visible(self):
+        lab = {
+            "short-name": "Тест / КР",
+            "github-prefix": "kr1",
+            "join": {"link": "secret", "opens-at": PAST, "closes-at": PAST},
+        }
+        course = course_with_labs({"7": lab})
+        assert main_module.find_visible_lab_config(course, "7")[0] == "7"
+
+    def test_lab_without_join_section_is_visible(self):
+        course = course_with_labs({"1": PUBLIC_PLAIN})
+        assert main_module.find_visible_lab_config(course, "1")[0] == "1"
+
+
+class TestVisibleLabs:
+    def test_only_open_labs_are_listed(self):
+        course = course_with_labs({
+            "1": PUBLIC_PLAIN,
+            "7": SECRET_OPEN,
+            "8": BROKEN,
+            "9": PUBLIC_NOT_OPEN,
+            "10": SECRET_NOT_OPEN,
+        })
+        names = [lab["short-name"] for lab in main_module.visible_labs(course)]
+        assert names == ["ЛР1", "Тест / КР"]
+
+    def test_course_without_labs(self):
+        assert main_module.visible_labs({"labs": None}) == []
