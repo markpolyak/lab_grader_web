@@ -34,4 +34,15 @@ USER appuser
 
 EXPOSE 8000
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Адреса обратного прокси, которым можно доверять заголовку X-Forwarded-For.
+# Пусто по умолчанию: доверять заголовку, не зная прокси, нельзя - иначе
+# ограничение частоты запросов обходится его подделкой. Без прокси в списке
+# --proxy-headers ничего не меняет, а с ним request.client.host становится
+# адресом студента, а не прокси, и лимиты считаются на человека, а не на всю
+# группу сразу (docs/SECRET_JOIN_LINKS_PLAN.md §11, docs/DEPLOYMENT.md).
+ENV FORWARDED_ALLOW_IPS=""
+
+# Форма shell нужна, чтобы подставилась переменная окружения; exec - чтобы
+# uvicorn получил PID 1 и сигналы остановки от docker.
+CMD exec uvicorn main:app --host 0.0.0.0 --port 8000 \
+    --proxy-headers --forwarded-allow-ips "$FORWARDED_ALLOW_IPS"

@@ -868,3 +868,35 @@ class TestMembershipDefinition:
 
         assert result.status == TeamActionStatus.OK
         assert provisioner.calls[0]["force_invite"] is False
+
+
+class TestNetworkFailureWhileListing:
+    """
+    Сетевая ошибка при сборе команд отвечает тем же None, что и недоступный
+    список репозиториев: вызывающие уже переводят его в TEAMS_UNAVAILABLE.
+    Без перехвата таймаут всплывал бы необработанным исключением.
+    """
+
+    def test_request_exception_is_reported_as_unavailable(self):
+        import requests
+
+        github = FakeGitHub(repos=[_repo("os-task5-team-1", "Пингвины")])
+
+        def boom(org):
+            raise requests.exceptions.ReadTimeout("read timed out")
+
+        github.list_org_repos = boom
+
+        assert TeamRegistry(github).list_teams("test-org", "os-task5") is None
+
+    def test_roster_timeout_is_reported_as_unavailable(self):
+        import requests
+
+        github = FakeGitHub(repos=[_repo("os-task5-team-1", "Пингвины")])
+
+        def boom(org, repo, affiliation="direct"):
+            raise requests.exceptions.ConnectionError("connection reset")
+
+        github.list_collaborators = boom
+
+        assert TeamRegistry(github).list_teams("test-org", "os-task5") is None

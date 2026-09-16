@@ -17,8 +17,21 @@ import {
   DialogActions,
   Button as MuiButton,
   Checkbox,
+  IconButton,
 } from "@mui/material";
 import { BulkGradeDialog } from "./BulkGradeDialog";
+
+// Иконка копирования (два листа) - та же, что на GitHub: Octicons copy-16,
+// встроенная, чтобы не тащить @mui/icons-material ради одного значка.
+// currentColor - цвет наследуется от кнопки, поэтому тема не ломается.
+function CopyIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor" aria-hidden="true" focusable="false">
+      <path d="M0 6.75C0 5.784.784 5 1.75 5h1.5a.75.75 0 0 1 0 1.5h-1.5a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-1.5a.75.75 0 0 1 1.5 0v1.5A1.75 1.75 0 0 1 9.25 16h-7.5A1.75 1.75 0 0 1 0 14.25Z" />
+      <path d="M5 1.75C5 .784 5.784 0 6.75 0h7.5C15.216 0 16 .784 16 1.75v7.5A1.75 1.75 0 0 1 14.25 11h-7.5A1.75 1.75 0 0 1 5 9.25Zm1.75-.25a.25.25 0 0 0-.25.25v7.5c0 .138.112.25.25.25h7.5a.25.25 0 0 0 .25-.25v-7.5a.25.25 0 0 0-.25-.25Z" />
+    </svg>
+  );
+}
 import {
   Container,
   Panel,
@@ -27,18 +40,40 @@ import {
   TableWrapper,
   SelectableTableWrapper,
   HintText,
+  JoinLinkCell,
+  JoinLinkLine,
+  JoinLinkText,
 } from "./styled";
 
 // Опрос статуса фоновой работы - см. main.py GET /admin/propagate-jobs/{job_id}
 const JOB_POLL_INTERVAL_MS = 2000;
 
+// Состояние окна доступности лабы (main.py `join_state`,
+// docs/SECRET_JOIN_LINKS_PLAN.md §9.1).
+const JOIN_STATE_COLOR = {
+  not_open: "default",
+  open: "success",
+  closed: "warning",
+};
+
 const RESULT_STATUS_COLOR = {
-  will_process: "default",
+  needs_update: "primary",
   pr_created: "success",
   up_to_date: "info",
   pr_exists: "info",
   not_a_fork: "warning",
   error: "error",
+};
+
+// Порядок групп в предпросмотре: сначала строки, которые можно выбрать для
+// рассылки, затем те, где делать нечего, и в конце - требующие внимания.
+const PREVIEW_STATUS_ORDER = ["needs_update", "pr_exists", "up_to_date", "error", "not_a_fork"];
+
+const byRepoName = (a, b) => a.repo.localeCompare(b.repo, undefined, { sensitivity: "base" });
+
+const previewRank = (r) => {
+  const index = PREVIEW_STATUS_ORDER.indexOf(r.status);
+  return index === -1 ? PREVIEW_STATUS_ORDER.length : index;
 };
 
 async function fetchJson(url, options) {
@@ -61,6 +96,10 @@ export const LabList = ({ courseId, onBack }) => {
   const { t } = useTranslation();
 
   const [labs, setLabs] = useState([]);
+  // Название курса для заголовка страницы. Админский список лаб его не
+  // отдаёт (это плоский список работ), поэтому берём из публичной карточки
+  // курса; до её загрузки заголовок остаётся без названия.
+  const [courseName, setCourseName] = useState(null);
   const [loading, setLoading] = useState(true);
   const [snackbar, setSnackbar] = useState({ open: false, message: "", severity: "info" });
 
@@ -69,7 +108,7 @@ export const LabList = ({ courseId, onBack }) => {
   const [dryRunLoading, setDryRunLoading] = useState(false);
   const [dryRunResult, setDryRunResult] = useState(null);
   // Имена репозиториев, которым уйдёт обновление. Заполняется всеми
-  // will_process при получении предпросмотра; выбор живёт только пока
+  // needs_update при получении предпросмотра; выбор живёт только пока
   // открыт диалог - при повторном открытии список перезапрашивается.
   const [selectedRepos, setSelectedRepos] = useState([]);
   const [starting, setStarting] = useState(false);
@@ -81,6 +120,35 @@ export const LabList = ({ courseId, onBack }) => {
   const [bulkLab, setBulkLab] = useState(null);
 
   const showSnackbar = (message, severity = "info") => setSnackbar({ open: true, message, severity });
+
+  // Ссылку нельзя собрать руками - её можно только скопировать отсюда.
+  const copyJoinLink = (link) => {
+    const done = () => showSnackbar(t("adminLabs.join.copied"), "success");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(link).then(done, () => window.prompt(t("adminLabs.join.copyPrompt"), link));
+      return;
+    }
+    window.prompt(t("adminLabs.join.copyPrompt"), link);
+  };
+
+  const formatMoment = (iso) => {
+    if (!iso) return null;
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime()) ? null : date.toLocaleString();
+  };
+
+  const joinStateLabel = (lab) => {
+    if (lab.join_state === "not_open") {
+      const moment = formatMoment(lab.opens_at);
+      return moment ? t("adminLabs.join.opensAt", { moment }) : t("adminLabs.join.notScheduled");
+    }
+    if (lab.join_state === "closed") {
+      const moment = formatMoment(lab.closes_at);
+      return moment ? t("adminLabs.join.closedAt", { moment }) : t("adminLabs.join.closed");
+    }
+    const moment = formatMoment(lab.closes_at);
+    return moment ? t("adminLabs.join.openUntil", { moment }) : t("adminLabs.join.open");
+  };
 
   const loadLabs = useCallback(() => {
     setLoading(true);
@@ -98,6 +166,22 @@ export const LabList = ({ courseId, onBack }) => {
   useEffect(() => {
     loadLabs();
   }, [loadLabs]);
+
+  useEffect(() => {
+    let current = true;
+    fetchJson(`/api/v1/courses/${courseId}`)
+      .then((data) => {
+        if (current) setCourseName(data && data.name ? data.name : null);
+      })
+      .catch(() => {
+        // Название - украшение заголовка: без него страница полностью
+        // работоспособна, поэтому ошибку не показываем.
+        if (current) setCourseName(null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [courseId]);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -139,7 +223,7 @@ export const LabList = ({ courseId, onBack }) => {
       .then((data) => {
         setDryRunResult(data);
         setSelectedRepos(
-          data.results.filter((r) => r.status === "will_process").map((r) => r.repo)
+          data.results.filter((r) => r.status === "needs_update").map((r) => r.repo)
         );
         setDryRunLoading(false);
       })
@@ -198,12 +282,28 @@ export const LabList = ({ courseId, onBack }) => {
     setSelectedLab(null);
   };
 
-  const willProcess = dryRunResult
-    ? dryRunResult.results.filter((r) => r.status === "will_process")
+  const previewRows = dryRunResult
+    ? [...dryRunResult.results].sort((a, b) => previewRank(a) - previewRank(b) || byRepoName(a, b))
     : [];
-  const notAFork = dryRunResult
-    ? dryRunResult.results.filter((r) => r.status === "not_a_fork")
-    : [];
+  const countByStatus = (status) => previewRows.filter((r) => r.status === status).length;
+  const willProcess = previewRows.filter((r) => r.status === "needs_update");
+  // Статус строки; текст ошибки показывается целиком - по нему преподаватель
+  // понимает, что чинить (например, права токена). Ссылка на PR - только в
+  // предпросмотре: в таблице итогов для неё есть отдельная колонка.
+  const renderStatus = (r, label, withPrLink = false) => (
+    <>
+      <Chip size="small" color={RESULT_STATUS_COLOR[r.status] || "default"} label={label} />
+      {r.status === "error" && r.message && <HintText>{r.message}</HintText>}
+      {withPrLink && r.pr_url && (
+        <HintText>
+          <a href={r.pr_url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
+            {t("adminLabs.progress.openPr")}
+          </a>
+        </HintText>
+      )}
+    </>
+  );
+
   const allSelected = willProcess.length > 0 && selectedRepos.length === willProcess.length;
   const someSelected = selectedRepos.length > 0 && !allSelected;
   const toggleAll = () =>
@@ -213,7 +313,11 @@ export const LabList = ({ courseId, onBack }) => {
     <Container>
       <Panel>
         <BackButton onClick={onBack}>{t("adminLabs.back")}</BackButton>
-        <PageTitle>{t("adminLabs.title")}</PageTitle>
+        <PageTitle>
+          {courseName
+            ? t("adminLabs.titleWithCourse", { course: courseName })
+            : t("adminLabs.title")}
+        </PageTitle>
 
         {loading ? (
           <HintText>{t("adminLabs.loading")}</HintText>
@@ -227,6 +331,7 @@ export const LabList = ({ courseId, onBack }) => {
                   <TableCell>{t("adminLabs.columns.githubPrefix")}</TableCell>
                   <TableCell>{t("adminLabs.columns.templateRepo")}</TableCell>
                   <TableCell>{t("adminLabs.columns.provisioning")}</TableCell>
+                  <TableCell>{t("adminLabs.columns.joinLink")}</TableCell>
                   <TableCell>{t("adminLabs.columns.actions")}</TableCell>
                 </TableRow>
               </TableHead>
@@ -241,6 +346,44 @@ export const LabList = ({ courseId, onBack }) => {
                       {lab.repo_provisioning === "fork"
                         ? t("adminLabs.provisioningFork")
                         : t("adminLabs.provisioningTemplate")}
+                    </TableCell>
+                    <TableCell>
+                      {lab.join_error ? (
+                        <Chip size="small" color="error" label={lab.join_error} />
+                      ) : lab.join_link ? (
+                        <JoinLinkCell>
+                          <JoinLinkLine>
+                            <JoinLinkText title={lab.join_link}>{lab.join_link}</JoinLinkText>
+                            <Tooltip title={t("adminLabs.join.copy")}>
+                              <IconButton
+                                size="small"
+                                aria-label={t("adminLabs.join.copy")}
+                                onClick={() => copyJoinLink(lab.join_link)}
+                              >
+                                <CopyIcon />
+                              </IconButton>
+                            </Tooltip>
+                          </JoinLinkLine>
+                          {(lab.join_secret || lab.opens_at || lab.closes_at) && (
+                            <div>
+                              <Chip
+                                size="small"
+                                color={JOIN_STATE_COLOR[lab.join_state] || "default"}
+                                label={joinStateLabel(lab)}
+                              />
+                            </div>
+                          )}
+                          {lab.join_secret && <HintText>{t("adminLabs.join.revokeHint")}</HintText>}
+                        </JoinLinkCell>
+                      ) : lab.join_state && lab.join_state !== "open" ? (
+                        <Chip
+                          size="small"
+                          color={JOIN_STATE_COLOR[lab.join_state] || "default"}
+                          label={joinStateLabel(lab)}
+                        />
+                      ) : (
+                        "—"
+                      )}
                     </TableCell>
                     <TableCell>
                       {lab.can_propagate ? (
@@ -283,9 +426,12 @@ export const LabList = ({ courseId, onBack }) => {
             <>
               <p>{t("adminLabs.dryRun.summary", { count: willProcess.length })}</p>
               <p>{t("adminLabs.dryRun.selectedCount", { selected: selectedRepos.length, total: willProcess.length })}</p>
-              {notAFork.length > 0 && (
-                <p>{t("adminLabs.dryRun.notAFork", { count: notAFork.length })}</p>
-              )}
+              {["pr_exists", "up_to_date", "error", "not_a_fork"].map((status) => {
+                const count = countByStatus(status);
+                return count > 0 ? (
+                  <p key={status}>{t(`adminLabs.dryRun.counts.${status}`, { count })}</p>
+                ) : null;
+              })}
               <SelectableTableWrapper>
                 <Table size="small" stickyHeader>
                   <TableHead>
@@ -305,35 +451,39 @@ export const LabList = ({ courseId, onBack }) => {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {willProcess.map((r) => (
-                      <TableRow key={r.repo} hover onClick={() => toggleRepo(r.repo)}>
-                        <TableCell padding="checkbox">
-                          <Checkbox
-                            size="small"
-                            checked={selectedRepos.includes(r.repo)}
-                            inputProps={{ "aria-label": r.repo }}
-                          />
-                        </TableCell>
-                        <TableCell>{r.repo}</TableCell>
-                        <TableCell>
-                          <Chip size="small" label={t("adminLabs.dryRun.statusWillProcess")} />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                    {notAFork.map((r) => (
-                      <TableRow key={r.repo}>
-                        {/* Форк-связи нет, рассылать нечего - строка без чекбокса */}
-                        <TableCell padding="checkbox" />
-                        <TableCell>{r.repo}</TableCell>
-                        <TableCell>
-                          <Chip
-                            size="small"
-                            color="warning"
-                            label={t("adminLabs.dryRun.statusNotAFork")}
-                          />
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {previewRows.map((r) => {
+                      // Выбрать можно только то, чему обновление действительно
+                      // нужно; остальные строки объясняют, почему их не трогают.
+                      const selectable = r.status === "needs_update";
+                      return (
+                        <TableRow
+                          key={r.repo}
+                          hover={selectable}
+                          onClick={selectable ? () => toggleRepo(r.repo) : undefined}
+                        >
+                          <TableCell padding="checkbox">
+                            {selectable && (
+                              <Checkbox
+                                size="small"
+                                checked={selectedRepos.includes(r.repo)}
+                                inputProps={{ "aria-label": r.repo }}
+                              />
+                            )}
+                          </TableCell>
+                          <TableCell>{r.repo}</TableCell>
+                          <TableCell>
+                            {renderStatus(
+                              r,
+                              t(`adminLabs.dryRun.statuses.${r.status}`, {
+                                count: r.commits_behind,
+                                defaultValue: r.status,
+                              }),
+                              true
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </SelectableTableWrapper>
@@ -380,15 +530,11 @@ export const LabList = ({ courseId, onBack }) => {
                       </TableRow>
                     </TableHead>
                     <TableBody>
-                      {job.results.map((r) => (
+                      {[...job.results].sort(byRepoName).map((r) => (
                         <TableRow key={r.repo}>
                           <TableCell>{r.repo}</TableCell>
                           <TableCell>
-                            <Chip
-                              size="small"
-                              color={RESULT_STATUS_COLOR[r.status] || "default"}
-                              label={t(`adminLabs.progress.statuses.${r.status}`, r.status)}
-                            />
+                            {renderStatus(r, t(`adminLabs.progress.statuses.${r.status}`, r.status))}
                           </TableCell>
                           <TableCell>
                             {r.pr_url && (

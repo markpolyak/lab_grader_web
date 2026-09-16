@@ -43,6 +43,53 @@ export const getJoinStartUrl = (courseId, labId) =>
   `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}/start`;
 
 
+// --- Секретная ссылка /j/{token} (docs/SECRET_JOIN_LINKS_PLAN.md §7, §10) ---
+//
+// Backend отдаёт в `detail` стабильные коды (LINK_NOT_FOUND, JOIN_NOT_OPEN,
+// LAB_MISCONFIGURED), которые компонент переводит сам. Ответ JOIN_NOT_OPEN
+// несёт с собой время открытия - оно попадает в error.payload.
+
+export const fetchSecretJoinLab = async (token) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), JOIN_REQUEST_TIMEOUT_MS);
+  let response;
+  try {
+    response = await fetch(`${API_BASE_URL}/j/${encodeURIComponent(token)}`, {
+      signal: controller.signal,
+    });
+  } catch (cause) {
+    const error = new Error("Unable to load the lab behind this link", { cause });
+    error.code = cause?.name === "AbortError" ? "request_timeout" : "unknown";
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    // тело может быть пустым - код ошибки тогда выводится из статуса
+  }
+
+  if (!response.ok) {
+    const error = new Error("Unable to load the lab behind this link");
+    const detail = data && data.detail;
+    if (typeof detail === "string" && /^[A-Z][A-Z_]*$/.test(detail)) error.code = detail;
+    else if (response.status === 404) error.code = "LINK_NOT_FOUND";
+    else if (response.status === 429) error.code = "rate_limit";
+    else error.code = "unknown";
+    error.payload = data || {};
+    throw error;
+  }
+
+  return data;
+};
+
+export const getSecretJoinStartUrl = (token) =>
+  `${API_BASE_URL}/j/${encodeURIComponent(token)}/start`;
+
+
 // --- Командные лабораторные работы (docs/TEAM_ASSIGNMENTS_PLAN.md §8.2) ---
 //
 // Все три запроса идут с credentials: "include" - личность студента backend

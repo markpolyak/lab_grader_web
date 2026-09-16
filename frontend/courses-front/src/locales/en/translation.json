@@ -28,6 +28,7 @@
   "adminLabs": {
     "back": "← Back to courses",
     "title": "Course labs",
+    "titleWithCourse": "Labs of {{course}}",
     "loading": "Loading labs…",
     "errorLoadingLabs": "Could not load the list of labs",
     "columns": {
@@ -36,7 +37,8 @@
       "githubPrefix": "github-prefix",
       "templateRepo": "template-repo",
       "provisioning": "Repository creation",
-      "actions": "Actions"
+      "actions": "Actions",
+      "joinLink": "Student link"
     },
     "provisioningTemplate": "template",
     "provisioningFork": "fork",
@@ -45,13 +47,23 @@
     "dryRun": {
       "title": "Preview update rollout",
       "summary": "{{count}} student repositories will receive an update proposal",
-      "notAFork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected",
+      "counts": {
+        "pr_exists": "{{count}} repositories already have an open PR with the current template",
+        "up_to_date": "{{count}} repositories have nothing to update: all template changes are already there",
+        "error": "{{count}} repositories couldn't be compared with the template",
+        "not_a_fork": "{{count}} repositories with this prefix aren't linked to the template (created before switching to fork) and won't be affected"
+      },
       "selectAll": "Select all",
       "selectedCount": "Selected {{selected}} of {{total}}",
       "cancel": "Cancel",
       "confirm": "Send the update ({{count}})",
-      "statusWillProcess": "will be processed",
-      "statusNotAFork": "not a template fork"
+      "statuses": {
+        "needs_update": "needs update (new commits: {{count}})",
+        "pr_exists": "PR already open",
+        "up_to_date": "nothing to update",
+        "error": "check failed",
+        "not_a_fork": "not a template fork"
+      }
     },
     "progress": {
       "title": "Update rollout",
@@ -119,6 +131,18 @@
         "alreadyRunning": "Grading of this lab for this group is already running.",
         "cancelFailed": "Failed to stop grading"
       }
+    },
+    "join": {
+      "copy": "Copy",
+      "copied": "Link copied",
+      "copyPrompt": "Copy the link:",
+      "opensAt": "opens on {{moment}}",
+      "notScheduled": "not open: join.opens-at is not set",
+      "open": "open, no end date",
+      "openUntil": "open, accepting until {{moment}}",
+      "closed": "closed",
+      "closedAt": "closed on {{moment}}",
+      "revokeHint": "To revoke: raise join.revision in the course config and hand out the new link."
     }
   },
   "join": {
@@ -170,7 +194,10 @@
       "titleTooShort": "The team name must be at least 3 characters long.",
       "titleTooLong": "The team name must be at most 60 characters long.",
       "titleHasSeparator": "The team name must not contain “ — ”.",
-      "descriptionTooLong": "The team description must be at most 200 characters long."
+      "descriptionTooLong": "The team description must be at most 200 characters long.",
+      "linkNotFound": "This link was not found or is no longer valid. Check the address or ask your instructor for a new link.",
+      "notOpen": "The assignment behind this link is not open yet.",
+      "closed": "This link no longer hands out repositories. Access to a repository you already have is restored through the same link."
     },
     "team": {
       "badge": "Team assignment",
@@ -206,6 +233,12 @@
       "memberHint": "If the repository invitation never arrived or has expired, press “Restore access” and it will be sent again.",
       "repairAccess": "Restore access",
       "repairing": "Restoring…"
+    },
+    "secret": {
+      "notOpen": "The assignment is not open yet. The link will start working once your instructor publishes it.",
+      "notOpenAt": "The assignment is not open yet. The link will start working on {{moment}}.",
+      "closed": "Submissions are closed: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored.",
+      "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
     }
   }
 }

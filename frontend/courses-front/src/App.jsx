@@ -41,6 +41,9 @@ function App() {
           element={<RegistrationFormWrapper />}
         />
         <Route path="/join/error" element={<JoinLab />} />
+        {/* Секретная ссылка на получение репозитория - тот же экран,
+            данные берутся по токену (docs/SECRET_JOIN_LINKS_PLAN.md §10) */}
+        <Route path="/j/:token" element={<JoinLab />} />
         <Route path="/join/:courseId/:labId" element={<JoinLab />} />
       </Routes>
     </Router>

@@ -34,6 +34,21 @@ courses:
     featured: true
     logo: "/courses/logos/os-2026_logo.png"
 
+  - id: "fs-2026-autumn"
+    file: "fundamental-statistics-2026.yaml"
+    status: "active"
+    priority: 90
+    featured: true
+    logo: "/courses/logos/itmo_fundamentals_of_statistics.png"
+
+  - id: "dl-2026-autumn"
+    file: "deep-learning-2026.yaml"
+    status: "active"
+    priority: 90
+    featured: true
+    logo: "/courses/logos/itmo_applied_deep_learning.png"
+
+
   - id: "mlb-2026-spring"
     file: "machine-learning-basics-2026.yaml"
     status: "archived"

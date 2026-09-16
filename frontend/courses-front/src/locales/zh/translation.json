@@ -31,6 +31,7 @@
   "adminLabs": {
     "back": "← 返回课程列表",
     "title": "课程实验列表",
+    "titleWithCourse": "{{course}} 课程实验列表",
     "loading": "正在加载实验列表…",
     "errorLoadingLabs": "无法加载实验列表",
     "columns": {
@@ -39,7 +40,8 @@
       "githubPrefix": "github-prefix",
       "templateRepo": "template-repo",
       "provisioning": "仓库创建方式",
-      "actions": "操作"
+      "actions": "操作",
+      "joinLink": "学生链接"
     },
     "provisioningTemplate": "template",
     "provisioningFork": "fork",
@@ -48,13 +50,23 @@
     "dryRun": {
       "title": "预览更新分发",
       "summary": "将有 {{count}} 个学生仓库收到更新提议",
-      "notAFork": "有 {{count}} 个使用此前缀的仓库与模板没有 fork 关系（在切换到 fork 之前创建），不会受到影响",
+      "counts": {
+        "pr_exists": "有 {{count}} 个仓库已存在包含模板最新版本的 PR",
+        "up_to_date": "有 {{count}} 个仓库无需更新：模板的所有更改都已包含在内",
+        "error": "有 {{count}} 个仓库无法与模板进行比较",
+        "not_a_fork": "有 {{count}} 个使用此前缀的仓库与模板没有 fork 关系（在切换到 fork 之前创建），不会受到影响"
+      },
       "selectAll": "全选",
       "selectedCount": "已选择 {{selected}} / {{total}}",
       "cancel": "取消",
       "confirm": "发送更新（{{count}}）",
-      "statusWillProcess": "将被处理",
-      "statusNotAFork": "不是模板的 fork"
+      "statuses": {
+        "needs_update": "需要更新（新提交：{{count}}）",
+        "pr_exists": "PR 已存在",
+        "up_to_date": "无需更新",
+        "error": "检查失败",
+        "not_a_fork": "不是模板的 fork"
+      }
     },
     "progress": {
       "title": "更新分发",
@@ -122,6 +134,18 @@
         "alreadyRunning": "该实验对该班级的评定已在进行中。",
         "cancelFailed": "停止评定失败"
       }
+    },
+    "join": {
+      "copy": "复制",
+      "copied": "链接已复制",
+      "copyPrompt": "请复制链接：",
+      "opensAt": "将于 {{moment}} 开放",
+      "notScheduled": "未开放：未设置 join.opens-at",
+      "open": "已开放，无截止时间",
+      "openUntil": "已开放，截止 {{moment}}",
+      "closed": "已截止",
+      "closedAt": "已于 {{moment}} 截止",
+      "revokeHint": "如需撤销：在课程配置中增大 join.revision，并重新分发新链接。"
     }
   },
   "join": {
@@ -173,7 +197,10 @@
       "titleTooShort": "小组名称至少需要 3 个字符。",
       "titleTooLong": "小组名称不能超过 60 个字符。",
       "titleHasSeparator": "小组名称不能包含“ — ”。",
-      "descriptionTooLong": "小组描述不能超过 200 个字符。"
+      "descriptionTooLong": "小组描述不能超过 200 个字符。",
+      "linkNotFound": "未找到该链接，或该链接已失效。请检查地址，或向老师索取新链接。",
+      "notOpen": "该链接对应的作业尚未开放。",
+      "closed": "该链接已停止发放仓库。如果您已有仓库，可通过同一链接恢复访问权限。"
     },
     "team": {
       "badge": "小组作业",
@@ -209,6 +236,12 @@
       "memberHint": "如果没有收到仓库邀请或邀请已过期，请点击“恢复访问”重新发送。",
       "repairAccess": "恢复访问",
       "repairing": "正在恢复…"
+    },
+    "secret": {
+      "notOpen": "作业尚未开放。老师发布后，该链接才会生效。",
+      "notOpenAt": "作业尚未开放，该链接将于 {{moment}} 生效。",
+      "closed": "提交已截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。",
+      "closedAt": "提交已于 {{moment}} 截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。"
     }
   }
 }

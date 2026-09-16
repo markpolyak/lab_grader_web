@@ -18,6 +18,8 @@ Google Sheets.
 """
 import logging
 import re
+
+import requests
 import threading
 import time
 from dataclasses import dataclass, field
@@ -347,6 +349,23 @@ class TeamRegistry:
             if cached is not None:
                 return cached
 
+        try:
+            return self._collect_teams(org, github_prefix, teachers)
+        except requests.RequestException as e:
+            # Сетевая ошибка неотличима по последствиям от недоступного
+            # списка репозиториев, а вызывающие уже умеют отвечать на None
+            # понятным TEAMS_UNAVAILABLE. Без этого таймаут всплывал бы
+            # необработанным исключением: GitHubClient их не перехватывает.
+            logger.error(f"Could not collect teams of {org}/{github_prefix}: {e}")
+            return None
+
+    def _collect_teams(
+        self,
+        org: str,
+        github_prefix: str,
+        teachers: tuple[str, ...] | list[str] = (),
+    ) -> list[TeamInfo] | None:
+        """Сбор команд без обработки сетевых ошибок - см. list_teams()."""
         repos = self.github.list_org_repos(org)
         if repos is None:
             logger.error(f"Could not list repositories of {org} to collect teams")

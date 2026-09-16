@@ -8,6 +8,8 @@ docs/REPO_GENERATION_PLAN.md for the full design.
 """
 import logging
 import time
+
+import requests
 from dataclasses import dataclass
 from enum import Enum
 
@@ -62,6 +64,7 @@ class RepoProvisioner:
         mode: str = "template",
         access_username: str | None = None,
         force_invite: bool = False,
+        create: bool = True,
     ) -> ProvisionResult:
         """
         Ensure `{github_prefix}-{repo_suffix}` exists in `org` (created from
@@ -90,6 +93,14 @@ class RepoProvisioner:
                 (re-)issue a direct push invitation. Callers that keep their
                 own definition of membership pass True when the student does
                 not match it - see _ensure_access.
+            create: Whether a missing repository may still be created. False
+                is what a lab past its `join.closes-at` passes: a student who
+                already has the repository keeps repairing access through the
+                same link (an invitation expires in 7 days), while a student
+                who never claimed one gets JOIN_CLOSED instead of a fresh
+                repository handed out after the deadline
+                (docs/SECRET_JOIN_LINKS_PLAN.md §8). The default keeps the
+                behaviour of individual and team labs untouched.
 
         Returns:
             ProvisionResult describing success or the specific failure
@@ -105,12 +116,45 @@ class RepoProvisioner:
                 error_code="INVALID_TEMPLATE_CONFIG",
             )
 
-        create_error = self._ensure_repo_created(org, repo_name, template_owner, template_name, mode)
+        try:
+            return self._provision_steps(
+                org, repo_name, template_owner, template_name, mode,
+                access_username or repo_suffix, force_invite, create,
+            )
+        except requests.RequestException as e:
+            # Сетевую ошибку (таймаут, обрыв) не ловил никто: она проходила
+            # мимо ProvisionResult и всплывала как необработанное исключение,
+            # после чего студент видел «непредвиденную ошибку» вместо
+            # понятного «GitHub не ответил, повторите». Ни один метод
+            # GitHubClient такие исключения не перехватывает, поэтому ловим
+            # здесь - на границе всей операции.
+            logger.error(f"GitHub API request failed for {org}/{repo_name}: {e}")
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="GitHub не ответил вовремя. Попробуйте ещё раз через минуту",
+                error_code="GITHUB_UNAVAILABLE",
+            )
+
+    def _provision_steps(
+        self,
+        org: str,
+        repo_name: str,
+        template_owner: str,
+        template_name: str,
+        mode: str,
+        access_username: str,
+        force_invite: bool,
+        create: bool,
+    ) -> ProvisionResult:
+        """Шаги provision() без обработки сетевых ошибок - см. provision()."""
+        create_error = self._ensure_repo_created(
+            org, repo_name, template_owner, template_name, mode, create=create
+        )
         if create_error:
             return create_error
 
         access_error = self._ensure_access(
-            org, repo_name, access_username or repo_suffix, force_invite=force_invite
+            org, repo_name, access_username, force_invite=force_invite
         )
         if access_error:
             return access_error
@@ -129,10 +173,16 @@ class RepoProvisioner:
         template_owner: str,
         template_name: str,
         mode: str = "template",
+        create: bool = True,
     ) -> ProvisionResult | None:
         """
         Create the repo (from the template, or as a fork of it per `mode`)
         if it doesn't already exist.
+
+        With `create=False` a missing repository is not created and answers
+        JOIN_CLOSED; an existing one goes through the usual checks and
+        repairs, which is exactly what "приём закрыт, но доступ чинится"
+        means (docs/SECRET_JOIN_LINKS_PLAN.md §8).
 
         Returns:
             ProvisionResult with an error, or None if the repo exists (or now does)
@@ -153,6 +203,14 @@ class RepoProvisioner:
                 # never had them applied at all.
                 return self._repair_fork(org, repo_name)
             return None
+
+        if not create:
+            logger.info(f"Repository {org}/{repo_name} is missing and the join window is closed")
+            return ProvisionResult(
+                status=ProvisionStatus.ERROR,
+                message="Приём работ по этой ссылке закрыт, новый репозиторий не создаётся",
+                error_code="JOIN_CLOSED",
+            )
 
         if mode == "fork":
             return self._create_from_fork(org, repo_name, template_owner, template_name)

@@ -78,6 +78,24 @@ def add_branch_update_mock(fork_name, status=200):
     )
 
 
+def compare_url(fork_name, base="main"):
+    return f"https://api.github.com/repos/{ORG}/{fork_name}/compare/{base}...{TEMPLATE_HEAD_SHA}"
+
+
+def compare_body(ahead_by=1, files=("lab1.cpp",)):
+    """Shape of GET /compare/{fork_default}...{template_sha} that propagate reads."""
+    return {
+        "status": "behind" if ahead_by else "identical",
+        "ahead_by": ahead_by,
+        "behind_by": 0,
+        "files": [{"filename": name} for name in files],
+    }
+
+
+def open_prs_url(fork_name):
+    return f"https://api.github.com/repos/{ORG}/{fork_name}/pulls"
+
+
 def add_template_and_forks(forks_pages, org_repos=None, branch_mocks=True):
     responses.add(
         responses.GET,
@@ -106,14 +124,24 @@ def add_template_and_forks(forks_pages, org_repos=None, branch_mocks=True):
         json=org_repos or [],
         status=200,
     )
-    if branch_mocks:
-        seen = set()
-        for page in forks_pages:
-            for fork in page:
-                name = fork.get("name")
-                if name and name not in seen:
-                    seen.add(name)
-                    add_branch_creation_mock(name)
+    seen = set()
+    for page in forks_pages:
+        for fork in page:
+            name = fork.get("name")
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            # By default every fork lacks one template commit and has no open
+            # update PR; tests about other states use responses.replace.
+            responses.add(
+                responses.GET,
+                compare_url(name, fork.get("default_branch") or "main"),
+                json=compare_body(),
+                status=200,
+            )
+            responses.add(responses.GET, open_prs_url(name), json=[], status=200)
+            if branch_mocks:
+                add_branch_creation_mock(name)
 
 
 class TestListTargetForksFiltering:
@@ -133,7 +161,7 @@ class TestListTargetForksFiltering:
         summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
 
         assert summary["total"] == 1
-        repos = {r["repo"] for r in summary["results"] if r["status"] == "will_process"}
+        repos = {r["repo"] for r in summary["results"] if r["status"] == "needs_update"}
         assert repos == {"os-task1-student1"}
 
     @responses.activate
@@ -206,6 +234,98 @@ class TestDryRun:
         dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
 
         assert pr_call.call_count == 0
+
+    @responses.activate
+    def test_fork_behind_the_template_needs_update(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.replace(responses.GET, compare_url("os-task1-student1"), json=compare_body(ahead_by=3))
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        [row] = summary["results"]
+        assert row["status"] == "needs_update"
+        assert row["commits_behind"] == 3
+        assert summary["total"] == 1
+
+    @responses.activate
+    def test_fork_already_containing_the_template_is_up_to_date(self):
+        """The template hasn't changed since the fork was made (or the student
+        merged the update): nothing to propose, and not counted in total."""
+        forks = [
+            {"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"},
+            {"name": "os-task1-student2", "owner": {"login": ORG}, "default_branch": "main"},
+        ]
+        add_template_and_forks([forks])
+        responses.replace(responses.GET, compare_url("os-task1-student1"), json=compare_body(ahead_by=0))
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        statuses = {r["repo"]: r["status"] for r in summary["results"]}
+        assert statuses == {"os-task1-student1": "up_to_date", "os-task1-student2": "needs_update"}
+        assert summary["total"] == 1
+
+    @responses.activate
+    def test_open_pr_already_on_the_template_tip_is_pr_exists(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.replace(
+            responses.GET,
+            open_prs_url("os-task1-student1"),
+            json=[{"html_url": "pr-url", "head": {"sha": TEMPLATE_HEAD_SHA}}],
+        )
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        [row] = summary["results"]
+        assert row["status"] == "pr_exists"
+        assert row["pr_url"] == "pr-url"
+        assert summary["total"] == 0
+
+    @responses.activate
+    def test_outdated_open_pr_still_needs_update(self):
+        """A run moves the branch of an older PR to the new template tip."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.replace(
+            responses.GET,
+            open_prs_url("os-task1-student1"),
+            json=[{"html_url": "pr-url", "head": {"sha": "b" * 40}}],
+        )
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        [row] = summary["results"]
+        assert row["status"] == "needs_update"
+        assert row["pr_url"] == "pr-url"
+
+    @responses.activate
+    def test_compare_failure_is_an_error_row(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.replace(responses.GET, compare_url("os-task1-student1"), json={"message": "Not Found"}, status=404)
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        [row] = summary["results"]
+        assert row["status"] == "error"
+        assert row["message"]
+        assert summary["total"] == 0
+
+    @responses.activate
+    def test_results_are_sorted_by_name_case_insensitively(self):
+        forks = [
+            {"name": name, "owner": {"login": ORG}, "default_branch": "main"}
+            for name in ("os-task1-zoe", "os-task1-Bob", "os-task1-alice")
+        ]
+        org_repos = [{"name": f["name"]} for f in forks] + [{"name": "os-task1-Carl"}]
+        add_template_and_forks([forks], org_repos=org_repos)
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert [r["repo"] for r in summary["results"]] == [
+            "os-task1-alice", "os-task1-Bob", "os-task1-Carl", "os-task1-zoe",
+        ]
 
     @responses.activate
     def test_template_not_found_raises_setup_error(self):
@@ -305,9 +425,9 @@ class TestCreatePullRequestResponseTable:
             },
             status=422,
         )
-        responses.add(
+        responses.replace(
             responses.GET,
-            f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            open_prs_url("os-task1-student1"),
             json=[{"html_url": "https://github.com/test-org/os-task1-student1/pull/7"}],
             status=200,
         )
@@ -477,6 +597,97 @@ class TestCreatePullRequestResponseTable:
         statuses = {r.repo: r.status for r in job.results}
         assert statuses["os-task1-student1"] == "error"
         assert statuses["os-task1-student2"] == "pr_created"
+
+
+class TestRunComparesBeforeWriting:
+    """A real run re-checks every fork and writes nothing where the template
+    has nothing new to offer."""
+
+    @responses.activate
+    def test_up_to_date_fork_gets_no_branch_and_no_pr(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        responses.replace(responses.GET, compare_url("os-task1-student1"), json=compare_body(ahead_by=0))
+        branch_call = add_branch_creation_mock("os-task1-student1")
+        pr_call = responses.add(
+            responses.POST, f"https://api.github.com/repos/{ORG}/os-task1-student1/pulls",
+            json={"html_url": "url"}, status=201,
+        )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert job.status == "done"
+        assert [r.status for r in job.results] == ["up_to_date"]
+        assert branch_call.call_count == 0
+        assert pr_call.call_count == 0
+
+    @responses.activate
+    def test_compare_failure_is_an_error_without_writes(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        responses.replace(responses.GET, compare_url("os-task1-student1"), json={"message": "Not Found"}, status=404)
+        branch_call = add_branch_creation_mock("os-task1-student1")
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "error"
+        assert result.message
+        assert branch_call.call_count == 0
+
+    @responses.activate
+    def test_workflow_change_without_workflow_scope_explains_the_404(self):
+        """GitHub refuses to point a ref at a commit touching .github/workflows
+        for a token without the `workflow` scope, and says only 404 - seen on a
+        live course when the template's CI config was updated."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        responses.replace(
+            responses.GET,
+            compare_url("os-task1-student1"),
+            json=compare_body(ahead_by=2, files=(".github/workflows/tests.yaml",)),
+        )
+        add_branch_creation_mock("os-task1-student1", status=404, json_body={"message": "Not Found"})
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "error"
+        assert "workflow" in result.message
+        assert "Not Found" not in result.message
+
+    @responses.activate
+    def test_404_without_workflow_changes_is_reported_as_no_write_access(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        add_branch_creation_mock("os-task1-student1", status=404, json_body={"message": "Not Found"})
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "error"
+        assert "права записи" in result.message
+
+    @responses.activate
+    def test_forks_are_processed_in_name_order(self):
+        names = ["os-task1-zoe", "os-task1-Bob", "os-task1-alice"]
+        forks = [{"name": name, "owner": {"login": ORG}, "default_branch": "main"} for name in names]
+        add_template_and_forks([forks])
+        for name in names:
+            responses.add(
+                responses.POST, f"https://api.github.com/repos/{ORG}/{name}/pulls",
+                json={"html_url": "url"}, status=201,
+            )
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert [r.repo for r in job.results] == ["os-task1-alice", "os-task1-Bob", "os-task1-zoe"]
+        assert all(r.commits_behind == 1 for r in job.results)
 
 
 class TestRepositorySelection:

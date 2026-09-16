@@ -470,7 +470,7 @@ class TestGradeLabCharacterization:
             mock.return_value = {
                 "github": {},  # Missing organization
                 "google": {"spreadsheet": "test"},
-                "labs": {},
+                "labs": {"1": {"short-name": "ЛР1", "github-prefix": "test-task1"}},
                 "_meta": {"id": "test"}
             }
 
@@ -482,6 +482,31 @@ class TestGradeLabCharacterization:
                 grade_lab(mock_request, "test-course", "group1", "ЛР1", grade_request)
 
             assert exc_info.value.status_code == 400
+
+    def test_unknown_lab_is_not_found(self, mock_request):
+        """
+        Несуществующая лаба отвечает 404, а не 400 "Missing course
+        configuration": ровно тем же ответом отвечает и лаба, не достигшая
+        join.opens-at, иначе публичная проверка подтверждала бы существование
+        контрольной (docs/SECRET_JOIN_LINKS_PLAN.md §5).
+        """
+        with patch('main.get_course_by_id') as mock:
+            mock.return_value = {
+                "github": {"organization": "test-org"},
+                "google": {"spreadsheet": "test"},
+                "labs": {"1": {"short-name": "ЛР1", "github-prefix": "test-task1"}},
+                "_meta": {"id": "test"}
+            }
+
+            from main import grade_lab, GradeRequest
+            from fastapi import HTTPException
+
+            grade_request = GradeRequest(github="testuser")
+            with pytest.raises(HTTPException) as exc_info:
+                grade_lab(mock_request, "test-course", "group1", "ЛР99", grade_request)
+
+            assert exc_info.value.status_code == 404
+            assert exc_info.value.detail == "Лабораторная работа не найдена"
 
 
 class TestGradeLabResponseFormat:
@@ -703,3 +728,105 @@ class TestGradeLabTeamLab:
                 )
 
         assert exc_info.value.status_code == 502
+
+
+class TestLabVisibilityWindow:
+    """
+    Окно доступности на публичных путях (docs/SECRET_JOIN_LINKS_PLAN.md §5,
+    этап 4 чек-листа): до opens-at работы нет ни в списке, ни в проверке, а
+    после открытия - есть, включая лабу за секретной ссылкой.
+    """
+
+    PAST = "2000-01-01 10:00"
+    FUTURE = "2099-01-01 10:00"
+
+    @pytest.fixture(autouse=True)
+    def setup(self, mock_env_vars):
+        pass
+
+    def course(self, join_section):
+        return {
+            "name": "Test Course",
+            "timezone": "UTC+3",
+            "github": {"organization": "test-org"},
+            "google": {"spreadsheet": "test"},
+            "labs": {
+                "1": {"short-name": "ЛР1", "github-prefix": "test-task1"},
+                "7": {
+                    "short-name": "Тест / КР",
+                    "github-prefix": "kr1",
+                    "join": join_section,
+                },
+            },
+            "_meta": {"id": "test"},
+        }
+
+    def grade(self, mock_request, course, lab_id):
+        from main import grade_lab, GradeRequest
+        from fastapi import HTTPException
+
+        with patch("main.get_course_by_id", return_value=course):
+            with pytest.raises(HTTPException) as exc_info:
+                grade_lab(mock_request, "test-course", "group1", lab_id, GradeRequest(github="testuser"))
+        return exc_info.value
+
+    def test_lab_before_opens_at_answers_like_a_missing_lab(self, mock_request):
+        course = self.course({"link": "secret", "opens-at": self.FUTURE})
+        hidden = self.grade(mock_request, course, "7")
+        missing = self.grade(mock_request, course, "ЛР99")
+        assert (hidden.status_code, hidden.detail) == (missing.status_code, missing.detail)
+        assert hidden.status_code == 404
+
+    def test_lab_addressed_by_short_name_is_hidden_too(self, mock_request):
+        course = self.course({"link": "secret", "opens-at": self.FUTURE})
+        hidden = self.grade(mock_request, course, "Тест / КР")
+        assert hidden.status_code == 404
+
+    def test_open_secret_lab_is_graded_normally(self, mock_request, mock_gspread, mock_service_account_creds):
+        """
+        После открытия студент проверяет контрольную сам: резолв лабы
+        проходит, и дальше работает обычный сценарий (здесь - до первого
+        обращения к GitHub).
+        """
+        from main import grade_lab, GradeRequest
+        from fastapi import HTTPException
+
+        course = self.course({"link": "secret", "opens-at": self.PAST})
+        with patch("main.get_course_by_id", return_value=course):
+            with patch("main.evaluate_student") as evaluate:
+                evaluate.return_value = MagicMock(
+                    status="pending", message="ждём CI", passed=False, checks=[]
+                )
+                result = grade_lab(
+                    mock_request, "test-course", "group1", "7", GradeRequest(github="testuser")
+                )
+        assert result["status"] == "pending"
+        assert evaluate.called
+
+    def test_lab_list_hides_a_lab_before_opens_at(self, mock_request, mock_gspread, mock_service_account_creds):
+        from main import get_course_labs
+
+        course = self.course({"link": "secret", "opens-at": self.FUTURE})
+        mock_gspread["worksheet"].row_values.return_value = ["№", "ФИО", "ЛР1", "Тест / КР"]
+        with patch("main.get_course_by_id", return_value=course):
+            labs = get_course_labs(mock_request, "test-course", "group1")
+        assert labs == ["ЛР1"]
+
+    def test_lab_list_shows_an_open_secret_lab(self, mock_request, mock_gspread, mock_service_account_creds):
+        """Секретность прячет ссылку, а не сданную работу."""
+        from main import get_course_labs
+
+        course = self.course({"link": "secret", "opens-at": self.PAST})
+        mock_gspread["worksheet"].row_values.return_value = ["№", "ФИО", "ЛР1", "Тест / КР"]
+        with patch("main.get_course_by_id", return_value=course):
+            labs = get_course_labs(mock_request, "test-course", "group1")
+        assert labs == ["ЛР1", "Тест / КР"]
+
+    def test_lab_list_still_shows_labs_without_join_section(self, mock_request, mock_gspread, mock_service_account_creds):
+        from main import get_course_labs
+
+        course = self.course({"link": "public"})
+        mock_gspread["worksheet"].row_values.return_value = ["№", "ФИО", "ЛР1", "Тест / КР"]
+        with patch("main.get_course_by_id", return_value=course):
+            labs = get_course_labs(mock_request, "test-course", "group1")
+        assert labs == ["ЛР1", "Тест / КР"]
