@@ -5,7 +5,9 @@ see docs/REPO_GENERATION_PLAN.md §4 and §10).
 import json
 import sys
 import os
-from unittest.mock import patch
+import threading
+import time
+from unittest.mock import MagicMock, patch
 
 import pytest
 import responses
@@ -710,6 +712,94 @@ class TestCreateFromFork:
         result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
 
         assert result.status == ProvisionStatus.OK
+
+
+class TestNoDuplicateRepositories:
+    """
+    Два одновременных перехода по ссылке не должны порождать второй
+    репозиторий с суффиксом: так плодил дубли GitHub Classroom (у студента
+    оставался пустой r-user и рабочий r-user-1, и проверка бралась за пустой).
+    """
+
+    def _fake_client(self, fork_name=None, fork_delay=0.0):
+        """
+        Клиент, у которого репозиторий появляется ровно от вызова fork_repo.
+
+        fork_name: имя, которое "создал" GitHub (None - запрошенное);
+        fork_delay: задержка внутри fork_repo, чтобы окно гонки было заметным.
+        """
+        state = {"exists": False, "forks": 0}
+        client = MagicMock()
+
+        def repo_exists(org, repo):
+            return state["exists"]
+
+        def fork_repo(owner, repo, org, name):
+            state["forks"] += 1
+            time.sleep(fork_delay)
+            state["exists"] = True
+            resp = MagicMock(status_code=202)
+            resp.json.return_value = {"name": fork_name or name}
+            return resp
+
+        client.repo_exists.side_effect = repo_exists
+        client.fork_repo.side_effect = fork_repo
+        client.get_repo.return_value = {"private": True, "parent": {"full_name": TEMPLATE_REPO}}
+        client.enable_actions.return_value = MagicMock(status_code=204)
+        client.update_repo.return_value = MagicMock(status_code=200)
+        client.is_direct_collaborator.return_value = True
+        return client, state
+
+    def test_two_simultaneous_requests_create_one_repository(self):
+        client, state = self._fake_client(fork_delay=0.05)
+        provisioner = RepoProvisioner(client)
+        results = []
+        start = threading.Barrier(2)
+
+        def run():
+            start.wait(5)
+            results.append(
+                provisioner.provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+            )
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+
+        assert state["forks"] == 1, "второй запрос создал ещё один репозиторий"
+        assert [r.status for r in results] == [ProvisionStatus.OK, ProvisionStatus.OK]
+        assert {r.repo_name for r in results} == {REPO_NAME}
+
+    def test_different_students_are_not_serialized_into_one_repo(self):
+        """Блокировка - на репозиторий, а не общая: разные студенты
+        обслуживаются независимо."""
+        client, state = self._fake_client()
+        provisioner = RepoProvisioner(client)
+
+        first = provisioner.provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+        state["exists"] = False  # у второго студента репозитория ещё нет
+        second = provisioner.provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, "student2", mode="fork")
+
+        assert state["forks"] == 2
+        assert first.repo_name == REPO_NAME
+        assert second.repo_name == f"{GITHUB_PREFIX}-student2"
+
+    def test_suffixed_name_from_github_is_reported_and_not_handed_out(self):
+        """Если имя всё же оказалось занято и GitHub создал дубль с суффиксом,
+        студент получает правильный репозиторий, а дубль виден в логе."""
+        client, _state = self._fake_client(fork_name=f"{REPO_NAME}-1")
+        provisioner = RepoProvisioner(client)
+
+        with patch("grading.repo_provisioning.logger") as logger:
+            result = provisioner.provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK
+        assert result.repo_name == REPO_NAME  # не дубль
+        errors = " ".join(str(call.args[0]) for call in logger.error.call_args_list)
+        assert f"{ORG}/{REPO_NAME}-1" in errors
+        assert "stray repository" in errors
 
 
 class TestAccessUsername:

@@ -7,6 +7,7 @@ for pending invitations silently expiring after 7 days. See
 docs/REPO_GENERATION_PLAN.md for the full design.
 """
 import logging
+import threading
 import time
 
 import requests
@@ -23,6 +24,27 @@ logger = logging.getLogger(__name__)
 # /join/callback (see issue #51).
 FORK_POLL_ATTEMPTS = 15
 FORK_POLL_INTERVAL_SECONDS = 2
+
+# Выдача одного репозитория идёт под своей блокировкой: студент, дважды
+# нажавший ссылку, порождает два одновременных /join/callback, а "проверить,
+# есть ли репозиторий" и "создать" - это два разных запроса к GitHub. Без
+# сериализации проверку успевают пройти оба, и на втором вызове /forks GitHub
+# молча создаёт дубль с суффиксом (r-user-1) - ровно так плодил репозитории
+# GitHub Classroom. Блокировка по (org, repo) - как per-lab блокировка в
+# grading/teams.py, и так же верна лишь при одном uvicorn-воркере
+# (см. docs/PROJECT_DESCRIPTION.md).
+_repo_locks: dict[tuple[str, str], threading.Lock] = {}
+_repo_locks_guard = threading.Lock()
+
+
+def _repo_lock(org: str, repo_name: str) -> threading.Lock:
+    """Lock guarding provisioning of one repository."""
+    key = (org.lower(), repo_name.lower())
+    with _repo_locks_guard:
+        lock = _repo_locks.get(key)
+        if lock is None:
+            lock = _repo_locks[key] = threading.Lock()
+        return lock
 
 
 class ProvisionStatus(Enum):
@@ -117,10 +139,14 @@ class RepoProvisioner:
             )
 
         try:
-            return self._provision_steps(
-                org, repo_name, template_owner, template_name, mode,
-                access_username or repo_suffix, force_invite, create,
-            )
+            # Под блокировкой целиком: второй одновременный запрос ждёт и
+            # затем видит уже готовый репозиторий, вместо того чтобы создать
+            # второй (см. _repo_lock).
+            with _repo_lock(org, repo_name):
+                return self._provision_steps(
+                    org, repo_name, template_owner, template_name, mode,
+                    access_username or repo_suffix, force_invite, create,
+                )
         except requests.RequestException as e:
             # Сетевую ошибку (таймаут, обрыв) не ловил никто: она проходила
             # мимо ProvisionResult и всплывала как необработанное исключение,
@@ -382,6 +408,19 @@ class RepoProvisioner:
         logger.info(f"Forking {template_owner}/{template_name} to {org}/{repo_name}")
         resp = self.github.fork_repo(template_owner, template_name, org, repo_name)
 
+        if 200 <= resp.status_code < 300:
+            created_name = self._created_repo_name(resp)
+            if created_name and created_name.lower() != repo_name.lower():
+                # Имя оказалось занято, и GitHub вместо отказа создал дубль с
+                # суффиксом. Дальше работаем с правильным репозиторием (он
+                # существует, иначе имя не было бы занято), а про лишний
+                # говорим в логе - удалять репозитории сервис не берётся.
+                logger.error(
+                    f"GitHub created {org}/{created_name} instead of {org}/{repo_name}: "
+                    f"the name was taken. {org}/{created_name} is a stray repository, "
+                    "check whether it needs to be removed"
+                )
+
         if resp.status_code == 422:
             # Скорее всего гонка: репозиторий уже создан параллельным запросом
             # между проверкой существования и вызовом /forks.
@@ -426,6 +465,15 @@ class RepoProvisioner:
             )
 
         return self._repair_fork(org, repo_name)
+
+    @staticmethod
+    def _created_repo_name(resp) -> str | None:
+        """Name of the repository GitHub actually created, if it says."""
+        try:
+            payload = resp.json()
+        except ValueError:
+            return None
+        return payload.get("name") if isinstance(payload, dict) else None
 
     def _repair_fork(self, org: str, repo_name: str) -> ProvisionResult | None:
         """
