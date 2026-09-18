@@ -147,6 +147,9 @@ from .bulk import (
     resolve_github_cell,
     try_start_bulk_job,
     get_bulk_job,
+    get_running_bulk_job,
+    fail_bulk_job,
+    bulk_worker_thread_name,
     request_bulk_job_cancel,
     run_bulk_grading,
 )
@@ -272,6 +275,9 @@ __all__ = [
     "resolve_github_cell",
     "try_start_bulk_job",
     "get_bulk_job",
+    "get_running_bulk_job",
+    "fail_bulk_job",
+    "bulk_worker_thread_name",
     "request_bulk_job_cancel",
     "run_bulk_grading",
     # score

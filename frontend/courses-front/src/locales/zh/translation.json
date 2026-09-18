@@ -80,8 +80,10 @@
         "link": "链接"
       },
       "openPr": "打开 PR",
+      "appliedWithOtherCommits": "模板的更改已通过其他提交合入（PR 以 squash 或 rebase 方式合并）",
       "statuses": {
         "pr_created": "已创建 PR",
+        "pr_updated": "PR 已更新",
         "up_to_date": "已是最新",
         "pr_exists": "PR 已存在",
         "not_a_fork": "不是模板的 fork",
@@ -104,6 +106,7 @@
       "dryRunBadge": "试运行",
       "start": "开始评定",
       "cancelRun": "停止",
+      "cancelRequested": "已请求停止：将在当前学生检查完成后结束。",
       "close": "关闭",
       "inProgress": "已处理 {{processed}} / {{total}}",
       "done": "评定完成",
@@ -126,12 +129,13 @@
         "conflict": "用户名冲突",
         "unmatched": "姓名未匹配",
         "ambiguous": "姓名有歧义",
-        "no_team": "无小组"
+        "no_team": "无小组",
+        "no_name": "无姓名的行，已跳过"
       },
       "errors": {
         "groupsFailed": "加载班级失败",
         "startFailed": "启动评定失败，请重试。",
-        "alreadyRunning": "该实验对该班级的评定已在进行中。",
+        "alreadyRunning": "该实验的本组检查已在进行中——下面显示其进度。",
         "cancelFailed": "停止评定失败"
       }
     },

@@ -63,6 +63,10 @@ WORKFLOWS_DIR = ".github/workflows/"
 
 COMPARE_FAILED_MESSAGE = "Не удалось сравнить репозиторий с шаблоном"
 
+# GitHub lists at most this many changed files in a comparison; a longer diff
+# can't be checked file by file, so it is never treated as already applied.
+COMPARE_FILES_LIMIT = 300
+
 PR_TITLE = "Обновление стартового кода лабораторной работы"
 PR_BODY = (
     "Преподаватель обновил стартовый код лабораторной работы в репозитории-шаблоне.\n\n"
@@ -87,7 +91,10 @@ class PropagateSetupError(Exception):
 class PropagateResult:
     """Outcome of processing a single repository."""
     repo: str
-    status: str  # needs_update (dry-run only) | pr_created | up_to_date | pr_exists | not_a_fork | error
+    # needs_update (dry-run only) | pr_created | pr_updated | pr_exists | up_to_date | not_a_fork | error.
+    # pr_updated: an open PR existed and its branch was moved to a newer
+    # template commit; pr_exists: the open PR already had it.
+    status: str
     pr_url: str | None = None
     message: str = ""
     # Template commits missing from the fork's default branch; None when the
@@ -266,6 +273,63 @@ class _TemplateDiff:
     """What a fork's default branch lacks compared to the template's tip."""
     commits_behind: int
     touches_workflows: bool
+    # The commits are missing, but their changes are already in the files -
+    # the previous update PR was squash- or rebase-merged.
+    already_applied: bool = False
+
+    @property
+    def nothing_to_propose(self) -> bool:
+        return self.commits_behind == 0 or self.already_applied
+
+
+def _changes_already_in_fork(
+    github_client: GitHubClient,
+    org: str,
+    fork_name: str,
+    fork_default_branch: str,
+    files: list[dict],
+) -> bool:
+    """
+    Whether the template's changes are already in the fork's files even though
+    its commits are not.
+
+    "Squash and merge" and "Rebase and merge" put the update PR's changes into
+    the default branch as new commits, so the commit comparison keeps
+    reporting the template commits as missing and a run would open the same
+    PR again. `files` (the template's changes since the fork point, with each
+    file's blob SHA at the template tip) are checked against the fork's tree
+    instead: every changed file must have exactly the template's content, and
+    every removed one must be gone.
+
+    Conservative on purpose - anything it can't verify (a diff over GitHub's
+    file limit, a truncated or unreadable tree, a file edited again by the
+    student afterwards) counts as not applied, i.e. the previous behaviour.
+    """
+    if not files:
+        # Commits without file changes: a PR would have an empty diff.
+        return True
+    if len(files) >= COMPARE_FILES_LIMIT:
+        return False
+    if any(f.get("status") != "removed" and not f.get("sha") for f in files):
+        return False
+
+    tree = github_client.get_tree(org, fork_name, fork_default_branch)
+    if tree is None or tree.get("truncated"):
+        logger.warning(f"Can't read the full tree of {org}/{fork_name}:{fork_default_branch}")
+        return False
+    blobs = {entry.get("path"): entry.get("sha") for entry in tree.get("tree") or [] if entry.get("type") == "blob"}
+
+    for f in files:
+        path = f.get("filename")
+        if f.get("status") == "removed":
+            if path in blobs:
+                return False
+            continue
+        if f.get("status") == "renamed" and f.get("previous_filename") in blobs:
+            return False
+        if blobs.get(path) != f.get("sha"):
+            return False
+    return True
 
 
 def _compare_with_template(
@@ -280,7 +344,8 @@ def _compare_with_template(
     Commit-based, exactly like the PR it decides about: `ahead_by` counts the
     template commits not reachable from the fork's default branch, so 0 means
     there is nothing to propose - the template hasn't changed since the fork
-    was made, or the student already merged an earlier update.
+    was made, or the student already merged an earlier update. When commits
+    are missing, the files are checked too (see _changes_already_in_fork).
 
     Returns:
         The difference, or None if GitHub couldn't compare
@@ -290,11 +355,13 @@ def _compare_with_template(
     if comparison is None:
         logger.error(f"Failed to compare {org}/{fork['name']}:{fork_default_branch} with template {template_head_sha}")
         return None
+    files = comparison.get("files") or []
+    commits_behind = int(comparison.get("ahead_by") or 0)
     return _TemplateDiff(
-        commits_behind=int(comparison.get("ahead_by") or 0),
-        touches_workflows=any(
-            (f.get("filename") or "").startswith(WORKFLOWS_DIR) for f in comparison.get("files") or []
-        ),
+        commits_behind=commits_behind,
+        touches_workflows=any((f.get("filename") or "").startswith(WORKFLOWS_DIR) for f in files),
+        already_applied=commits_behind > 0
+        and _changes_already_in_fork(github_client, org, fork["name"], fork_default_branch, files),
     )
 
 
@@ -316,8 +383,8 @@ def _preview_fork(
         diff = _compare_with_template(github_client, org, fork, template_head_sha)
         if diff is None:
             return PropagateResult(repo=fork_name, status="error", message=COMPARE_FAILED_MESSAGE)
-        if diff.commits_behind == 0:
-            return PropagateResult(repo=fork_name, status="up_to_date", commits_behind=0)
+        if diff.nothing_to_propose:
+            return PropagateResult(repo=fork_name, status="up_to_date", commits_behind=diff.commits_behind)
 
         # A failed lookup only loses the hint: the real run finds the PR anyway.
         open_prs = github_client.list_pull_requests(org, fork_name, head=TEMPLATE_UPDATE_BRANCH, state="open") or []
@@ -422,38 +489,48 @@ def _place_template_branch(
     fork_name: str,
     sha: str,
     touches_workflows: bool = False,
-) -> str | None:
+) -> tuple[str | None, bool]:
     """
     Point TEMPLATE_UPDATE_BRANCH in the fork at the template's tip commit,
     creating the branch or moving an existing one.
 
     Moving a branch that an open PR is built on is deliberate: the PR picks
-    up the new commits instead of a second one being opened.
+    up the new commits instead of a second one being opened. A branch that
+    already points at the commit is left alone.
 
     Returns:
-        None on success, or an error message for the per-repo result
+        (error, moved): error is None on success, or a message for the
+        per-repo result; moved is True only when an existing branch was known
+        to point elsewhere and was moved - it is what tells "PR updated" from
+        "PR already had this commit"
     """
     resp = github_client.create_ref(org, fork_name, f"refs/heads/{TEMPLATE_UPDATE_BRANCH}", sha)
     if resp.status_code == 201:
-        return None
+        return None, False
 
     if resp.status_code == 422 and "already exists" in _response_message(resp).lower():
+        current = github_client.get_ref(org, fork_name, f"heads/{TEMPLATE_UPDATE_BRANCH}")
+        current_sha = ((current or {}).get("object") or {}).get("sha")
+        if current_sha == sha:
+            return None, False
         update_resp = github_client.update_ref(
             org, fork_name, f"heads/{TEMPLATE_UPDATE_BRANCH}", sha, force=True
         )
         if update_resp.status_code == 200:
-            return None
+            # Unreadable old position: the branch moved, but whether an open
+            # PR gained anything is unknown - report it as merely existing.
+            return None, current_sha is not None
         logger.error(
             f"Failed to move {TEMPLATE_UPDATE_BRANCH} in {org}/{fork_name}: "
             f"{update_resp.status_code} {update_resp.text[:500]}"
         )
-        return _branch_error_message(update_resp, touches_workflows)
+        return _branch_error_message(update_resp, touches_workflows), False
 
     logger.error(
         f"Failed to create {TEMPLATE_UPDATE_BRANCH} in {org}/{fork_name}: "
         f"{resp.status_code} {resp.text[:500]}"
     )
-    return _branch_error_message(resp, touches_workflows)
+    return _branch_error_message(resp, touches_workflows), False
 
 
 def _create_pr_for_fork(
@@ -477,11 +554,11 @@ def _create_pr_for_fork(
     diff = _compare_with_template(github_client, org, fork, template_head_sha)
     if diff is None:
         return PropagateResult(repo=fork_name, status="error", message=COMPARE_FAILED_MESSAGE)
-    if diff.commits_behind == 0:
-        return PropagateResult(repo=fork_name, status="up_to_date", commits_behind=0)
+    if diff.nothing_to_propose:
+        return PropagateResult(repo=fork_name, status="up_to_date", commits_behind=diff.commits_behind)
     behind = diff.commits_behind
 
-    branch_error = _place_template_branch(
+    branch_error, branch_moved = _place_template_branch(
         github_client, org, fork_name, template_head_sha, diff.touches_workflows
     )
     if branch_error:
@@ -512,7 +589,11 @@ def _create_pr_for_fork(
             existing = github_client.list_pull_requests(org, fork_name, head=head, state="open")
             pr_url = existing[0].get("html_url") if existing else None
             return PropagateResult(
-                repo=fork_name, status="pr_exists", pr_url=pr_url, message=message, commits_behind=behind
+                repo=fork_name,
+                status="pr_updated" if branch_moved else "pr_exists",
+                pr_url=pr_url,
+                message=message,
+                commits_behind=behind,
             )
         logger.error(f"PR creation validation failed for {org}/{fork_name}: {resp.text[:500]}")
         return PropagateResult(repo=fork_name, status="error", message=resp.text[:500])

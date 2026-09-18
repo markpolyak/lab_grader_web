@@ -57,6 +57,38 @@ MAX_JOBS_KEPT = 20
 # crash, a restart or a cancellation keeps the grades already decided.
 WRITE_BATCH_SIZE = 10
 
+# A run that reports no progress for this long is treated as dead. Without
+# this, such a run keeps its (course, group, lab) locked and every later
+# attempt gets HTTP 409 until the backend is restarted - which is exactly
+# what a teacher hit on a live test. A single student takes seconds, and
+# planning reports progress per repository, so ten minutes of silence means
+# the worker is gone or wedged in a call that never returns.
+STALE_JOB_SECONDS = 10 * 60
+
+STALE_JOB_MESSAGE = (
+    "Проверка прервалась: несколько минут не было никакого прогресса. "
+    "Оценки, записанные до этого момента, сохранены. Запустите проверку ещё раз"
+)
+
+# Сколько ждать появления рабочего потока после регистрации работы. Нужно
+# только чтобы не убить работу в те микросекунды, пока поток ещё создаётся.
+WORKER_START_GRACE_SECONDS = 30
+
+NOT_STARTED_MESSAGE = (
+    "Проверка не запустилась - похоже, из-за ошибки сервера. "
+    "Загляните в логи бэкенда и запустите её ещё раз"
+)
+
+
+def bulk_worker_thread_name(job_id: str) -> str:
+    """
+    Name of the thread running a job.
+
+    The name is how a job's worker is recognised as still alive (see
+    _worker_is_alive), so whoever starts the run must use exactly this.
+    """
+    return f"bulk-{job_id}"
+
 # Two header rows precede student data in every group sheet.
 FIRST_DATA_ROW = 3
 
@@ -563,12 +595,19 @@ class BulkJob:
     name_file: str | None = None
     status: str = "running"  # running | done | failed | cancelled
     started_at: str = ""
+    # Moment of the last sign of life, used to detect a dead run (see
+    # STALE_JOB_SECONDS). Updated by touch() as planning and grading proceed.
+    last_progress_at: str = ""
     finished_at: str | None = None
     total: int = 0
     processed: int = 0
     results: list[BulkResult] = field(default_factory=list)
     error: str | None = None
     cancel_requested: bool = False
+
+    def touch(self) -> None:
+        """Record a sign of life. Plain assignment - no lock needed."""
+        self.last_progress_at = _now()
 
     def to_dict(self) -> dict:
         counts: dict[str, int] = {}
@@ -585,9 +624,11 @@ class BulkJob:
             "name_file": self.name_file,
             "status": self.status,
             "started_at": self.started_at,
+            "last_progress_at": self.last_progress_at,
             "finished_at": self.finished_at,
             "total": self.total,
             "processed": self.processed,
+            "cancel_requested": self.cancel_requested,
             "counts": counts,
             "results": [r.to_dict() for r in self.results],
             "error": self.error,
@@ -606,10 +647,80 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _seconds_since_progress(job: BulkJob) -> float:
+    """How long the job has been silent, by its own timestamps."""
+    stamp = job.last_progress_at or job.started_at
+    try:
+        since = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return 0.0
+    return (datetime.now(timezone.utc) - since).total_seconds()
+
+
+def _worker_is_alive(job_id: str) -> bool:
+    """Whether a thread is still running this job."""
+    name = bulk_worker_thread_name(job_id)
+    return any(thread.name == name and thread.is_alive() for thread in threading.enumerate())
+
+
+def _close_dead_job_locked(job: BulkJob) -> None:
+    """
+    Close out a run that is not going to finish. Must hold _jobs_lock.
+
+    Two ways a run dies without saying so, and both used to leave the lab
+    locked until the backend was restarted, with only HTTP 409 to show for it:
+
+    - it never started, or its thread is gone - the endpoint raised after the
+      job was registered, or the worker died on something `except Exception`
+      doesn't catch. Recognised by the worker thread being absent, once it has
+      had WORKER_START_GRACE_SECONDS to appear;
+    - it is wedged in a call that never returns - recognised by the silence
+      (STALE_JOB_SECONDS).
+    """
+    if job.status != "running":
+        return
+
+    silent_for = _seconds_since_progress(job)
+    if silent_for > WORKER_START_GRACE_SECONDS and not _worker_is_alive(job.job_id):
+        logger.error(
+            f"Bulk job {job.job_id} ({job.course_id}/{job.group_id}/{job.lab_id}) has no worker "
+            f"thread - marking it failed and unlocking the lab"
+        )
+        _finish_job_locked(job, "failed", NOT_STARTED_MESSAGE)
+        return
+
+    if silent_for > STALE_JOB_SECONDS:
+        logger.error(
+            f"Bulk job {job.job_id} ({job.course_id}/{job.group_id}/{job.lab_id}) reported no "
+            f"progress for {int(silent_for)}s - marking it failed and unlocking the lab"
+        )
+        _finish_job_locked(job, "failed", STALE_JOB_MESSAGE)
+
+
 def get_bulk_job(job_id: str) -> BulkJob | None:
     """Look up a job by id (used by GET /admin/bulk-grade-jobs/{job_id})."""
     with _jobs_lock:
-        return _jobs.get(job_id)
+        job = _jobs.get(job_id)
+        if job is not None:
+            _close_dead_job_locked(job)
+        return job
+
+
+def get_running_bulk_job(course_id: str, group_id: str, lab_id: str) -> BulkJob | None:
+    """
+    The run currently holding (course, group, lab), if any.
+
+    Used to answer HTTP 409 with its job_id, so the admin page can attach to
+    the run already in progress.
+    """
+    with _jobs_lock:
+        for job in reversed(_jobs.values()):
+            if (
+                job.status == "running"
+                and (job.course_id, job.group_id, job.lab_id) == (course_id, group_id, lab_id)
+            ):
+                return job
+        return None
 
 
 def _evict_old_jobs_locked() -> None:
@@ -644,7 +755,13 @@ def try_start_bulk_job(
     """
     with _jobs_lock:
         if (course_id, group_id, lab_id) in _running_keys:
-            return None
+            # A run whose worker died keeps the key; give the lab back instead
+            # of refusing every later attempt until a restart.
+            for job in _jobs.values():
+                if (job.course_id, job.group_id, job.lab_id) == (course_id, group_id, lab_id):
+                    _close_dead_job_locked(job)
+            if (course_id, group_id, lab_id) in _running_keys:
+                return None
         job = BulkJob(
             job_id=uuid.uuid4().hex,
             course_id=course_id,
@@ -654,6 +771,7 @@ def try_start_bulk_job(
             dry_run=dry_run,
             name_file=name_file,
             started_at=_now(),
+            last_progress_at=_now(),
         )
         _jobs[job.job_id] = job
         _running_keys.add((course_id, group_id, lab_id))
@@ -665,6 +783,9 @@ def request_bulk_job_cancel(job_id: str) -> BulkJob | None:
     """
     Ask a running job to stop after the student it is currently on.
 
+    A run whose worker is already gone is closed out right here, so the button
+    does something visible instead of nothing at all.
+
     Returns:
         The job, or None if there is no job with this id.
     """
@@ -672,7 +793,20 @@ def request_bulk_job_cancel(job_id: str) -> BulkJob | None:
         job = _jobs.get(job_id)
         if job and job.status == "running":
             job.cancel_requested = True
+            _close_dead_job_locked(job)
         return job
+
+
+def fail_bulk_job(job: BulkJob, error: str) -> None:
+    """
+    Close out a registered job that could not be started at all.
+
+    Registration takes the lab; if starting the worker then fails, it has to
+    be given back immediately rather than waiting for _close_dead_job_locked.
+    """
+    with _jobs_lock:
+        if job.status == "running":
+            _finish_job_locked(job, "failed", error)
 
 
 def _finish_job_locked(job: BulkJob, status: str, error: str | None = None) -> None:
@@ -731,6 +865,9 @@ def _plan_by_file(
     github_writes: list[tuple[int, int, str]] = []
 
     for username, repo in sorted(repos.items(), key=lambda pair: pair[0].casefold()):
+        # One request per repository: keep the run visibly alive while the
+        # whole organization is walked (see STALE_JOB_SECONDS).
+        job.touch()
         full_name = extract_full_name(
             github_client.get_file_content(org, repo, name_file)
         )
@@ -783,12 +920,22 @@ def _plan_by_file(
 
 
 def _plan_by_sheet(
+    job: BulkJob,
     values: list[list[str]],
     student_col: int,
     github_col: int,
     lab_config: dict[str, Any],
 ) -> list[_Target]:
-    """Queue every student who already has a GitHub username in the sheet."""
+    """
+    Queue every student who already has a GitHub username in the sheet.
+
+    A row is a student's row only if it has a name. `get_all_values()` returns
+    the sheet down to its last non-empty row, so anything a teacher keeps
+    below the group - a total, a note, a stray number - lands in the same
+    column and used to be graded as a student: a live run reported the
+    "student" `20` and, worse, would have written a grade into that row. Such
+    rows are reported as `no_name` and never graded.
+    """
     targets: list[_Target] = []
 
     github_values = column_values_from_grid(values, github_col, start_row=FIRST_DATA_ROW)
@@ -798,10 +945,25 @@ def _plan_by_sheet(
             continue
 
         row = FIRST_DATA_ROW + idx
+        student_name = (cell_from_grid(values, row, student_col) or "").strip()
+        if not student_name:
+            logger.warning(
+                f"Bulk job {job.job_id}: row {row} has GitHub '{username}' but no student name, skipping"
+            )
+            job.results.append(BulkResult(
+                status="no_name",
+                github=username,
+                message=(
+                    f"В строке {row} указан GitHub, но нет ФИО - строка пропущена. "
+                    "Похоже, это не строка студента"
+                ),
+            ))
+            continue
+
         targets.append(_Target(
             row=row,
             username=username,
-            student_name=cell_from_grid(values, row, student_col) or None,
+            student_name=student_name,
             repo=repo_name_for(lab_config, username),
         ))
 
@@ -937,7 +1099,7 @@ def run_bulk_grading(
     spreadsheet,
     course_info: dict[str, Any],
     lab_config: dict[str, Any],
-    lab_number: int,
+    lab_number: int | None,
 ) -> None:
     """
     Execute a bulk grading job, updating `job` in place as it goes.
@@ -958,7 +1120,10 @@ def run_bulk_grading(
         spreadsheet: gspread Spreadsheet (used for the locale)
         course_info: Course configuration dict from YAML
         lab_config: Lab configuration dict from YAML
-        lab_number: Lab number from its config key, for the lab-column fallback
+        lab_number: Lab number from its config key, for the lab-column
+            fallback; None when the key isn't a number ("quiz") - then a lab
+            without `short-name` cannot be placed and the run fails with a
+            clear message instead of the endpoint refusing the request
     """
     from gspread.utils import rowcol_to_a1
 
@@ -980,7 +1145,9 @@ def run_bulk_grading(
 
     try:
         values = worksheet.get_all_values()
+        job.touch()
         decimal_separator = get_decimal_separator(spreadsheet)
+        job.touch()
 
         header_row = values[0] if values else []
         if "GitHub" not in header_row:
@@ -996,6 +1163,11 @@ def run_bulk_grading(
                 raise BulkGradingError(f"Столбец '{lab_short_name}' не найден в таблице")
         else:
             # Same fallback as grade_lab when a lab has no short-name.
+            if lab_number is None:
+                raise BulkGradingError(
+                    "У лабораторной работы не задан short-name, а её ключ в конфигурации "
+                    "не содержит номера - невозможно определить столбец в таблице"
+                )
             lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
             lab_col = calculate_lab_column(lab_number, lab_offset)
 
@@ -1019,7 +1191,7 @@ def run_bulk_grading(
             )
             pending.extend(github_writes)
         else:
-            targets = _plan_by_sheet(values, student_col, github_col, lab_config)
+            targets = _plan_by_sheet(job, values, student_col, github_col, lab_config)
 
         if team_lab:
             # One group per team repository; students without a team are
@@ -1032,6 +1204,7 @@ def run_bulk_grading(
         # Rows rejected while planning are already done; count them as processed
         job.total = len(targets) + len(job.results)
         job.processed = len(job.results)
+        job.touch()
         logger.info(
             f"Bulk job {job.job_id}: {len(targets)} student(s) to grade in "
             f"{len(units)} unit(s), {len(job.results)} rejected while planning"
@@ -1048,6 +1221,11 @@ def run_bulk_grading(
             # unit: the heavy part (files, commits, check-runs, job logs) must
             # not be repeated per member.
             first = unit[0]
+            job.touch()
+            logger.info(
+                f"Bulk job {job.job_id}: grading {job.processed + 1}/{job.total} "
+                f"({first.username}, {first.repo})"
+            )
 
             def context_for(target=first) -> SheetContext:
                 if team_lab:
@@ -1117,6 +1295,7 @@ def run_bulk_grading(
 
             job.results.extend(unit_results)
             job.processed += len(unit_results)
+            job.touch()
 
             if len(pending) >= WRITE_BATCH_SIZE:
                 flush()
