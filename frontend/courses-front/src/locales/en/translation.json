@@ -103,6 +103,7 @@
       "dryRunBadge": "Dry run",
       "start": "Start grading",
       "cancelRun": "Stop",
+      "cancelRequested": "Stop requested: the run will finish after the current student.",
       "close": "Close",
       "inProgress": "Processed {{processed}} of {{total}}",
       "done": "Grading finished",

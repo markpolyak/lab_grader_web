@@ -251,6 +251,21 @@ class TestBackgroundJobStart:
         assert seen == {"value": 42, "daemon": True}
 
 
+class TestOptionalLabNumber:
+    """A lab key doesn't have to be a number, and the number is only needed to
+    place the grade column for a lab without short-name."""
+
+    def test_number_is_taken_from_the_key(self):
+        assert main_module.optional_lab_number("ЛР1") == 1
+        assert main_module.optional_lab_number("3") == 3
+
+    def test_key_without_digits_gives_none_instead_of_refusing(self):
+        assert main_module.optional_lab_number("quiz") is None
+        # ...unlike parse_lab_id, which is still used where a number is required
+        with pytest.raises(HTTPException):
+            main_module.parse_lab_id("quiz")
+
+
 class TestSheetsClient:
     def test_sets_a_request_timeout(self):
         """gspread waits forever by default, and one hung socket stops a whole
@@ -574,6 +589,51 @@ class TestBulkGradeEndpoint:
         job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
         assert job.mode == "by_sheet"
         assert job.name_file is None
+
+    def test_lab_whose_key_is_not_a_number_still_starts(
+        self, mock_request, bulk_course_config, mock_worksheet, captured_jobs
+    ):
+        """The reported failure: a test lab keyed "quiz" answered 400
+        "Некорректный lab_id" - after the job had been registered, so nothing
+        ran it and the group stayed locked behind HTTP 409."""
+        import json
+
+        bulk_course_config["labs"]["quiz"] = {"github-prefix": "r", "short-name": "КР"}
+
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "quiz",
+                body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
+            )
+
+        assert response.status_code == 202
+        job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
+        assert job.status == "running"
+        # The lab number is passed as None, not refused
+        [(func, args)] = captured_jobs
+        assert func is main_module.run_bulk_grading
+        assert args[-1] is None
+
+    def test_a_job_that_cannot_be_started_releases_the_lab(
+        self, mock_request, bulk_course_config, mock_worksheet
+    ):
+        """Registration takes the group and lab; if the start then fails, they
+        have to be given back right away instead of answering 409 afterwards."""
+        with patch("main.get_course_by_id", return_value=bulk_course_config), \
+             patch("main._start_background_job", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError):
+                main_module.start_bulk_grade(
+                    mock_request, "test-course", "P3300", "ЛР1",
+                    body=main_module.BulkGradeRequest(), admin="admin",
+                )
+
+        assert main_module.get_running_bulk_job("test-course", "P3300", "ЛР1") is None
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            retry = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "ЛР1",
+                body=main_module.BulkGradeRequest(), admin="admin",
+            )
+        assert retry.status_code == 202
 
     def test_run_is_handed_to_a_background_thread(
         self, mock_request, bulk_course_config, mock_worksheet, captured_jobs

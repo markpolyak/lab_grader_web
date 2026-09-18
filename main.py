@@ -49,6 +49,8 @@ from grading import (
     try_start_bulk_job,
     get_bulk_job,
     get_running_bulk_job,
+    fail_bulk_job,
+    bulk_worker_thread_name,
     request_bulk_job_cancel,
     run_bulk_grading,
     TeamActionStatus,
@@ -499,6 +501,21 @@ def parse_lab_id(lab_id: str) -> int:
     if not match:
         raise HTTPException(status_code=400, detail="Некорректный lab_id")
     return int(match.group(0))
+
+
+def optional_lab_number(lab_id: str) -> int | None:
+    """
+    The lab's number, or None when its identifier has none.
+
+    A lab key doesn't have to be a number - "quiz" is a perfectly good key -
+    and the number is only a fallback for placing the grade column when the
+    lab has no `short-name`. Refusing the whole request over it (what
+    parse_lab_id does) broke bulk grading of a test: the 400 was raised after
+    the job had been registered, so nothing ran it and the group stayed
+    locked behind HTTP 409.
+    """
+    match = re.search(r"\d+", lab_id)
+    return int(match.group(0)) if match else None
 
 
 def find_lab_config(labs: dict, lab_id: str) -> tuple[str, dict] | None:
@@ -2341,19 +2358,28 @@ def start_bulk_grade(
         f"Starting bulk grading job {job.job_id} for {course_id}/{group_id}/{lab_id} "
         f"(mode={mode}, dry_run={body.dry_run}, admin={admin})"
     )
-    github_client = GitHubClient(GITHUB_TOKEN)
-    _start_background_job(
-        run_bulk_grading,
-        job,
-        LabGrader(github_client),
-        github_client,
-        worksheet,
-        spreadsheet,
-        course_info,
-        lab_config_dict,
-        parse_lab_id(lab_key or lab_id),
-        name=f"bulk-{job.job_id}",
-    )
+    try:
+        github_client = GitHubClient(GITHUB_TOKEN)
+        _start_background_job(
+            run_bulk_grading,
+            job,
+            LabGrader(github_client),
+            github_client,
+            worksheet,
+            spreadsheet,
+            course_info,
+            lab_config_dict,
+            # Номер берём из ключа конфига, и его отсутствие не повод
+            # отказывать: он нужен только лабе без short-name.
+            optional_lab_number(lab_key or lab_id),
+            name=bulk_worker_thread_name(job.job_id),
+        )
+    except BaseException:
+        # Работа уже зарегистрирована и держит группу с лабораторной занятыми:
+        # если запустить её не удалось, отпускаем сразу.
+        logger.exception(f"Bulk grading job {job.job_id} could not be started")
+        fail_bulk_job(job, "Не удалось запустить проверку. Загляните в логи бэкенда")
+        raise
     return JSONResponse(status_code=202, content={"job_id": job.job_id})
 
 

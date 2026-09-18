@@ -70,6 +70,25 @@ STALE_JOB_MESSAGE = (
     "Оценки, записанные до этого момента, сохранены. Запустите проверку ещё раз"
 )
 
+# Сколько ждать появления рабочего потока после регистрации работы. Нужно
+# только чтобы не убить работу в те микросекунды, пока поток ещё создаётся.
+WORKER_START_GRACE_SECONDS = 30
+
+NOT_STARTED_MESSAGE = (
+    "Проверка не запустилась - похоже, из-за ошибки сервера. "
+    "Загляните в логи бэкенда и запустите её ещё раз"
+)
+
+
+def bulk_worker_thread_name(job_id: str) -> str:
+    """
+    Name of the thread running a job.
+
+    The name is how a job's worker is recognised as still alive (see
+    _worker_is_alive), so whoever starts the run must use exactly this.
+    """
+    return f"bulk-{job_id}"
+
 # Two header rows precede student data in every group sheet.
 FIRST_DATA_ROW = 3
 
@@ -609,6 +628,7 @@ class BulkJob:
             "finished_at": self.finished_at,
             "total": self.total,
             "processed": self.processed,
+            "cancel_requested": self.cancel_requested,
             "counts": counts,
             "results": [r.to_dict() for r in self.results],
             "error": self.error,
@@ -637,20 +657,44 @@ def _seconds_since_progress(job: BulkJob) -> float:
     return (datetime.now(timezone.utc) - since).total_seconds()
 
 
-def _fail_if_stalled_locked(job: BulkJob) -> None:
-    """
-    Close out a run that has stopped reporting progress. Must hold _jobs_lock.
+def _worker_is_alive(job_id: str) -> bool:
+    """Whether a thread is still running this job."""
+    name = bulk_worker_thread_name(job_id)
+    return any(thread.name == name and thread.is_alive() for thread in threading.enumerate())
 
-    Answers both questions the stuck run leaves open: the poll endpoint stops
-    saying "running" forever, and the lab stops being locked for a new run.
+
+def _close_dead_job_locked(job: BulkJob) -> None:
     """
-    if job.status != "running" or _seconds_since_progress(job) <= STALE_JOB_SECONDS:
+    Close out a run that is not going to finish. Must hold _jobs_lock.
+
+    Two ways a run dies without saying so, and both used to leave the lab
+    locked until the backend was restarted, with only HTTP 409 to show for it:
+
+    - it never started, or its thread is gone - the endpoint raised after the
+      job was registered, or the worker died on something `except Exception`
+      doesn't catch. Recognised by the worker thread being absent, once it has
+      had WORKER_START_GRACE_SECONDS to appear;
+    - it is wedged in a call that never returns - recognised by the silence
+      (STALE_JOB_SECONDS).
+    """
+    if job.status != "running":
         return
-    logger.error(
-        f"Bulk job {job.job_id} ({job.course_id}/{job.group_id}/{job.lab_id}) reported no "
-        f"progress for {int(_seconds_since_progress(job))}s - marking it failed and unlocking the lab"
-    )
-    _finish_job_locked(job, "failed", STALE_JOB_MESSAGE)
+
+    silent_for = _seconds_since_progress(job)
+    if silent_for > WORKER_START_GRACE_SECONDS and not _worker_is_alive(job.job_id):
+        logger.error(
+            f"Bulk job {job.job_id} ({job.course_id}/{job.group_id}/{job.lab_id}) has no worker "
+            f"thread - marking it failed and unlocking the lab"
+        )
+        _finish_job_locked(job, "failed", NOT_STARTED_MESSAGE)
+        return
+
+    if silent_for > STALE_JOB_SECONDS:
+        logger.error(
+            f"Bulk job {job.job_id} ({job.course_id}/{job.group_id}/{job.lab_id}) reported no "
+            f"progress for {int(silent_for)}s - marking it failed and unlocking the lab"
+        )
+        _finish_job_locked(job, "failed", STALE_JOB_MESSAGE)
 
 
 def get_bulk_job(job_id: str) -> BulkJob | None:
@@ -658,7 +702,7 @@ def get_bulk_job(job_id: str) -> BulkJob | None:
     with _jobs_lock:
         job = _jobs.get(job_id)
         if job is not None:
-            _fail_if_stalled_locked(job)
+            _close_dead_job_locked(job)
         return job
 
 
@@ -715,7 +759,7 @@ def try_start_bulk_job(
             # of refusing every later attempt until a restart.
             for job in _jobs.values():
                 if (job.course_id, job.group_id, job.lab_id) == (course_id, group_id, lab_id):
-                    _fail_if_stalled_locked(job)
+                    _close_dead_job_locked(job)
             if (course_id, group_id, lab_id) in _running_keys:
                 return None
         job = BulkJob(
@@ -739,6 +783,9 @@ def request_bulk_job_cancel(job_id: str) -> BulkJob | None:
     """
     Ask a running job to stop after the student it is currently on.
 
+    A run whose worker is already gone is closed out right here, so the button
+    does something visible instead of nothing at all.
+
     Returns:
         The job, or None if there is no job with this id.
     """
@@ -746,7 +793,20 @@ def request_bulk_job_cancel(job_id: str) -> BulkJob | None:
         job = _jobs.get(job_id)
         if job and job.status == "running":
             job.cancel_requested = True
+            _close_dead_job_locked(job)
         return job
+
+
+def fail_bulk_job(job: BulkJob, error: str) -> None:
+    """
+    Close out a registered job that could not be started at all.
+
+    Registration takes the lab; if starting the worker then fails, it has to
+    be given back immediately rather than waiting for _close_dead_job_locked.
+    """
+    with _jobs_lock:
+        if job.status == "running":
+            _finish_job_locked(job, "failed", error)
 
 
 def _finish_job_locked(job: BulkJob, status: str, error: str | None = None) -> None:
@@ -1014,7 +1074,7 @@ def run_bulk_grading(
     spreadsheet,
     course_info: dict[str, Any],
     lab_config: dict[str, Any],
-    lab_number: int,
+    lab_number: int | None,
 ) -> None:
     """
     Execute a bulk grading job, updating `job` in place as it goes.
@@ -1035,7 +1095,10 @@ def run_bulk_grading(
         spreadsheet: gspread Spreadsheet (used for the locale)
         course_info: Course configuration dict from YAML
         lab_config: Lab configuration dict from YAML
-        lab_number: Lab number from its config key, for the lab-column fallback
+        lab_number: Lab number from its config key, for the lab-column
+            fallback; None when the key isn't a number ("quiz") - then a lab
+            without `short-name` cannot be placed and the run fails with a
+            clear message instead of the endpoint refusing the request
     """
     from gspread.utils import rowcol_to_a1
 
@@ -1075,6 +1138,11 @@ def run_bulk_grading(
                 raise BulkGradingError(f"Столбец '{lab_short_name}' не найден в таблице")
         else:
             # Same fallback as grade_lab when a lab has no short-name.
+            if lab_number is None:
+                raise BulkGradingError(
+                    "У лабораторной работы не задан short-name, а её ключ в конфигурации "
+                    "не содержит номера - невозможно определить столбец в таблице"
+                )
             lab_offset = course_info.get("google", {}).get("lab-column-offset", 1)
             lab_col = calculate_lab_column(lab_number, lab_offset)
 

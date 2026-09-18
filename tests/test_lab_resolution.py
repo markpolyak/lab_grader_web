@@ -281,3 +281,50 @@ class TestVisibleLabs:
 
     def test_course_without_labs(self):
         assert main_module.visible_labs({"labs": None}) == []
+
+
+class TestShippedCourseConfigs:
+    """
+    Регрессия на реальных конфигах, а не на выдуманных.
+
+    Ключ лабы не обязан быть числом ("quiz" в neural-networks-2026), а номер
+    нужен только как запасной способ найти столбец оценки - для лабы без
+    short-name. Код, который требует номер от любой лабы, ломает проверку
+    таких работ: массовая проверка контрольной так отвечала 400 "Некорректный
+    lab_id", уже успев занять группу с лабораторной.
+    """
+
+    def _labs_from_configs(self):
+        import glob
+        import yaml
+
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        for path in sorted(glob.glob(os.path.join(root, "courses", "*.yaml"))):
+            if os.path.basename(path) == "index.yaml":
+                continue
+            with open(path, encoding="utf-8") as handle:
+                config = yaml.safe_load(handle) or {}
+            # Конфиг курса вложен в ключ "course" (см. main.get_course_by_id)
+            course = config.get("course") or config
+            for key, lab in (course.get("labs") or {}).items():
+                yield os.path.basename(path), str(key), lab or {}
+
+    def test_every_lab_resolves_by_its_own_key(self):
+        for filename, key, lab in self._labs_from_configs():
+            course = {"labs": {key: lab}}
+            resolved = main_module.find_lab_config(course["labs"], key)
+            assert resolved is not None and resolved[0] == key, f"{filename}: {key}"
+
+    def test_every_lab_can_be_placed_in_the_spreadsheet(self):
+        """У лабы есть short-name, либо номер в ключе - иначе столбец оценки
+        определить нечем, и проверка такой работы невозможна в принципе."""
+        for filename, key, lab in self._labs_from_configs():
+            has_column = bool(lab.get("short-name")) or main_module.optional_lab_number(key) is not None
+            assert has_column, f"{filename}: лаба '{key}' без short-name и без номера в ключе"
+
+    def test_a_key_without_digits_is_not_rejected(self):
+        keys = [key for _f, key, _lab in self._labs_from_configs()]
+        assert any(main_module.optional_lab_number(key) is None for key in keys), (
+            "в конфигах больше нет лаб с нечисловым ключом - тест перестал "
+            "проверять тот случай, из-за которого он написан"
+        )

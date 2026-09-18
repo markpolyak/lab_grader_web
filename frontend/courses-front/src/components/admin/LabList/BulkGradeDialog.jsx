@@ -211,6 +211,13 @@ export const BulkGradeDialog = ({ courseId, lab, onClose, onError }) => {
                 `${t("adminLabs.bulk.failed")}${job.error ? `: ${job.error}` : ""}`}
             </p>
 
+            {/* Работа замечает отмену между студентами, поэтому кнопка
+                срабатывает не мгновенно - без подсказки кажется, что
+                нажатие ничего не сделало. */}
+            {running && job.cancel_requested && (
+              <HintText>{t("adminLabs.bulk.cancelRequested")}</HintText>
+            )}
+
             {job.dry_run && <Chip size="small" label={t("adminLabs.bulk.dryRunBadge")} />}
 
             {running && (
@@ -275,7 +282,7 @@ export const BulkGradeDialog = ({ courseId, lab, onClose, onError }) => {
       </DialogContent>
       <DialogActions>
         {running ? (
-          <MuiButton onClick={handleCancelJob} color="error">
+          <MuiButton onClick={handleCancelJob} color="error" disabled={!!job.cancel_requested}>
             {t("adminLabs.bulk.cancelRun")}
           </MuiButton>
         ) : (

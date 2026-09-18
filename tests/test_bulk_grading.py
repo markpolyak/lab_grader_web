@@ -5,6 +5,8 @@ Covers repository discovery, student matching by full name, the shared
 grading decision, the background job store and the orchestrator.
 """
 import pytest
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 import sys
@@ -32,7 +34,9 @@ from grading.bulk import (
     get_bulk_job,
     get_running_bulk_job,
     request_bulk_job_cancel,
+    bulk_worker_thread_name,
     STALE_JOB_SECONDS,
+    WORKER_START_GRACE_SECONDS,
     _jobs,
     _running_keys,
 )
@@ -541,43 +545,79 @@ class TestBulkJobStore:
         assert len(payload["results"]) == 3
 
 
-class TestStalledJobIsNotLockedForever:
+class TestRunsThatNeverFinish:
     """
-    A run whose worker is gone (a client disconnect used to lose the task, a
-    call can wedge) must not keep the lab locked: that is what left a teacher
-    unable to start a check for hours, with only HTTP 409 to show for it.
+    A run that will never finish must not keep the lab locked: that is what
+    left a teacher unable to start a check, with only HTTP 409 to show for
+    it. Two shapes of it - no worker at all (the endpoint raised after the job
+    was registered, or the thread died on something `except Exception` misses)
+    and a worker wedged in a call that never returns.
     """
+
+    @contextmanager
+    def _live_worker(self, job):
+        """A thread standing in for the job's worker, so it looks alive."""
+        release = threading.Event()
+        thread = threading.Thread(
+            target=release.wait, name=bulk_worker_thread_name(job.job_id), daemon=True
+        )
+        thread.start()
+        try:
+            yield
+        finally:
+            release.set()
+            thread.join(5)
 
     def _silent_for(self, job, seconds):
         """Backdate the job's last sign of life."""
-        stamp = datetime.now(timezone.utc) - timedelta(seconds=seconds)
-        job.last_progress_at = stamp.isoformat()
+        job.last_progress_at = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
 
-    def test_a_new_run_takes_over_from_a_stalled_one(self):
-        stalled = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
-        self._silent_for(stalled, STALE_JOB_SECONDS + 60)
+    def test_job_without_a_worker_is_closed_out(self):
+        """Exactly the reported failure: the endpoint registered the job and
+        then raised (a lab key without a number), so nothing ever ran it."""
+        orphan = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(orphan, WORKER_START_GRACE_SECONDS + 1)
 
-        fresh = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        assert get_bulk_job(orphan.job_id).status == "failed"
+        assert orphan.error and "не запустилась" in orphan.error
+        # ...and the lab is free again
+        assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is not None
 
-        assert fresh is not None and fresh is not stalled
-        assert stalled.status == "failed"
-        assert stalled.error and "прогресс" in stalled.error
-        assert stalled.finished_at
+    def test_a_job_just_registered_is_left_alone(self):
+        """The worker thread is started right after registration; those
+        microseconds must not be read as a dead run."""
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+
+        assert get_bulk_job(job.job_id).status == "running"
+        assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is None
+
+    def test_cancelling_a_workerless_job_closes_it(self):
+        """The reported "Остановить does nothing": there was no worker to see
+        the flag, so the job stayed running forever."""
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(job, WORKER_START_GRACE_SECONDS + 1)
+
+        assert request_bulk_job_cancel(job.job_id).status == "failed"
+
+    def test_silent_worker_is_treated_as_dead(self):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        with self._live_worker(job):
+            self._silent_for(job, STALE_JOB_SECONDS + 60)
+
+            fresh = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+
+        assert fresh is not None and fresh is not job
+        assert job.status == "failed"
+        assert job.error and "прогресс" in job.error
+        assert job.finished_at
 
     def test_a_working_run_still_blocks_a_second_one(self):
         job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
-        self._silent_for(job, STALE_JOB_SECONDS - 60)
+        with self._live_worker(job):
+            self._silent_for(job, STALE_JOB_SECONDS - 60)
 
-        assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is None
-        assert job.status == "running"
-
-    def test_polling_reports_a_stalled_run_as_failed(self):
-        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
-        self._silent_for(job, STALE_JOB_SECONDS + 1)
-
-        assert get_bulk_job(job.job_id).status == "failed"
-        # ...and the lab is free again
-        assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is not None
+            assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is None
+            assert get_bulk_job(job.job_id).status == "running"
 
     def test_progress_during_a_run_keeps_it_alive(self, bulk_setup):
         job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
@@ -585,7 +625,7 @@ class TestStalledJobIsNotLockedForever:
 
         _run(job, bulk_setup)
 
-        # The run finished normally, on its own terms - not killed as stalled.
+        # The run finished on its own terms - not killed as dead.
         assert job.status == "done"
         assert job.error is None
 
@@ -636,7 +676,7 @@ def _job(mode="by_sheet", dry_run=False, name_file=None):
     )
 
 
-def _run(job, setup, grader=None, github_client=None):
+def _run(job, setup, grader=None, github_client=None, lab_number=1):
     run_bulk_grading(
         job,
         grader or _passing_grader(),
@@ -645,7 +685,7 @@ def _run(job, setup, grader=None, github_client=None):
         setup["spreadsheet"],
         setup["course_info"],
         setup["lab_config"],
-        1,
+        lab_number,
     )
 
 
@@ -767,6 +807,27 @@ class TestRunBulkGradingBySheet:
         _run(job, bulk_setup, grader=_grader_mock(ci))
 
         assert job.results[0].grade == "v-3"
+
+
+class TestLabWithoutANumberInItsKey:
+    """A lab keyed "quiz" has no number; it is only needed as a fallback for
+    placing the grade column."""
+
+    def test_short_name_places_the_column_without_a_number(self, bulk_setup):
+        job = _job()
+        _run(job, bulk_setup, lab_number=None)
+
+        assert job.status == "done"
+        assert [r.status for r in job.results] == ["updated", "updated"]
+
+    def test_without_short_name_the_run_fails_with_a_clear_message(self, bulk_setup):
+        bulk_setup["lab_config"] = {"github-prefix": "r"}  # no short-name
+        job = _job()
+
+        _run(job, bulk_setup, lab_number=None)
+
+        assert job.status == "failed"
+        assert "short-name" in job.error
 
 
 class TestRunBulkGradingByFile:
