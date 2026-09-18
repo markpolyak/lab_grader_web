@@ -920,12 +920,22 @@ def _plan_by_file(
 
 
 def _plan_by_sheet(
+    job: BulkJob,
     values: list[list[str]],
     student_col: int,
     github_col: int,
     lab_config: dict[str, Any],
 ) -> list[_Target]:
-    """Queue every student who already has a GitHub username in the sheet."""
+    """
+    Queue every student who already has a GitHub username in the sheet.
+
+    A row is a student's row only if it has a name. `get_all_values()` returns
+    the sheet down to its last non-empty row, so anything a teacher keeps
+    below the group - a total, a note, a stray number - lands in the same
+    column and used to be graded as a student: a live run reported the
+    "student" `20` and, worse, would have written a grade into that row. Such
+    rows are reported as `no_name` and never graded.
+    """
     targets: list[_Target] = []
 
     github_values = column_values_from_grid(values, github_col, start_row=FIRST_DATA_ROW)
@@ -935,10 +945,25 @@ def _plan_by_sheet(
             continue
 
         row = FIRST_DATA_ROW + idx
+        student_name = (cell_from_grid(values, row, student_col) or "").strip()
+        if not student_name:
+            logger.warning(
+                f"Bulk job {job.job_id}: row {row} has GitHub '{username}' but no student name, skipping"
+            )
+            job.results.append(BulkResult(
+                status="no_name",
+                github=username,
+                message=(
+                    f"В строке {row} указан GitHub, но нет ФИО - строка пропущена. "
+                    "Похоже, это не строка студента"
+                ),
+            ))
+            continue
+
         targets.append(_Target(
             row=row,
             username=username,
-            student_name=cell_from_grid(values, row, student_col) or None,
+            student_name=student_name,
             repo=repo_name_for(lab_config, username),
         ))
 
@@ -1166,7 +1191,7 @@ def run_bulk_grading(
             )
             pending.extend(github_writes)
         else:
-            targets = _plan_by_sheet(values, student_col, github_col, lab_config)
+            targets = _plan_by_sheet(job, values, student_col, github_col, lab_config)
 
         if team_lab:
             # One group per team repository; students without a team are

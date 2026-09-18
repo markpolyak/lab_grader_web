@@ -809,6 +809,45 @@ class TestRunBulkGradingBySheet:
         assert job.results[0].grade == "v-3"
 
 
+class TestStrayRowsInTheSheet:
+    """
+    `get_all_values()` отдаёт лист до последней непустой строки, поэтому всё,
+    что преподаватель держит под таблицей группы (итог, заметка, случайное
+    число), попадает в тот же столбец. На живом прогоне такая строка стала
+    "студентом 20", а при успехе в неё записалась бы оценка.
+    """
+
+    def test_row_with_a_login_but_no_name_is_not_graded(self, bulk_setup):
+        bulk_setup["grid"].append(["", "", "20", ""])  # строка-мусор под группой
+        grader = _passing_grader()
+        job = _job()
+
+        _run(job, bulk_setup, grader=grader)
+
+        graded = [call.args[1] for call in grader.check_repository.call_args_list]
+        assert "os-task1-20" not in graded
+        stray = [r for r in job.results if r.status == "no_name"]
+        assert [r.github for r in stray] == ["20"]
+        assert "нет ФИО" in stray[0].message
+
+    def test_nothing_is_written_into_a_stray_row(self, bulk_setup):
+        bulk_setup["grid"].append(["", "", "20", ""])
+        job = _job()
+
+        _run(job, bulk_setup)
+
+        written_rows = [cell[0] for cell in _written_cells(bulk_setup["worksheet"])]
+        assert all(not cell.endswith("6") for cell in written_rows), written_rows
+
+    def test_normal_rows_are_unaffected(self, bulk_setup):
+        job = _job()
+
+        _run(job, bulk_setup)
+
+        assert [r.github for r in job.results] == ["alice", "bob"]
+        assert all(r.status == "updated" for r in job.results)
+
+
 class TestLabWithoutANumberInItsKey:
     """A lab keyed "quiz" has no number; it is only needed as a fallback for
     placing the grade column."""

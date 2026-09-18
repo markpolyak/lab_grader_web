@@ -92,6 +92,9 @@ class LabGrader:
         Perform repository-level checks.
 
         Checks:
+        - Repository exists (verified only once something else fails, see
+          _missing_repo_result - it costs a request, and in the normal case
+          the answer is already known)
         - Required files exist
         - Workflows directory exists
         - Repository has commits
@@ -109,6 +112,9 @@ class LabGrader:
         if required_files:
             missing = self.github.check_required_files(org, repo_name, required_files)
             if missing:
+                repo_missing = self._missing_repo_result(org, repo_name)
+                if repo_missing:
+                    return repo_missing
                 return GradeResult(
                     status=GradeStatus.ERROR,
                     result=None,
@@ -119,6 +125,9 @@ class LabGrader:
 
         # Check workflows directory
         if not self.github.has_workflows_directory(org, repo_name):
+            repo_missing = self._missing_repo_result(org, repo_name)
+            if repo_missing:
+                return repo_missing
             return GradeResult(
                 status=GradeStatus.ERROR,
                 result=None,
@@ -130,6 +139,9 @@ class LabGrader:
         # Check for commits
         commit = self.github.get_latest_commit(org, repo_name)
         if commit is None:
+            repo_missing = self._missing_repo_result(org, repo_name)
+            if repo_missing:
+                return repo_missing
             return GradeResult(
                 status=GradeStatus.ERROR,
                 result=None,
@@ -139,6 +151,35 @@ class LabGrader:
             )
 
         return None
+
+    def _missing_repo_result(self, org: str, repo_name: str) -> GradeResult | None:
+        """
+        Tell "there is no such repository" from "the repository lacks this".
+
+        Every check below answers the same way for both: a missing file, a
+        missing .github/workflows and a missing commit list are what a
+        nonexistent repository looks like through the API. Reporting the
+        first missing file for a repository that was never created sent a
+        teacher looking for a file instead of for the repository (seen on a
+        live test, where a stray spreadsheet cell produced the repository
+        name "r-20").
+
+        Called only after something has already failed, so the extra request
+        never happens on the normal path.
+
+        Returns:
+            GradeResult with REPO_NOT_FOUND, or None if the repository is there
+        """
+        if self.github.repo_exists(org, repo_name):
+            return None
+        logger.warning(f"Repository {org}/{repo_name} does not exist")
+        return GradeResult(
+            status=GradeStatus.ERROR,
+            result=None,
+            message=f"⚠️ Репозиторий {org}/{repo_name} не найден",
+            passed=None,
+            error_code="REPO_NOT_FOUND",
+        )
 
     def check_forbidden_files(
         self,

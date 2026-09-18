@@ -129,7 +129,8 @@
         "conflict": "用户名冲突",
         "unmatched": "姓名未匹配",
         "ambiguous": "姓名有歧义",
-        "no_team": "无小组"
+        "no_team": "无小组",
+        "no_name": "无姓名的行，已跳过"
       },
       "errors": {
         "groupsFailed": "加载班级失败",

@@ -126,7 +126,8 @@
         "conflict": "username conflict",
         "unmatched": "name not matched",
         "ambiguous": "ambiguous name",
-        "no_team": "no team"
+        "no_team": "no team",
+        "no_name": "row without a name, skipped"
       },
       "errors": {
         "groupsFailed": "Failed to load groups",

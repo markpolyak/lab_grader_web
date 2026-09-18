@@ -33,6 +33,7 @@ const RESULT_STATUS_COLOR = {
   unmatched: "warning",
   ambiguous: "warning",
   no_team: "warning",
+  no_name: "warning",
 };
 
 async function fetchJson(url, options) {
