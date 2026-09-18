@@ -133,7 +133,7 @@
       "errors": {
         "groupsFailed": "加载班级失败",
         "startFailed": "启动评定失败，请重试。",
-        "alreadyRunning": "该实验对该班级的评定已在进行中。",
+        "alreadyRunning": "该实验的本组检查已在进行中——下面显示其进度。",
         "cancelFailed": "停止评定失败"
       }
     },

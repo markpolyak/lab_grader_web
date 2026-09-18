@@ -46,6 +46,8 @@ async function fetchJson(url, options) {
   if (!response.ok) {
     const error = new Error((data && data.detail) || `HTTP ${response.status}`);
     error.status = response.status;
+    // 409 отдаёт job_id уже идущей проверки - к ней можно подключиться
+    error.jobId = data && data.job_id;
     throw error;
   }
   return data;
@@ -120,6 +122,12 @@ export const BulkGradeDialog = ({ courseId, lab, onClose, onError }) => {
       .catch((err) => {
         setStarting(false);
         if (err.status === 409) {
+          // Проверка этой группы уже идёт: показываем её, а не только ошибку -
+          // иначе преподавателю нечего делать, кроме как ждать неизвестно чего.
+          if (err.jobId) {
+            setJob({ job_id: err.jobId, status: "running", total: 0, processed: 0, results: [] });
+            pollJob(err.jobId);
+          }
           onError(t("adminLabs.bulk.errors.alreadyRunning"));
         } else {
           onError(err.message || t("adminLabs.bulk.errors.startFailed"));

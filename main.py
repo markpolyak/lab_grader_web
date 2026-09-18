@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException, Depends, BackgroundTasks
+from fastapi import FastAPI, Request, Response, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -15,6 +15,7 @@ import re
 import json
 import base64
 import logging
+import threading
 from datetime import datetime
 from urllib.parse import quote, urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -47,6 +48,7 @@ from grading import (
     taskid_column,
     try_start_bulk_job,
     get_bulk_job,
+    get_running_bulk_job,
     request_bulk_job_cancel,
     run_bulk_grading,
     TeamActionStatus,
@@ -121,6 +123,37 @@ load_dotenv()
 app = FastAPI()
 COURSES_DIR = "courses"
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
+
+SHEETS_SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+
+# Сколько ждать ответа Google Sheets. Без таймаута gspread ждёт вечно, и одно
+# повисшее соединение останавливает всю фоновую работу целиком - ту же ошибку
+# для GitHub исправлял PR #42.
+SHEETS_TIMEOUT_SECONDS = 30
+
+
+def sheets_client() -> gspread.Client:
+    """Authorized gspread client with a request timeout set."""
+    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SHEETS_SCOPE)
+    client = gspread.authorize(creds)
+    client.set_timeout(SHEETS_TIMEOUT_SECONDS)
+    return client
+
+
+def _start_background_job(func, *args, name: str) -> None:
+    """
+    Run a long background job (bulk grading, template propagation) in a
+    daemon thread.
+
+    Not FastAPI's BackgroundTasks: those run only after the response has been
+    delivered, so a client that disconnects (a closed tab, a proxy dropping
+    the connection) leaves the job registered as running while nothing ever
+    runs it - and the course/group/lab stays locked until the backend is
+    restarted. A thread starts the work immediately, independently of the
+    response. Still single-process state, so the single-worker requirement
+    from docs/PROJECT_DESCRIPTION.md is unchanged.
+    """
+    threading.Thread(target=func, args=args, name=name, daemon=True).start()
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
@@ -770,9 +803,7 @@ def get_course_groups(request: Request, course_id: str):
         raise HTTPException(status_code=400, detail="Spreadsheet ID not found in course config")
 
 
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
+    client = sheets_client()
 
     try:
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -796,9 +827,7 @@ def get_course_labs(request: Request, course_id: str, group_id: str):
         raise HTTPException(status_code=400, detail="Missing spreadsheet ID or labs in config")
 
 
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
+    client = sheets_client()
 
     try:
         spreadsheet = client.open_by_key(spreadsheet_id)
@@ -835,9 +864,7 @@ def register_student(request: Request, course_id: str, group_id: str, student: S
             logger.error(f"Spreadsheet ID not found for course {course_id}")
             raise HTTPException(status_code=400, detail="Spreadsheet ID not found in course config")
 
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-        client = gspread.authorize(creds)
+        client = sheets_client()
 
         try:
             spreadsheet = client.open_by_key(spreadsheet_id)
@@ -975,12 +1002,10 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         def load_sheet_context() -> SheetContext:
             """Open the group's sheet and read everything the grading needs from it."""
             logger.info(f"Connecting to Google Sheets for group {group_id}")
-            scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-            creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-            sheets_client = gspread.authorize(creds)
+            client = sheets_client()
 
             try:
-                spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+                spreadsheet = client.open_by_key(spreadsheet_id)
                 sheet = spreadsheet.worksheet(group_id)
                 logger.info(f"Successfully opened worksheet '{group_id}'")
             except Exception as e:
@@ -2154,7 +2179,6 @@ def propagate_template_update(
     request: Request,
     course_id: str,
     lab_id: str,
-    background_tasks: BackgroundTasks,
     body: PropagateRequest = PropagateRequest(),
     admin: str = Depends(require_admin),
 ):
@@ -2195,8 +2219,10 @@ def propagate_template_update(
         )
 
     logger.info(f"Starting propagate job {job.job_id} for {course_id}/{lab_id} (admin={admin})")
-    background_tasks.add_task(
-        run_propagation, job, github_client, org, github_prefix, template_repo, body.repos
+    _start_background_job(
+        run_propagation,
+        job, github_client, org, github_prefix, template_repo, body.repos,
+        name=f"propagate-{job.job_id}",
     )
     return JSONResponse(status_code=202, content={"job_id": job.job_id})
 
@@ -2233,12 +2259,10 @@ def _open_group_worksheet(spreadsheet_id: str, group_id: str):
     Opened by the endpoint rather than inside the job, so that a wrong group
     fails the request with 404 instead of a job that dies immediately.
     """
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    sheets_client = gspread.authorize(creds)
+    client = sheets_client()
 
     try:
-        spreadsheet = sheets_client.open_by_key(spreadsheet_id)
+        spreadsheet = client.open_by_key(spreadsheet_id)
         worksheet = spreadsheet.worksheet(group_id)
     except Exception as e:
         logger.error(f"Failed to open worksheet '{group_id}': {str(e)}")
@@ -2254,7 +2278,6 @@ def start_bulk_grade(
     course_id: str,
     group_id: str,
     lab_id: str,
-    background_tasks: BackgroundTasks,
     body: BulkGradeRequest = BulkGradeRequest(),
     admin: str = Depends(require_admin),
 ):
@@ -2268,7 +2291,9 @@ def start_bulk_grade(
 
     Returns 202 with a job_id to poll via GET /admin/bulk-grade-jobs/{job_id};
     only one run per (course_id, group_id, lab_id) at a time - a second POST
-    while one is in flight gets HTTP 409.
+    while one is in flight gets HTTP 409 with that run's `job_id`, so the
+    admin page can attach to it instead of leaving the teacher with nothing
+    but an error.
     """
     name_file = (body.name_file or "").strip() or None
     mode = "by_file" if name_file else "by_sheet"
@@ -2303,9 +2328,13 @@ def start_bulk_grade(
 
     job = try_start_bulk_job(course_id, group_id, lab_id, mode, body.dry_run, name_file)
     if job is None:
-        raise HTTPException(
+        running = get_running_bulk_job(course_id, group_id, lab_id)
+        return JSONResponse(
             status_code=409,
-            detail="Проверка этой лабораторной для этой группы уже выполняется",
+            content={
+                "detail": "Проверка этой лабораторной для этой группы уже выполняется",
+                "job_id": running.job_id if running else None,
+            },
         )
 
     logger.info(
@@ -2313,7 +2342,7 @@ def start_bulk_grade(
         f"(mode={mode}, dry_run={body.dry_run}, admin={admin})"
     )
     github_client = GitHubClient(GITHUB_TOKEN)
-    background_tasks.add_task(
+    _start_background_job(
         run_bulk_grading,
         job,
         LabGrader(github_client),
@@ -2323,6 +2352,7 @@ def start_bulk_grade(
         course_info,
         lab_config_dict,
         parse_lab_id(lab_key or lab_id),
+        name=f"bulk-{job.job_id}",
     )
     return JSONResponse(status_code=202, content={"job_id": job.job_id})
 

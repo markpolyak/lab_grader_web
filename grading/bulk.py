@@ -57,6 +57,19 @@ MAX_JOBS_KEPT = 20
 # crash, a restart or a cancellation keeps the grades already decided.
 WRITE_BATCH_SIZE = 10
 
+# A run that reports no progress for this long is treated as dead. Without
+# this, such a run keeps its (course, group, lab) locked and every later
+# attempt gets HTTP 409 until the backend is restarted - which is exactly
+# what a teacher hit on a live test. A single student takes seconds, and
+# planning reports progress per repository, so ten minutes of silence means
+# the worker is gone or wedged in a call that never returns.
+STALE_JOB_SECONDS = 10 * 60
+
+STALE_JOB_MESSAGE = (
+    "Проверка прервалась: несколько минут не было никакого прогресса. "
+    "Оценки, записанные до этого момента, сохранены. Запустите проверку ещё раз"
+)
+
 # Two header rows precede student data in every group sheet.
 FIRST_DATA_ROW = 3
 
@@ -563,12 +576,19 @@ class BulkJob:
     name_file: str | None = None
     status: str = "running"  # running | done | failed | cancelled
     started_at: str = ""
+    # Moment of the last sign of life, used to detect a dead run (see
+    # STALE_JOB_SECONDS). Updated by touch() as planning and grading proceed.
+    last_progress_at: str = ""
     finished_at: str | None = None
     total: int = 0
     processed: int = 0
     results: list[BulkResult] = field(default_factory=list)
     error: str | None = None
     cancel_requested: bool = False
+
+    def touch(self) -> None:
+        """Record a sign of life. Plain assignment - no lock needed."""
+        self.last_progress_at = _now()
 
     def to_dict(self) -> dict:
         counts: dict[str, int] = {}
@@ -585,6 +605,7 @@ class BulkJob:
             "name_file": self.name_file,
             "status": self.status,
             "started_at": self.started_at,
+            "last_progress_at": self.last_progress_at,
             "finished_at": self.finished_at,
             "total": self.total,
             "processed": self.processed,
@@ -606,10 +627,56 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _seconds_since_progress(job: BulkJob) -> float:
+    """How long the job has been silent, by its own timestamps."""
+    stamp = job.last_progress_at or job.started_at
+    try:
+        since = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return 0.0
+    return (datetime.now(timezone.utc) - since).total_seconds()
+
+
+def _fail_if_stalled_locked(job: BulkJob) -> None:
+    """
+    Close out a run that has stopped reporting progress. Must hold _jobs_lock.
+
+    Answers both questions the stuck run leaves open: the poll endpoint stops
+    saying "running" forever, and the lab stops being locked for a new run.
+    """
+    if job.status != "running" or _seconds_since_progress(job) <= STALE_JOB_SECONDS:
+        return
+    logger.error(
+        f"Bulk job {job.job_id} ({job.course_id}/{job.group_id}/{job.lab_id}) reported no "
+        f"progress for {int(_seconds_since_progress(job))}s - marking it failed and unlocking the lab"
+    )
+    _finish_job_locked(job, "failed", STALE_JOB_MESSAGE)
+
+
 def get_bulk_job(job_id: str) -> BulkJob | None:
     """Look up a job by id (used by GET /admin/bulk-grade-jobs/{job_id})."""
     with _jobs_lock:
-        return _jobs.get(job_id)
+        job = _jobs.get(job_id)
+        if job is not None:
+            _fail_if_stalled_locked(job)
+        return job
+
+
+def get_running_bulk_job(course_id: str, group_id: str, lab_id: str) -> BulkJob | None:
+    """
+    The run currently holding (course, group, lab), if any.
+
+    Used to answer HTTP 409 with its job_id, so the admin page can attach to
+    the run already in progress.
+    """
+    with _jobs_lock:
+        for job in reversed(_jobs.values()):
+            if (
+                job.status == "running"
+                and (job.course_id, job.group_id, job.lab_id) == (course_id, group_id, lab_id)
+            ):
+                return job
+        return None
 
 
 def _evict_old_jobs_locked() -> None:
@@ -644,7 +711,13 @@ def try_start_bulk_job(
     """
     with _jobs_lock:
         if (course_id, group_id, lab_id) in _running_keys:
-            return None
+            # A run whose worker died keeps the key; give the lab back instead
+            # of refusing every later attempt until a restart.
+            for job in _jobs.values():
+                if (job.course_id, job.group_id, job.lab_id) == (course_id, group_id, lab_id):
+                    _fail_if_stalled_locked(job)
+            if (course_id, group_id, lab_id) in _running_keys:
+                return None
         job = BulkJob(
             job_id=uuid.uuid4().hex,
             course_id=course_id,
@@ -654,6 +727,7 @@ def try_start_bulk_job(
             dry_run=dry_run,
             name_file=name_file,
             started_at=_now(),
+            last_progress_at=_now(),
         )
         _jobs[job.job_id] = job
         _running_keys.add((course_id, group_id, lab_id))
@@ -731,6 +805,9 @@ def _plan_by_file(
     github_writes: list[tuple[int, int, str]] = []
 
     for username, repo in sorted(repos.items(), key=lambda pair: pair[0].casefold()):
+        # One request per repository: keep the run visibly alive while the
+        # whole organization is walked (see STALE_JOB_SECONDS).
+        job.touch()
         full_name = extract_full_name(
             github_client.get_file_content(org, repo, name_file)
         )
@@ -980,7 +1057,9 @@ def run_bulk_grading(
 
     try:
         values = worksheet.get_all_values()
+        job.touch()
         decimal_separator = get_decimal_separator(spreadsheet)
+        job.touch()
 
         header_row = values[0] if values else []
         if "GitHub" not in header_row:
@@ -1032,6 +1111,7 @@ def run_bulk_grading(
         # Rows rejected while planning are already done; count them as processed
         job.total = len(targets) + len(job.results)
         job.processed = len(job.results)
+        job.touch()
         logger.info(
             f"Bulk job {job.job_id}: {len(targets)} student(s) to grade in "
             f"{len(units)} unit(s), {len(job.results)} rejected while planning"
@@ -1048,6 +1128,11 @@ def run_bulk_grading(
             # unit: the heavy part (files, commits, check-runs, job logs) must
             # not be repeated per member.
             first = unit[0]
+            job.touch()
+            logger.info(
+                f"Bulk job {job.job_id}: grading {job.processed + 1}/{job.total} "
+                f"({first.username}, {first.repo})"
+            )
 
             def context_for(target=first) -> SheetContext:
                 if team_lab:
@@ -1117,6 +1202,7 @@ def run_bulk_grading(
 
             job.results.extend(unit_results)
             job.processed += len(unit_results)
+            job.touch()
 
             if len(pending) >= WRITE_BATCH_SIZE:
                 flush()

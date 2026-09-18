@@ -5,7 +5,7 @@ Covers repository discovery, student matching by full name, the shared
 grading decision, the background job store and the orchestrator.
 """
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 import sys
 import os
@@ -30,7 +30,9 @@ from grading.bulk import (
     taskid_column,
     try_start_bulk_job,
     get_bulk_job,
+    get_running_bulk_job,
     request_bulk_job_cancel,
+    STALE_JOB_SECONDS,
     _jobs,
     _running_keys,
 )
@@ -521,6 +523,12 @@ class TestBulkJobStore:
     def test_request_cancel_unknown_job(self):
         assert request_bulk_job_cancel("nope") is None
 
+    def test_running_job_is_found_by_course_group_and_lab(self):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+
+        assert get_running_bulk_job("c", "g", "ЛР1") is job
+        assert get_running_bulk_job("c", "g2", "ЛР1") is None
+
     def test_to_dict_counts_statuses(self):
         job = BulkJob(job_id="j", course_id="c", group_id="g", lab_id="ЛР1", mode="by_sheet")
         job.results = [
@@ -531,6 +539,55 @@ class TestBulkJobStore:
         payload = job.to_dict()
         assert payload["counts"] == {"updated": 2, "error": 1}
         assert len(payload["results"]) == 3
+
+
+class TestStalledJobIsNotLockedForever:
+    """
+    A run whose worker is gone (a client disconnect used to lose the task, a
+    call can wedge) must not keep the lab locked: that is what left a teacher
+    unable to start a check for hours, with only HTTP 409 to show for it.
+    """
+
+    def _silent_for(self, job, seconds):
+        """Backdate the job's last sign of life."""
+        stamp = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+        job.last_progress_at = stamp.isoformat()
+
+    def test_a_new_run_takes_over_from_a_stalled_one(self):
+        stalled = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(stalled, STALE_JOB_SECONDS + 60)
+
+        fresh = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+
+        assert fresh is not None and fresh is not stalled
+        assert stalled.status == "failed"
+        assert stalled.error and "прогресс" in stalled.error
+        assert stalled.finished_at
+
+    def test_a_working_run_still_blocks_a_second_one(self):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(job, STALE_JOB_SECONDS - 60)
+
+        assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is None
+        assert job.status == "running"
+
+    def test_polling_reports_a_stalled_run_as_failed(self):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(job, STALE_JOB_SECONDS + 1)
+
+        assert get_bulk_job(job.job_id).status == "failed"
+        # ...and the lab is free again
+        assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is not None
+
+    def test_progress_during_a_run_keeps_it_alive(self, bulk_setup):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(job, STALE_JOB_SECONDS + 60)
+
+        _run(job, bulk_setup)
+
+        # The run finished normally, on its own terms - not killed as stalled.
+        assert job.status == "done"
+        assert job.error is None
 
 
 @pytest.fixture
