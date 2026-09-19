@@ -77,8 +77,10 @@
         "link": "Link"
       },
       "openPr": "Open PR",
+      "appliedWithOtherCommits": "template changes are already there under other commits (PR merged via squash or rebase)",
       "statuses": {
         "pr_created": "PR created",
+        "pr_updated": "PR updated",
         "up_to_date": "already up to date",
         "pr_exists": "PR already open",
         "not_a_fork": "not a template fork",
@@ -101,6 +103,7 @@
       "dryRunBadge": "Dry run",
       "start": "Start grading",
       "cancelRun": "Stop",
+      "cancelRequested": "Stop requested: the run will finish after the current student.",
       "close": "Close",
       "inProgress": "Processed {{processed}} of {{total}}",
       "done": "Grading finished",
@@ -123,12 +126,13 @@
         "conflict": "username conflict",
         "unmatched": "name not matched",
         "ambiguous": "ambiguous name",
-        "no_team": "no team"
+        "no_team": "no team",
+        "no_name": "row without a name, skipped"
       },
       "errors": {
         "groupsFailed": "Failed to load groups",
         "startFailed": "Failed to start grading. Please try again.",
-        "alreadyRunning": "Grading of this lab for this group is already running.",
+        "alreadyRunning": "A check of this lab for this group is already running — its progress is shown.",
         "cancelFailed": "Failed to stop grading"
       }
     },

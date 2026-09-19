@@ -174,6 +174,15 @@ class TestGradeLabCharacterization:
             status=404
         )
 
+        # Репозиторий существует: проверка существования нужна, чтобы
+        # отличить "нет репозитория" от "в репозитории нет файла"
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}",
+            json={"name": repo_name},
+            status=200
+        )
+
         from main import grade_lab, GradeRequest
         from fastapi import HTTPException
 
@@ -206,6 +215,15 @@ class TestGradeLabCharacterization:
             f"https://api.github.com/repos/{org}/{repo_name}/contents/.github/workflows",
             json={"message": "Not Found"},
             status=404
+        )
+
+        # Репозиторий существует: проверка существования нужна, чтобы
+        # отличить "нет репозитория" от "в репозитории нет файла"
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}",
+            json={"name": repo_name},
+            status=200
         )
 
         from main import grade_lab, GradeRequest
@@ -245,6 +263,15 @@ class TestGradeLabCharacterization:
             responses.GET,
             f"https://api.github.com/repos/{org}/{repo_name}/commits",
             json=[],
+            status=200
+        )
+
+        # Репозиторий существует: проверка существования нужна, чтобы
+        # отличить "нет репозитория" от "в репозитории нет файла"
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{org}/{repo_name}",
+            json={"name": repo_name},
             status=200
         )
 

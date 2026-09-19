@@ -550,6 +550,27 @@ class GitHubClient:
             return None
         return resp.json()
 
+    def get_tree(self, owner: str, repo: str, ref: str) -> dict[str, Any] | None:
+        """
+        Read the full file tree of a branch or commit in one request.
+
+        See https://docs.github.com/en/rest/git/trees#get-a-tree
+
+        Args:
+            owner: Organization or user name
+            repo: Repository name
+            ref: Branch name or commit SHA
+
+        Returns:
+            The tree dict (`tree` entries with `path`, `type`, `sha`; `truncated`
+            is true when GitHub cut the listing short), or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/git/trees/{ref}"
+        resp = requests.get(url, headers=self.headers, params={"recursive": 1}, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        return resp.json()
+
     def create_ref(self, owner: str, repo: str, ref: str, sha: str) -> requests.Response:
         """
         Create a git reference pointing at an existing commit.

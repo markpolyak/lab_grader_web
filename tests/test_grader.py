@@ -70,6 +70,74 @@ class TestLabGraderCheckRepository:
         assert "коммит" in result.message.lower()
 
 
+class TestMissingRepositoryIsNotAMissingFile:
+    """
+    Отсутствующий репозиторий через API выглядит так же, как репозиторий без
+    нужного файла: file_exists отвечает False и там, и там. На живом прогоне
+    из-за этого преподаватель получил "Файл control_work.ipynb не найден" про
+    репозиторий r-20, которого не существует.
+    """
+
+    @pytest.fixture
+    def mock_github(self):
+        return MagicMock(spec=GitHubClient)
+
+    @pytest.fixture
+    def grader(self, mock_github):
+        return LabGrader(mock_github)
+
+    def test_missing_repo_is_reported_as_missing_repo(self, grader, mock_github):
+        config = {"github-prefix": "lab1", "files": ["main.cpp"]}
+        mock_github.check_required_files.return_value = ["main.cpp"]
+        mock_github.repo_exists.return_value = False
+
+        result = grader.check_repository("org", "lab1-user", config)
+
+        assert result.error_code == "REPO_NOT_FOUND"
+        assert "org/lab1-user" in result.message
+        assert "main.cpp" not in result.message
+
+    def test_existing_repo_still_reports_the_missing_file(self, grader, mock_github):
+        config = {"github-prefix": "lab1", "files": ["main.cpp"]}
+        mock_github.check_required_files.return_value = ["main.cpp"]
+        mock_github.repo_exists.return_value = True
+
+        result = grader.check_repository("org", "lab1-user", config)
+
+        assert result.error_code == "MISSING_FILES"
+        assert "main.cpp" in result.message
+
+    def test_missing_repo_is_caught_on_the_workflows_check_too(self, grader, mock_github):
+        """Лаба без списка files доходит до проверки workflows."""
+        mock_github.check_required_files.return_value = []
+        mock_github.has_workflows_directory.return_value = False
+        mock_github.repo_exists.return_value = False
+
+        result = grader.check_repository("org", "lab1-user", {"github-prefix": "lab1"})
+
+        assert result.error_code == "REPO_NOT_FOUND"
+
+    def test_missing_repo_is_caught_on_the_commits_check_too(self, grader, mock_github):
+        mock_github.check_required_files.return_value = []
+        mock_github.has_workflows_directory.return_value = True
+        mock_github.get_latest_commit.return_value = None
+        mock_github.repo_exists.return_value = False
+
+        result = grader.check_repository("org", "lab1-user", {"github-prefix": "lab1"})
+
+        assert result.error_code == "REPO_NOT_FOUND"
+
+    def test_healthy_repo_costs_no_extra_request(self, grader, mock_github):
+        """Проверка существования - только на пути ошибки: в норме это
+        лишний запрос к GitHub на каждого студента."""
+        mock_github.check_required_files.return_value = []
+        mock_github.has_workflows_directory.return_value = True
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+
+        assert grader.check_repository("org", "lab1-user", {"github-prefix": "lab1"}) is None
+        mock_github.repo_exists.assert_not_called()
+
+
 class TestLabGraderCheckForbiddenFiles:
     """Tests for LabGrader.check_forbidden_files."""
 

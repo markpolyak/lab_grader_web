@@ -82,14 +82,48 @@ def compare_url(fork_name, base="main"):
     return f"https://api.github.com/repos/{ORG}/{fork_name}/compare/{base}...{TEMPLATE_HEAD_SHA}"
 
 
+# Blob SHAs of lab1.cpp: as the template has it now, and as a fork that
+# hasn't taken the update yet has it.
+TEMPLATE_BLOB_SHA = "t" * 40
+OLD_BLOB_SHA = "o" * 40
+
+
 def compare_body(ahead_by=1, files=("lab1.cpp",)):
-    """Shape of GET /compare/{fork_default}...{template_sha} that propagate reads."""
+    """Shape of GET /compare/{fork_default}...{template_sha} that propagate reads.
+    `files` are names (modified, with the template's blob) or full diff entries."""
     return {
         "status": "behind" if ahead_by else "identical",
         "ahead_by": ahead_by,
         "behind_by": 0,
-        "files": [{"filename": name} for name in files],
+        "files": [
+            f if isinstance(f, dict) else {"filename": f, "status": "modified", "sha": TEMPLATE_BLOB_SHA}
+            for f in files
+        ],
     }
+
+
+def tree_url(fork_name, branch="main"):
+    return f"https://api.github.com/repos/{ORG}/{fork_name}/git/trees/{branch}"
+
+
+def tree_body(blobs=None, truncated=False):
+    """GET /git/trees/{branch}?recursive=1; `blobs` maps path -> blob SHA."""
+    blobs = {"lab1.cpp": OLD_BLOB_SHA} if blobs is None else blobs
+    return {
+        "truncated": truncated,
+        "tree": [{"path": "src", "type": "tree", "sha": "d" * 40}]
+        + [{"path": path, "type": "blob", "sha": sha} for path, sha in blobs.items()],
+    }
+
+
+def add_branch_ref_mock(fork_name, sha):
+    """GET /git/ref/heads/... - where an existing service branch points."""
+    return responses.add(
+        responses.GET,
+        f"https://api.github.com/repos/{ORG}/{fork_name}/git/ref/heads/{TEMPLATE_UPDATE_BRANCH}",
+        json={"object": {"sha": sha}},
+        status=200,
+    )
 
 
 def open_prs_url(fork_name):
@@ -131,14 +165,12 @@ def add_template_and_forks(forks_pages, org_repos=None, branch_mocks=True):
             if not name or name in seen:
                 continue
             seen.add(name)
-            # By default every fork lacks one template commit and has no open
-            # update PR; tests about other states use responses.replace.
-            responses.add(
-                responses.GET,
-                compare_url(name, fork.get("default_branch") or "main"),
-                json=compare_body(),
-                status=200,
-            )
+            # By default every fork lacks one template commit (and its change
+            # to lab1.cpp) and has no open update PR; tests about other states
+            # use responses.replace.
+            branch = fork.get("default_branch") or "main"
+            responses.add(responses.GET, compare_url(name, branch), json=compare_body(), status=200)
+            responses.add(responses.GET, tree_url(name, branch), json=tree_body(), status=200)
             responses.add(responses.GET, open_prs_url(name), json=[], status=200)
             if branch_mocks:
                 add_branch_creation_mock(name)
@@ -551,6 +583,7 @@ class TestCreatePullRequestResponseTable:
             status=422,
             json_body={"message": "Reference already exists"},
         )
+        add_branch_ref_mock("os-task1-student1", "b" * 40)
         update_call = add_branch_update_mock("os-task1-student1")
         responses.add(
             responses.POST,
@@ -688,6 +721,187 @@ class TestRunComparesBeforeWriting:
 
         assert [r.repo for r in job.results] == ["os-task1-alice", "os-task1-Bob", "os-task1-zoe"]
         assert all(r.commits_behind == 1 for r in job.results)
+
+
+class TestRerunOnExistingPullRequest:
+    """A second rollout into a fork whose previous update PR is still open."""
+
+    def _add_existing_pr(self, fork_name):
+        add_branch_creation_mock(fork_name, status=422, json_body={"message": "Reference already exists"})
+        responses.add(
+            responses.POST,
+            f"https://api.github.com/repos/{ORG}/{fork_name}/pulls",
+            json={
+                "message": "Validation Failed",
+                "errors": [{"message": f"A pull request already exists for {ORG}:{TEMPLATE_UPDATE_BRANCH}."}],
+            },
+            status=422,
+        )
+        responses.replace(responses.GET, open_prs_url(fork_name), json=[{"html_url": "pr-url"}])
+
+    @responses.activate
+    def test_branch_moved_to_a_newer_template_commit_is_pr_updated(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        self._add_existing_pr("os-task1-student1")
+        add_branch_ref_mock("os-task1-student1", "b" * 40)
+        update_call = add_branch_update_mock("os-task1-student1")
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "pr_updated"
+        assert result.pr_url == "pr-url"
+        assert update_call.call_count == 1
+
+    @responses.activate
+    def test_branch_already_on_the_template_commit_is_left_alone(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        self._add_existing_pr("os-task1-student1")
+        add_branch_ref_mock("os-task1-student1", TEMPLATE_HEAD_SHA)
+        update_call = add_branch_update_mock("os-task1-student1")
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "pr_exists"
+        assert update_call.call_count == 0
+
+    @responses.activate
+    def test_unreadable_old_position_is_reported_as_pr_exists(self):
+        """The branch is still moved, but "updated" can't be claimed."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        self._add_existing_pr("os-task1-student1")
+        responses.add(
+            responses.GET,
+            f"https://api.github.com/repos/{ORG}/os-task1-student1/git/ref/heads/{TEMPLATE_UPDATE_BRANCH}",
+            json={"message": "Server Error"},
+            status=500,
+        )
+        update_call = add_branch_update_mock("os-task1-student1")
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        [result] = job.results
+        assert result.status == "pr_exists"
+        assert update_call.call_count == 1
+
+
+class TestChangesAlreadyAppliedWithOtherCommits:
+    """Squash/rebase merge of an earlier update PR: the template commits are
+    missing from the fork, but their changes are already in its files."""
+
+    @responses.activate
+    def test_matching_files_are_up_to_date_in_preview(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.replace(
+            responses.GET, tree_url("os-task1-student1"), json=tree_body({"lab1.cpp": TEMPLATE_BLOB_SHA})
+        )
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        [row] = summary["results"]
+        assert row["status"] == "up_to_date"
+        assert row["commits_behind"] == 1  # commits are missing, content is not
+        assert summary["total"] == 0
+
+    @responses.activate
+    def test_matching_files_get_no_branch_and_no_pr_in_a_run(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks], branch_mocks=False)
+        responses.replace(
+            responses.GET, tree_url("os-task1-student1"), json=tree_body({"lab1.cpp": TEMPLATE_BLOB_SHA})
+        )
+        branch_call = add_branch_creation_mock("os-task1-student1")
+
+        job = make_job()
+        run_propagation(job, make_client(), ORG, GITHUB_PREFIX, TEMPLATE_REPO)
+
+        assert [r.status for r in job.results] == ["up_to_date"]
+        assert branch_call.call_count == 0
+
+    @responses.activate
+    def test_different_content_still_needs_update(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert [r["status"] for r in summary["results"]] == ["needs_update"]
+
+    @responses.activate
+    def test_removed_and_renamed_files_are_checked(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        files = [
+            {"filename": "old.txt", "status": "removed", "sha": None},
+            {"filename": "new.cpp", "status": "renamed", "previous_filename": "was.cpp", "sha": TEMPLATE_BLOB_SHA},
+        ]
+        responses.replace(responses.GET, compare_url("os-task1-student1"), json=compare_body(files=files))
+        responses.replace(
+            responses.GET, tree_url("os-task1-student1"), json=tree_body({"new.cpp": TEMPLATE_BLOB_SHA})
+        )
+        applied = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        # The removed file is still there: not applied.
+        responses.replace(
+            responses.GET,
+            tree_url("os-task1-student1"),
+            json=tree_body({"new.cpp": TEMPLATE_BLOB_SHA, "old.txt": OLD_BLOB_SHA}),
+        )
+        not_applied = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert applied["results"][0]["status"] == "up_to_date"
+        assert not_applied["results"][0]["status"] == "needs_update"
+
+    @responses.activate
+    def test_truncated_tree_is_not_trusted(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.replace(
+            responses.GET,
+            tree_url("os-task1-student1"),
+            json=tree_body({"lab1.cpp": TEMPLATE_BLOB_SHA}, truncated=True),
+        )
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert summary["results"][0]["status"] == "needs_update"
+
+    @responses.activate
+    def test_diff_over_the_file_limit_is_not_checked(self):
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        names = [f"f{i}.txt" for i in range(300)]
+        responses.replace(responses.GET, compare_url("os-task1-student1"), json=compare_body(files=names))
+        tree_call = responses.replace(
+            responses.GET,
+            tree_url("os-task1-student1"),
+            json=tree_body({name: TEMPLATE_BLOB_SHA for name in names}),
+        )
+
+        summary = dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert summary["results"][0]["status"] == "needs_update"
+        assert tree_call.call_count == 0
+
+    @responses.activate
+    def test_up_to_date_fork_does_not_read_the_tree(self):
+        """No missing commits - the content check isn't needed at all."""
+        forks = [{"name": "os-task1-student1", "owner": {"login": ORG}, "default_branch": "main"}]
+        add_template_and_forks([forks])
+        responses.replace(responses.GET, compare_url("os-task1-student1"), json=compare_body(ahead_by=0))
+        tree_call = responses.replace(responses.GET, tree_url("os-task1-student1"), json=tree_body())
+
+        dry_run_propagation(make_client(), ORG, GITHUB_PREFIX, TEMPLATE_OWNER, TEMPLATE_NAME)
+
+        assert tree_call.call_count == 0
 
 
 class TestRepositorySelection:

@@ -5,7 +5,9 @@ Covers repository discovery, student matching by full name, the shared
 grading decision, the background job store and the orchestrator.
 """
 import pytest
-from datetime import datetime, timedelta
+import threading
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 import sys
 import os
@@ -30,7 +32,11 @@ from grading.bulk import (
     taskid_column,
     try_start_bulk_job,
     get_bulk_job,
+    get_running_bulk_job,
     request_bulk_job_cancel,
+    bulk_worker_thread_name,
+    STALE_JOB_SECONDS,
+    WORKER_START_GRACE_SECONDS,
     _jobs,
     _running_keys,
 )
@@ -521,6 +527,12 @@ class TestBulkJobStore:
     def test_request_cancel_unknown_job(self):
         assert request_bulk_job_cancel("nope") is None
 
+    def test_running_job_is_found_by_course_group_and_lab(self):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+
+        assert get_running_bulk_job("c", "g", "ЛР1") is job
+        assert get_running_bulk_job("c", "g2", "ЛР1") is None
+
     def test_to_dict_counts_statuses(self):
         job = BulkJob(job_id="j", course_id="c", group_id="g", lab_id="ЛР1", mode="by_sheet")
         job.results = [
@@ -531,6 +543,91 @@ class TestBulkJobStore:
         payload = job.to_dict()
         assert payload["counts"] == {"updated": 2, "error": 1}
         assert len(payload["results"]) == 3
+
+
+class TestRunsThatNeverFinish:
+    """
+    A run that will never finish must not keep the lab locked: that is what
+    left a teacher unable to start a check, with only HTTP 409 to show for
+    it. Two shapes of it - no worker at all (the endpoint raised after the job
+    was registered, or the thread died on something `except Exception` misses)
+    and a worker wedged in a call that never returns.
+    """
+
+    @contextmanager
+    def _live_worker(self, job):
+        """A thread standing in for the job's worker, so it looks alive."""
+        release = threading.Event()
+        thread = threading.Thread(
+            target=release.wait, name=bulk_worker_thread_name(job.job_id), daemon=True
+        )
+        thread.start()
+        try:
+            yield
+        finally:
+            release.set()
+            thread.join(5)
+
+    def _silent_for(self, job, seconds):
+        """Backdate the job's last sign of life."""
+        job.last_progress_at = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+
+    def test_job_without_a_worker_is_closed_out(self):
+        """Exactly the reported failure: the endpoint registered the job and
+        then raised (a lab key without a number), so nothing ever ran it."""
+        orphan = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(orphan, WORKER_START_GRACE_SECONDS + 1)
+
+        assert get_bulk_job(orphan.job_id).status == "failed"
+        assert orphan.error and "не запустилась" in orphan.error
+        # ...and the lab is free again
+        assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is not None
+
+    def test_a_job_just_registered_is_left_alone(self):
+        """The worker thread is started right after registration; those
+        microseconds must not be read as a dead run."""
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+
+        assert get_bulk_job(job.job_id).status == "running"
+        assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is None
+
+    def test_cancelling_a_workerless_job_closes_it(self):
+        """The reported "Остановить does nothing": there was no worker to see
+        the flag, so the job stayed running forever."""
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(job, WORKER_START_GRACE_SECONDS + 1)
+
+        assert request_bulk_job_cancel(job.job_id).status == "failed"
+
+    def test_silent_worker_is_treated_as_dead(self):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        with self._live_worker(job):
+            self._silent_for(job, STALE_JOB_SECONDS + 60)
+
+            fresh = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+
+        assert fresh is not None and fresh is not job
+        assert job.status == "failed"
+        assert job.error and "прогресс" in job.error
+        assert job.finished_at
+
+    def test_a_working_run_still_blocks_a_second_one(self):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        with self._live_worker(job):
+            self._silent_for(job, STALE_JOB_SECONDS - 60)
+
+            assert try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None) is None
+            assert get_bulk_job(job.job_id).status == "running"
+
+    def test_progress_during_a_run_keeps_it_alive(self, bulk_setup):
+        job = try_start_bulk_job("c", "g", "ЛР1", "by_sheet", False, None)
+        self._silent_for(job, STALE_JOB_SECONDS + 60)
+
+        _run(job, bulk_setup)
+
+        # The run finished on its own terms - not killed as dead.
+        assert job.status == "done"
+        assert job.error is None
 
 
 @pytest.fixture
@@ -579,7 +676,7 @@ def _job(mode="by_sheet", dry_run=False, name_file=None):
     )
 
 
-def _run(job, setup, grader=None, github_client=None):
+def _run(job, setup, grader=None, github_client=None, lab_number=1):
     run_bulk_grading(
         job,
         grader or _passing_grader(),
@@ -588,7 +685,7 @@ def _run(job, setup, grader=None, github_client=None):
         setup["spreadsheet"],
         setup["course_info"],
         setup["lab_config"],
-        1,
+        lab_number,
     )
 
 
@@ -710,6 +807,66 @@ class TestRunBulkGradingBySheet:
         _run(job, bulk_setup, grader=_grader_mock(ci))
 
         assert job.results[0].grade == "v-3"
+
+
+class TestStrayRowsInTheSheet:
+    """
+    `get_all_values()` отдаёт лист до последней непустой строки, поэтому всё,
+    что преподаватель держит под таблицей группы (итог, заметка, случайное
+    число), попадает в тот же столбец. На живом прогоне такая строка стала
+    "студентом 20", а при успехе в неё записалась бы оценка.
+    """
+
+    def test_row_with_a_login_but_no_name_is_not_graded(self, bulk_setup):
+        bulk_setup["grid"].append(["", "", "20", ""])  # строка-мусор под группой
+        grader = _passing_grader()
+        job = _job()
+
+        _run(job, bulk_setup, grader=grader)
+
+        graded = [call.args[1] for call in grader.check_repository.call_args_list]
+        assert "os-task1-20" not in graded
+        stray = [r for r in job.results if r.status == "no_name"]
+        assert [r.github for r in stray] == ["20"]
+        assert "нет ФИО" in stray[0].message
+
+    def test_nothing_is_written_into_a_stray_row(self, bulk_setup):
+        bulk_setup["grid"].append(["", "", "20", ""])
+        job = _job()
+
+        _run(job, bulk_setup)
+
+        written_rows = [cell[0] for cell in _written_cells(bulk_setup["worksheet"])]
+        assert all(not cell.endswith("6") for cell in written_rows), written_rows
+
+    def test_normal_rows_are_unaffected(self, bulk_setup):
+        job = _job()
+
+        _run(job, bulk_setup)
+
+        assert [r.github for r in job.results] == ["alice", "bob"]
+        assert all(r.status == "updated" for r in job.results)
+
+
+class TestLabWithoutANumberInItsKey:
+    """A lab keyed "quiz" has no number; it is only needed as a fallback for
+    placing the grade column."""
+
+    def test_short_name_places_the_column_without_a_number(self, bulk_setup):
+        job = _job()
+        _run(job, bulk_setup, lab_number=None)
+
+        assert job.status == "done"
+        assert [r.status for r in job.results] == ["updated", "updated"]
+
+    def test_without_short_name_the_run_fails_with_a_clear_message(self, bulk_setup):
+        bulk_setup["lab_config"] = {"github-prefix": "r"}  # no short-name
+        job = _job()
+
+        _run(job, bulk_setup, lab_number=None)
+
+        assert job.status == "failed"
+        assert "short-name" in job.error
 
 
 class TestRunBulkGradingByFile:

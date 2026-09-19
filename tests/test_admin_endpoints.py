@@ -18,7 +18,6 @@ import pytest
 import responses
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from starlette.background import BackgroundTasks
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -201,9 +200,82 @@ def mock_get_course_by_id(propagate_course_config):
         yield mock
 
 
-def run_background_tasks(bg: BackgroundTasks):
-    for task in bg.tasks:
-        task.func(*task.args, **task.kwargs)
+# Grabbed before the autouse fixture below replaces the module attribute, so
+# TestBackgroundJobStart can exercise the real thing.
+START_BACKGROUND_JOB = main_module._start_background_job
+
+
+@pytest.fixture(autouse=True)
+def captured_jobs():
+    """
+    Catch the background jobs the endpoints start.
+
+    The endpoints hand long runs to main._start_background_job (a daemon
+    thread, so a disconnected client can't lose the run). Here it only
+    records them, and a test that wants the work done calls run_captured -
+    same as draining FastAPI background tasks used to be, but without a real
+    thread racing the test's mocks.
+    """
+    calls = []
+    with patch("main._start_background_job", side_effect=lambda func, *args, name=None: calls.append((func, args))):
+        yield calls
+
+
+def run_captured(calls):
+    for func, args in calls:
+        func(*args)
+
+
+class TestBackgroundJobStart:
+    """
+    Long runs must not depend on the response being delivered: with FastAPI's
+    BackgroundTasks, a client that disconnected (closed tab, proxy dropping
+    the connection) left the job registered as running while nothing ran it,
+    and the group/lab stayed locked until the backend was restarted.
+    """
+
+    def test_runs_the_function_in_a_daemon_thread(self):
+        import threading
+
+        seen = {}
+        finished = threading.Event()
+
+        def work(value):
+            seen["value"] = value
+            seen["daemon"] = threading.current_thread().daemon
+            finished.set()
+
+        START_BACKGROUND_JOB(work, 42, name="test-job")
+
+        assert finished.wait(5)
+        assert seen == {"value": 42, "daemon": True}
+
+
+class TestOptionalLabNumber:
+    """A lab key doesn't have to be a number, and the number is only needed to
+    place the grade column for a lab without short-name."""
+
+    def test_number_is_taken_from_the_key(self):
+        assert main_module.optional_lab_number("ЛР1") == 1
+        assert main_module.optional_lab_number("3") == 3
+
+    def test_key_without_digits_gives_none_instead_of_refusing(self):
+        assert main_module.optional_lab_number("quiz") is None
+        # ...unlike parse_lab_id, which is still used where a number is required
+        with pytest.raises(HTTPException):
+            main_module.parse_lab_id("quiz")
+
+
+class TestSheetsClient:
+    def test_sets_a_request_timeout(self):
+        """gspread waits forever by default, and one hung socket stops a whole
+        bulk run (the GitHub side of this was PR #42)."""
+        client = MagicMock()
+        with patch("main.ServiceAccountCredentials.from_json_keyfile_name"), \
+             patch("main.gspread.authorize", return_value=client):
+            assert main_module.sheets_client() is client
+
+        client.set_timeout.assert_called_once_with(main_module.SHEETS_TIMEOUT_SECONDS)
 
 
 class TestPropagateTemplateUpdateEndpointNoBody:
@@ -263,7 +335,7 @@ class TestPropagateTemplateUpdateEndpoint:
         with patch("main.get_course_by_id", return_value=sample_course_config):
             with pytest.raises(HTTPException) as exc_info:
                 main_module.propagate_template_update(
-                    mock_request, "test-course", "1", BackgroundTasks(),
+                    mock_request, "test-course", "1",
                     body=main_module.PropagateRequest(dry_run=True), admin="admin",
                 )
         assert exc_info.value.status_code == 400
@@ -273,7 +345,7 @@ class TestPropagateTemplateUpdateEndpoint:
         with patch("main.get_course_by_id", return_value=sample_course_config):
             with pytest.raises(HTTPException) as exc_info:
                 main_module.propagate_template_update(
-                    mock_request, "test-course", "1", BackgroundTasks(),
+                    mock_request, "test-course", "1",
                     body=main_module.PropagateRequest(dry_run=True), admin="admin",
                 )
         assert exc_info.value.status_code == 400
@@ -316,7 +388,7 @@ class TestPropagateTemplateUpdateEndpoint:
         )
 
         result = main_module.propagate_template_update(
-            mock_request, "test-course", "1", BackgroundTasks(),
+            mock_request, "test-course", "1",
             body=main_module.PropagateRequest(dry_run=True), admin="admin",
         )
 
@@ -325,7 +397,7 @@ class TestPropagateTemplateUpdateEndpoint:
 
     @responses.activate
     @patch("grading.propagate.time.sleep")
-    def test_dry_run_false_returns_202_and_runs_job(self, _sleep, mock_request, mock_get_course_by_id):
+    def test_dry_run_false_returns_202_and_runs_job(self, _sleep, mock_request, mock_get_course_by_id, captured_jobs):
         responses.add(
             responses.GET, "https://api.github.com/repos/test-org/os-task1-template",
             json={"default_branch": "main"}, status=200,
@@ -361,16 +433,15 @@ class TestPropagateTemplateUpdateEndpoint:
             json={"html_url": "https://github.com/test-org/test-task1-student1/pull/1"}, status=201,
         )
 
-        bg = BackgroundTasks()
         response = main_module.propagate_template_update(
-            mock_request, "test-course", "1", bg,
+            mock_request, "test-course", "1",
             body=main_module.PropagateRequest(dry_run=False), admin="admin",
         )
         assert response.status_code == 202
         import json
         job_id = json.loads(response.body)["job_id"]
 
-        run_background_tasks(bg)
+        run_captured(captured_jobs)
 
         job = main_module.get_propagate_job(job_id)
         assert job.status == "done"
@@ -382,7 +453,7 @@ class TestPropagateTemplateUpdateEndpoint:
 
         with pytest.raises(HTTPException) as exc_info:
             main_module.propagate_template_update(
-                mock_request, "test-course", "1", BackgroundTasks(),
+                mock_request, "test-course", "1",
                 body=main_module.PropagateRequest(dry_run=False), admin="admin",
             )
         assert exc_info.value.status_code == 409
@@ -420,7 +491,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=sample_course_config):
             with pytest.raises(HTTPException) as exc_info:
                 main_module.start_bulk_grade(
-                    mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                    mock_request, "test-course", "P3300", "ЛР1",
                     body=main_module.BulkGradeRequest(), admin="admin",
                 )
         assert exc_info.value.status_code == 400
@@ -429,18 +500,17 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             with pytest.raises(HTTPException) as exc_info:
                 main_module.start_bulk_grade(
-                    mock_request, "test-course", "P3300", "ЛР42", BackgroundTasks(),
+                    mock_request, "test-course", "P3300", "ЛР42",
                     body=main_module.BulkGradeRequest(), admin="admin",
                 )
         assert exc_info.value.status_code == 400
 
-    def test_returns_202_and_runs_the_job(self, mock_request, bulk_course_config, mock_worksheet):
+    def test_returns_202_and_runs_the_job(self, mock_request, bulk_course_config, mock_worksheet, captured_jobs):
         import json
 
         with patch("main.get_course_by_id", return_value=bulk_course_config):
-            bg = BackgroundTasks()
             response = main_module.start_bulk_grade(
-                mock_request, "test-course", "P3300", "ЛР1", bg,
+                mock_request, "test-course", "P3300", "ЛР1",
                 body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
             )
             assert response.status_code == 202
@@ -460,7 +530,7 @@ class TestBulkGradeEndpoint:
                     ),
                     ci_passed=True,
                 )
-                run_background_tasks(bg)
+                run_captured(captured_jobs)
 
         assert job.status == "done"
         assert [r.github for r in job.results] == ["student1"]
@@ -472,7 +542,7 @@ class TestBulkGradeEndpoint:
 
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
-                mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                mock_request, "test-course", "P3300", "ЛР1",
                 body=main_module.BulkGradeRequest(name_file="info.md"), admin="admin",
             )
 
@@ -487,7 +557,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             with pytest.raises(HTTPException) as exc_info:
                 main_module.start_bulk_grade(
-                    mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                    mock_request, "test-course", "P3300", "ЛР1",
                     body=main_module.BulkGradeRequest(name_file="info.md"), admin="admin",
                 )
 
@@ -500,7 +570,7 @@ class TestBulkGradeEndpoint:
         bulk_course_config["labs"]["1"]["team"] = {"size-max": 4}
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
-                mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                mock_request, "test-course", "P3300", "ЛР1",
                 body=main_module.BulkGradeRequest(), admin="admin",
             )
 
@@ -512,7 +582,7 @@ class TestBulkGradeEndpoint:
 
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
-                mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                mock_request, "test-course", "P3300", "ЛР1",
                 body=main_module.BulkGradeRequest(name_file="   "), admin="admin",
             )
 
@@ -520,17 +590,80 @@ class TestBulkGradeEndpoint:
         assert job.mode == "by_sheet"
         assert job.name_file is None
 
-    def test_second_run_for_same_group_and_lab_is_409(self, mock_request, bulk_course_config, mock_worksheet):
-        from grading.bulk import try_start_bulk_job
-        try_start_bulk_job("test-course", "P3300", "ЛР1", "by_sheet", False, None)
+    def test_lab_whose_key_is_not_a_number_still_starts(
+        self, mock_request, bulk_course_config, mock_worksheet, captured_jobs
+    ):
+        """The reported failure: a test lab keyed "quiz" answered 400
+        "Некорректный lab_id" - after the job had been registered, so nothing
+        ran it and the group stayed locked behind HTTP 409."""
+        import json
+
+        bulk_course_config["labs"]["quiz"] = {"github-prefix": "r", "short-name": "КР"}
 
         with patch("main.get_course_by_id", return_value=bulk_course_config):
-            with pytest.raises(HTTPException) as exc_info:
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "quiz",
+                body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
+            )
+
+        assert response.status_code == 202
+        job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
+        assert job.status == "running"
+        # The lab number is passed as None, not refused
+        [(func, args)] = captured_jobs
+        assert func is main_module.run_bulk_grading
+        assert args[-1] is None
+
+    def test_a_job_that_cannot_be_started_releases_the_lab(
+        self, mock_request, bulk_course_config, mock_worksheet
+    ):
+        """Registration takes the group and lab; if the start then fails, they
+        have to be given back right away instead of answering 409 afterwards."""
+        with patch("main.get_course_by_id", return_value=bulk_course_config), \
+             patch("main._start_background_job", side_effect=RuntimeError("boom")):
+            with pytest.raises(RuntimeError):
                 main_module.start_bulk_grade(
-                    mock_request, "test-course", "P3300", "ЛР1", BackgroundTasks(),
+                    mock_request, "test-course", "P3300", "ЛР1",
                     body=main_module.BulkGradeRequest(), admin="admin",
                 )
-        assert exc_info.value.status_code == 409
+
+        assert main_module.get_running_bulk_job("test-course", "P3300", "ЛР1") is None
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            retry = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "ЛР1",
+                body=main_module.BulkGradeRequest(), admin="admin",
+            )
+        assert retry.status_code == 202
+
+    def test_run_is_handed_to_a_background_thread(
+        self, mock_request, bulk_course_config, mock_worksheet, captured_jobs
+    ):
+        """Not to FastAPI's BackgroundTasks - see TestBackgroundJobStart."""
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "ЛР1",
+                body=main_module.BulkGradeRequest(), admin="admin",
+            )
+
+        assert [func for func, _args in captured_jobs] == [main_module.run_bulk_grading]
+
+    def test_second_run_for_same_group_and_lab_is_409_with_the_running_job_id(
+        self, mock_request, bulk_course_config, mock_worksheet
+    ):
+        """The 409 carries the run in progress, so the admin page can attach to
+        it instead of leaving the teacher with an error and no way to look."""
+        import json
+        from grading.bulk import try_start_bulk_job
+        running = try_start_bulk_job("test-course", "P3300", "ЛР1", "by_sheet", False, None)
+
+        with patch("main.get_course_by_id", return_value=bulk_course_config):
+            response = main_module.start_bulk_grade(
+                mock_request, "test-course", "P3300", "ЛР1",
+                body=main_module.BulkGradeRequest(), admin="admin",
+            )
+
+        assert response.status_code == 409
+        assert json.loads(response.body)["job_id"] == running.job_id
 
     def test_other_group_may_start_while_one_runs(self, mock_request, bulk_course_config, mock_worksheet):
         from grading.bulk import try_start_bulk_job
@@ -538,7 +671,7 @@ class TestBulkGradeEndpoint:
 
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
-                mock_request, "test-course", "P3301", "ЛР1", BackgroundTasks(),
+                mock_request, "test-course", "P3301", "ЛР1",
                 body=main_module.BulkGradeRequest(), admin="admin",
             )
         assert response.status_code == 202
@@ -816,7 +949,7 @@ class TestBulkGradeIgnoresJoinWindow:
 
         with patch("main.get_course_by_id", return_value=course):
             response = main_module.start_bulk_grade(
-                mock_request, "test-course", "P3300", "7", BackgroundTasks(),
+                mock_request, "test-course", "P3300", "7",
                 body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
             )
 
