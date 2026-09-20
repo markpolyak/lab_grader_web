@@ -136,7 +136,8 @@ course:
               patterns:
                 - 'Итоговая.*?оценка.*?:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "Итоговая оценка: 10.0"
             ci:
-                - workflows
+                workflows:
+                    - grade   # джоба из autograding.yml; personalize пропускается по условию и оценку не определяет
             files:
                 - control_work.ipynb
             moss:
