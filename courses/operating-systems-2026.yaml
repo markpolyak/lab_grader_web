@@ -157,7 +157,7 @@ course:
                 workflows:
                     - run-autograding-tests
                     - build (MINGW64, MinGW Makefiles)
-                    - build (MSVC, Visual Studio 17 2022)
+                    - build (MSVC, Visual Studio *)   # версия меняется вместе с образом windows-раннера
             files:
                 - lab3.cpp
             moss:

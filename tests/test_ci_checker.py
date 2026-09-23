@@ -17,6 +17,7 @@ from grading.ci_checker import (
     filter_relevant_jobs,
     evaluate_ci_results,
     get_ci_config_jobs,
+    job_matches,
     format_ci_result_string,
     DEFAULT_JOB_NAMES,
 )
@@ -355,6 +356,70 @@ class TestConfiguredJobs:
         assert result.passed is False
         assert result.missing_jobs == ["cpplint"]
         assert result.has_pending is False
+
+
+class TestJobNamePatterns:
+    """Tests for glob patterns in ci.workflows job names."""
+
+    def test_literal_name_matches_exactly(self):
+        assert job_matches("grade", "grade") is True
+        assert job_matches("grade", "grade (3.11)") is False
+
+    def test_pattern_matches_runner_image_versions(self):
+        """The same job under two windows-runner images."""
+        pattern = "build (MSVC, Visual Studio *)"
+        assert job_matches(pattern, "build (MSVC, Visual Studio 17 2022)") is True
+        assert job_matches(pattern, "build (MSVC, Visual Studio 18 2026)") is True
+        assert job_matches(pattern, "build (MINGW64, MinGW Makefiles)") is False
+
+    def test_pattern_filters_check_runs(self):
+        runs = [
+            CheckRun("build (MSVC, Visual Studio 18 2026)", "success", "url1"),
+            CheckRun("build (MINGW64, MinGW Makefiles)", "success", "url2"),
+        ]
+        relevant = filter_relevant_jobs(runs, ["build (MSVC, Visual Studio *)"])
+        assert [run.name for run in relevant] == ["build (MSVC, Visual Studio 18 2026)"]
+
+    def test_pattern_still_has_to_match_something(self):
+        """A pattern matching nothing is a missing required job, as before."""
+        runs = [CheckRun("run-autograding-tests", "success", "url1")]
+        result = evaluate_ci_results(runs, ["run-autograding-tests", "build (MSVC, *)"], runs)
+        assert result.passed is False
+        assert result.missing_jobs == ["build (MSVC, *)"]
+
+    def test_every_run_matching_a_pattern_must_succeed(self):
+        """Two matrix jobs under one pattern: both are required."""
+        runs = [
+            CheckRun("build (MSVC, Visual Studio 18 2026)", "success", "url1"),
+            CheckRun("build (MSVC, Visual Studio 17 2022)", "failure", "url2"),
+        ]
+        result = evaluate_ci_results(runs, ["build (MSVC, *)"], runs)
+        assert result.passed is False
+        assert result.passed_count == 1
+        assert result.total_count == 2
+
+    def test_skipped_run_matching_a_pattern_is_required_too(self):
+        """A pattern names the job as surely as a literal does."""
+        runs = [CheckRun("build (MSVC, Visual Studio 18 2026)", "skipped", "url1")]
+        result = evaluate_ci_results(runs, ["build (MSVC, *)"], runs)
+        assert result.passed is False
+        assert result.ignored == []
+        assert result.total_count == 1
+
+    def test_os_lab3_config_covers_both_generations(self):
+        """The real ОС-2026 ЛР3 set, old and new runner images alike."""
+        jobs = ["run-autograding-tests", "build (MINGW64, MinGW Makefiles)",
+                "build (MSVC, Visual Studio *)"]
+        for msvc in ("build (MSVC, Visual Studio 17 2022)",
+                     "build (MSVC, Visual Studio 18 2026)"):
+            runs = [
+                CheckRun("run-autograding-tests", "success", "url1"),
+                CheckRun("build (MINGW64, MinGW Makefiles)", "success", "url2"),
+                CheckRun(msvc, "success", "url3"),
+            ]
+            result = evaluate_ci_results(filter_relevant_jobs(runs, jobs), jobs, runs)
+            assert result.passed is True, msvc
+            assert result.total_count == 3
 
 
 class TestControlWorkRegression:

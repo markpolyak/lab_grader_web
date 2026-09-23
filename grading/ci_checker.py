@@ -6,6 +6,7 @@ check runs to determine if a lab submission passes all required tests.
 """
 import logging
 from dataclasses import dataclass, field
+from fnmatch import fnmatchcase
 from datetime import datetime
 from typing import Any
 
@@ -96,6 +97,30 @@ def parse_check_runs(check_runs_data: list[dict[str, Any]]) -> list[CheckRun]:
     return result
 
 
+def is_job_pattern(configured_name: str) -> bool:
+    """True if a configured job name is a glob pattern rather than a literal.
+
+    Job names carry the runner image's version with them: the same job is
+    "build (MSVC, Visual Studio 17 2022)" on one image and "build (MSVC,
+    Visual Studio 18 2026)" on the next, and both appear in a group at once.
+    A literal name cannot cover that, and listing every generation would demand
+    all of them from every repository.
+    """
+    return any(ch in configured_name for ch in "*?[")
+
+
+def job_matches(configured_name: str, run_name: str) -> bool:
+    """Match a check run's name against one entry of the lab config."""
+    if is_job_pattern(configured_name):
+        return fnmatchcase(run_name, configured_name)
+    return run_name == configured_name
+
+
+def is_job_required(configured_jobs: list[str] | None, run_name: str) -> bool:
+    """True if the lab config demands a success from this check run."""
+    return any(job_matches(name, run_name) for name in configured_jobs or [])
+
+
 def filter_relevant_jobs(
     check_runs: list[CheckRun],
     configured_jobs: list[str] | None
@@ -120,8 +145,11 @@ def filter_relevant_jobs(
         [CheckRun(name='test', ...)]
     """
     if configured_jobs is not None:
-        # Filter by explicitly configured jobs
-        return [run for run in check_runs if run.name in configured_jobs]
+        # Filter by explicitly configured jobs (a name may be a glob pattern)
+        return [
+            run for run in check_runs
+            if any(job_matches(name, run.name) for name in configured_jobs)
+        ]
 
     # Try to find default jobs
     default_matches = [run for run in check_runs if run.name in DEFAULT_JOB_NAMES]
@@ -167,7 +195,9 @@ def evaluate_ci_results(
       error rather than as "x", because which of the two it is cannot be told
       from here; either way the student is not passed. While CI is still
       starting up, or on a commit with no check runs at all, the job may yet
-      appear, so that is pending instead.
+      appear, so that is pending instead. A configured name may be a glob
+      pattern ("build (MSVC, Visual Studio *)"), which must still match at
+      least one check run, and every run it matches must succeed.
 
     Args:
         check_runs: List of check runs to evaluate (already filtered)
@@ -191,7 +221,6 @@ def evaluate_ci_results(
         >>> result.passed_count
         2
     """
-    required = set(configured_jobs or [])
     every_run = check_runs if all_check_runs is None else all_check_runs
     ci_in_progress = any(run.conclusion is None for run in every_run)
 
@@ -216,7 +245,7 @@ def evaluate_ci_results(
             pending_jobs.append(run.name)
             summary.append(f"⏳ {run.name} — {run.html_url}")
         elif run.conclusion in NOT_APPLICABLE_CONCLUSIONS:
-            if run.name in required:
+            if is_job_required(configured_jobs, run.name):
                 counted_count += 1
                 summary.append(
                     f"❌ {run.name} ({run.conclusion}) — джоба требуется по настройкам курса, "
@@ -232,7 +261,10 @@ def evaluate_ci_results(
             summary.append(f"❌ {label} — {run.html_url}")
 
     reported_names = {run.name for run in check_runs}
-    missing_jobs = [name for name in configured_jobs or [] if name not in reported_names]
+    missing_jobs = [
+        name for name in configured_jobs or []
+        if not any(job_matches(name, reported) for reported in reported_names)
+    ]
 
     if missing_jobs and (ci_in_progress or not every_run):
         # CI has not finished creating its jobs: they may still appear.
