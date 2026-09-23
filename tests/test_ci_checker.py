@@ -190,6 +190,201 @@ class TestEvaluateCIResults:
         assert result.latest_success_time == datetime(2024, 1, 15, 11, 0, tzinfo=timezone.utc)
 
 
+class TestConclusionClasses:
+    """Tests for how each GitHub conclusion is classified."""
+
+    def test_skipped_job_is_not_counted(self):
+        """A skipped job nobody configured drops out of the ratio entirely."""
+        runs = [
+            CheckRun("grade", "success", "url1"),
+            CheckRun("personalize", "skipped", "url2"),
+        ]
+        result = evaluate_ci_results(runs)
+        assert result.passed is True
+        assert result.has_pending is False
+        assert result.passed_count == 1
+        assert result.total_count == 1
+        assert result.ignored == ["personalize"]
+        assert "⏭️" in result.summary[1]
+
+    def test_neutral_job_is_not_counted(self):
+        """A neutral job declines to judge, so it is not counted either."""
+        runs = [
+            CheckRun("grade", "success", "url1"),
+            CheckRun("style-hint", "neutral", "url2"),
+        ]
+        result = evaluate_ci_results(runs)
+        assert result.passed is True
+        assert result.total_count == 1
+        assert result.ignored == ["style-hint"]
+
+    def test_all_checks_skipped_is_not_a_pass(self):
+        """Nothing judged the work: pending, never a checkmark."""
+        runs = [
+            CheckRun("personalize", "skipped", "url1"),
+            CheckRun("notify", "skipped", "url2"),
+        ]
+        result = evaluate_ci_results(runs)
+        assert result.passed is False
+        assert result.has_pending is True
+        assert result.total_count == 0
+        assert result.ignored == ["personalize", "notify"]
+
+    @pytest.mark.parametrize(
+        "conclusion", ["failure", "timed_out", "cancelled", "stale", "action_required"]
+    )
+    def test_unsuccessful_conclusions_fail_instead_of_hanging(self, conclusion):
+        """A finished run without success is a failure, not an endless wait."""
+        runs = [
+            CheckRun("grade", "success", "url1"),
+            CheckRun("lint", conclusion, "url2"),
+        ]
+        result = evaluate_ci_results(runs)
+        assert result.passed is False
+        assert result.has_pending is False
+        assert result.passed_count == 1
+        assert result.total_count == 2
+        assert "❌" in result.summary[1]
+
+    def test_unknown_conclusion_fails_rather_than_pending(self):
+        """A conclusion GitHub adds later must not freeze the grade."""
+        runs = [CheckRun("grade", "brand_new_conclusion", "url1")]
+        result = evaluate_ci_results(runs)
+        assert result.passed is False
+        assert result.has_pending is False
+        assert result.total_count == 1
+
+    def test_only_none_conclusion_is_pending(self):
+        """Pending means exactly one thing: the run has not finished."""
+        runs = [
+            CheckRun("grade", "success", "url1"),
+            CheckRun("lint", None, "url2"),
+        ]
+        result = evaluate_ci_results(runs)
+        assert result.has_pending is True
+        assert result.pending_jobs == ["lint"]
+
+
+class TestConfiguredJobs:
+    """Tests for evaluate_ci_results with jobs named in the lab config."""
+
+    def test_all_configured_jobs_must_succeed(self):
+        """Logical AND: one red job is enough to withhold the checkmark."""
+        runs = [
+            CheckRun("grade", "success", "url1"),
+            CheckRun("cpplint", "failure", "url2"),
+        ]
+        result = evaluate_ci_results(runs, ["grade", "cpplint"])
+        assert result.passed is False
+        assert result.passed_count == 1
+        assert result.total_count == 2
+
+    def test_all_configured_jobs_green_passes(self):
+        runs = [
+            CheckRun("grade", "success", "url1"),
+            CheckRun("cpplint", "success", "url2"),
+        ]
+        result = evaluate_ci_results(runs, ["grade", "cpplint"])
+        assert result.passed is True
+        assert result.passed_count == 2
+        assert result.total_count == 2
+
+    def test_configured_job_skipped_is_a_failure(self):
+        """The config demands a success from this job; skipped is not one."""
+        runs = [
+            CheckRun("grade", "success", "url1"),
+            CheckRun("cpplint", "skipped", "url2"),
+        ]
+        result = evaluate_ci_results(runs, ["grade", "cpplint"])
+        assert result.passed is False
+        assert result.total_count == 2
+        assert result.ignored == []
+        assert "❌" in result.summary[1]
+
+    def test_one_missing_name_does_not_withhold_the_grade(self):
+        """itmo-ml-2026 lists two template generations; repos produce one.
+
+        The config names run-autograding-tests and "Test python scripts", and
+        every repository of that course reports only the latter. A name that
+        matches nothing is reported, not held against the student.
+        """
+        runs = [CheckRun("Test python scripts", "success", "url1")]
+        result = evaluate_ci_results(runs, ["run-autograding-tests", "Test python scripts"])
+        assert result.passed is True
+        assert result.passed_count == 1
+        assert result.total_count == 1
+        assert result.missing_jobs == ["run-autograding-tests"]
+        assert result.config_mismatch is False
+        assert "не учитывается" in result.summary[1]
+
+    def test_no_configured_name_matches_is_a_config_error(self):
+        """Every name in the config is stale: that is not a grade at all."""
+        runs = [CheckRun("unrelated", "success", "url1")]
+        result = evaluate_ci_results([], ["grade", "cpplint"], runs)
+        assert result.passed is False
+        assert result.config_mismatch is True
+        assert result.missing_jobs == ["grade", "cpplint"]
+        assert result.has_pending is False
+
+    def test_no_configured_name_matches_but_ci_is_starting(self):
+        """Right after a push the jobs may simply not exist yet."""
+        runs = [CheckRun("unrelated", None, "url1")]
+        result = evaluate_ci_results([], ["grade", "cpplint"], runs)
+        assert result.passed is False
+        assert result.config_mismatch is False
+        assert result.has_pending is True
+        assert result.pending_jobs == ["grade", "cpplint"]
+
+    def test_commit_without_check_runs_is_not_a_config_error(self):
+        """CI never started: waiting, not a complaint about the config."""
+        result = evaluate_ci_results([], ["grade", "cpplint"], [])
+        assert result.config_mismatch is False
+        assert result.has_pending is True
+        assert result.total_count == 0
+
+    def test_partial_match_waits_for_the_running_job(self):
+        """A pending job among the matched runs keeps the whole check waiting."""
+        runs = [CheckRun("grade", None, "url1")]
+        result = evaluate_ci_results(runs, ["grade", "cpplint"])
+        assert result.has_pending is True
+        assert result.pending_jobs == ["grade"]
+        assert result.missing_jobs == ["cpplint"]
+        assert result.config_mismatch is False
+
+
+class TestControlWorkRegression:
+    """The exact shape that froze every control work repository."""
+
+    def test_unconfigured_lab_ignores_skipped_personalize(self):
+        """Old-format config (ci: [- workflows]) must not hang on skipped."""
+        runs = [
+            CheckRun("personalize", "skipped", "url1"),
+            CheckRun("grade", "success", "url2", datetime(2026, 9, 18, 3, 36, 46, tzinfo=timezone.utc)),
+            CheckRun("check", "success", "url3"),
+        ]
+        relevant = filter_relevant_jobs(runs, get_ci_config_jobs({"ci": ["workflows"]}))
+        result = evaluate_ci_results(relevant)
+        assert result.passed is True
+        assert result.has_pending is False
+        assert result.passed_count == 2
+        assert result.total_count == 2
+        assert result.latest_success_time == datetime(2026, 9, 18, 3, 36, 46, tzinfo=timezone.utc)
+
+    def test_configured_lab_grades_by_named_job(self):
+        """New-format config narrows the run set to the grading job."""
+        runs = [
+            CheckRun("personalize", "skipped", "url1"),
+            CheckRun("grade", "success", "url2"),
+            CheckRun("check", "success", "url3"),
+        ]
+        jobs = get_ci_config_jobs({"ci": {"workflows": ["grade"]}})
+        relevant = filter_relevant_jobs(runs, jobs)
+        result = evaluate_ci_results(relevant, jobs)
+        assert [run.name for run in relevant] == ["grade"]
+        assert result.passed is True
+        assert result.total_count == 1
+
+
 class TestGetCIConfigJobs:
     """Tests for get_ci_config_jobs function."""
 

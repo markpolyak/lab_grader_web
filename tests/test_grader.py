@@ -275,6 +275,124 @@ class TestLabGraderEvaluateCI:
         assert "1/1" in result.passed
 
 
+class TestLabGraderSkippedAndMissingJobs:
+    """A skipped job must not freeze the grade; a missing one must be named."""
+
+    @pytest.fixture
+    def mock_github(self):
+        return MagicMock(spec=GitHubClient)
+
+    @pytest.fixture
+    def grader(self, mock_github):
+        return LabGrader(mock_github)
+
+    def test_skipped_job_does_not_block_the_grade(self, grader, mock_github):
+        """The control work shape: grade succeeded, personalize was skipped."""
+        config = {"github-prefix": "r"}
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {"name": "personalize", "conclusion": "skipped", "html_url": "url1",
+             "completed_at": "2026-09-18T03:36:31Z"},
+            {"name": "grade", "conclusion": "success", "html_url": "url2",
+             "completed_at": "2026-09-18T03:36:46Z"},
+        ]
+
+        result = grader.evaluate_ci("org", "r-user", config)
+
+        assert result.status == GradeStatus.UPDATED
+        assert result.result == "v"
+        assert "1/1" in result.passed
+
+    def test_pending_message_names_the_job(self, grader, mock_github):
+        """The message says what is being waited for, not just that it waits."""
+        config = {"github-prefix": "lab1"}
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {"name": "grade", "conclusion": "success", "html_url": "url1",
+             "completed_at": "2024-01-15T10:00:00Z"},
+            {"name": "slow-job", "conclusion": None, "html_url": "url2"},
+        ]
+
+        result = grader.evaluate_ci("org", "lab1-user", config)
+
+        assert result.status == GradeStatus.PENDING
+        assert "slow-job" in result.message
+
+    def test_all_checks_skipped_stays_pending(self, grader, mock_github):
+        """Nothing judged the work, so nothing is written to the sheet."""
+        config = {"github-prefix": "lab1"}
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {"name": "personalize", "conclusion": "skipped", "html_url": "url1"},
+        ]
+
+        result = grader.evaluate_ci("org", "lab1-user", config)
+
+        assert result.status == GradeStatus.PENDING
+        assert result.result is None
+
+    def test_one_configured_name_missing_still_grades(self, grader, mock_github):
+        """The itmo-ml-2026 shape: two names configured, one produced."""
+        config = {
+            "github-prefix": "ml-lab1",
+            "ci": {"workflows": ["run-autograding-tests", "Test python scripts"]},
+        }
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {"name": "Test python scripts", "conclusion": "success", "html_url": "url1",
+             "completed_at": "2024-01-15T10:00:00Z"},
+        ]
+
+        result = grader.evaluate_ci("org", "ml-lab1-user", config)
+
+        assert result.status == GradeStatus.UPDATED
+        assert result.result == "v"
+        assert "1/1" in result.passed
+
+    def test_no_configured_job_matches_is_a_config_error_not_an_x(self, grader, mock_github):
+        """Stale job names must not cost the whole group a failed grade."""
+        config = {"github-prefix": "lab1", "ci": {"workflows": ["cpplint", "clang-tidy"]}}
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {"name": "grade", "conclusion": "success", "html_url": "url1",
+             "completed_at": "2024-01-15T10:00:00Z"},
+        ]
+
+        result = grader.evaluate_ci("org", "lab1-user", config)
+
+        assert result.status == GradeStatus.ERROR
+        assert result.result is None
+        assert result.error_code == "CI_JOBS_NOT_FOUND"
+        assert "cpplint" in result.message
+
+    def test_configured_jobs_wait_while_ci_is_starting(self, grader, mock_github):
+        """A job that has not been created yet is pending, not an error."""
+        config = {"github-prefix": "lab1", "ci": {"workflows": ["grade", "cpplint"]}}
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {"name": "unrelated", "conclusion": None, "html_url": "url2"},
+        ]
+
+        result = grader.evaluate_ci("org", "lab1-user", config)
+
+        assert result.status == GradeStatus.PENDING
+        assert result.error_code is None
+
+    def test_cancelled_job_fails_instead_of_hanging(self, grader, mock_github):
+        """A cancelled run yields "x", which a re-run overwrites."""
+        config = {"github-prefix": "lab1", "ci": {"workflows": ["grade"]}}
+        mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
+        mock_github.get_check_runs.return_value = [
+            {"name": "grade", "conclusion": "cancelled", "html_url": "url1",
+             "completed_at": "2024-01-15T10:00:00Z"},
+        ]
+
+        result = grader.evaluate_ci("org", "lab1-user", config)
+
+        assert result.status == GradeStatus.UPDATED
+        assert result.result == "x"
+
+
 class TestLabGraderGrade:
     """Tests for LabGrader.grade (full workflow)."""
 
