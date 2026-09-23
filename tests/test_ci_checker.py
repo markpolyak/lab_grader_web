@@ -301,44 +301,42 @@ class TestConfiguredJobs:
         assert result.ignored == []
         assert "❌" in result.summary[1]
 
-    def test_one_missing_name_does_not_withhold_the_grade(self):
-        """itmo-ml-2026 lists two template generations; repos produce one.
+    def test_a_missing_required_job_withholds_the_grade(self):
+        """One configured job green, the other absent: no checkmark.
 
-        The config names run-autograding-tests and "Test python scripts", and
-        every repository of that course reports only the latter. A name that
-        matches nothing is reported, not held against the student.
+        The config lists the jobs that must succeed. A job that produced no
+        result did not succeed, so the student is not passed - whatever the
+        reason the check run is missing.
         """
         runs = [CheckRun("Test python scripts", "success", "url1")]
         result = evaluate_ci_results(runs, ["run-autograding-tests", "Test python scripts"])
-        assert result.passed is True
-        assert result.passed_count == 1
-        assert result.total_count == 1
+        assert result.passed is False
         assert result.missing_jobs == ["run-autograding-tests"]
-        assert result.config_mismatch is False
-        assert "не учитывается" in result.summary[1]
+        assert result.has_pending is False
+        assert "❌" in result.summary[1]
 
-    def test_no_configured_name_matches_is_a_config_error(self):
-        """Every name in the config is stale: that is not a grade at all."""
+    def test_no_configured_name_matches(self):
+        """Every name in the config is absent: nothing was verified."""
         runs = [CheckRun("unrelated", "success", "url1")]
         result = evaluate_ci_results([], ["grade", "cpplint"], runs)
         assert result.passed is False
-        assert result.config_mismatch is True
         assert result.missing_jobs == ["grade", "cpplint"]
         assert result.has_pending is False
 
-    def test_no_configured_name_matches_but_ci_is_starting(self):
+    def test_missing_required_job_waits_while_ci_is_starting(self):
         """Right after a push the jobs may simply not exist yet."""
         runs = [CheckRun("unrelated", None, "url1")]
         result = evaluate_ci_results([], ["grade", "cpplint"], runs)
         assert result.passed is False
-        assert result.config_mismatch is False
+        assert result.missing_jobs == []
         assert result.has_pending is True
         assert result.pending_jobs == ["grade", "cpplint"]
 
-    def test_commit_without_check_runs_is_not_a_config_error(self):
-        """CI never started: waiting, not a complaint about the config."""
+    def test_commit_without_check_runs_waits(self):
+        """CI never started: waiting, not a verdict."""
         result = evaluate_ci_results([], ["grade", "cpplint"], [])
-        assert result.config_mismatch is False
+        assert result.passed is False
+        assert result.missing_jobs == []
         assert result.has_pending is True
         assert result.total_count == 0
 
@@ -346,10 +344,17 @@ class TestConfiguredJobs:
         """A pending job among the matched runs keeps the whole check waiting."""
         runs = [CheckRun("grade", None, "url1")]
         result = evaluate_ci_results(runs, ["grade", "cpplint"])
+        assert result.passed is False
         assert result.has_pending is True
-        assert result.pending_jobs == ["grade"]
+        assert result.pending_jobs == ["grade", "cpplint"]
+
+    def test_required_job_missing_while_another_finished(self):
+        """No job is running any more, so the absent one is final."""
+        runs = [CheckRun("grade", "success", "url1")]
+        result = evaluate_ci_results(runs, ["grade", "cpplint"], runs)
+        assert result.passed is False
         assert result.missing_jobs == ["cpplint"]
-        assert result.config_mismatch is False
+        assert result.has_pending is False
 
 
 class TestControlWorkRegression:

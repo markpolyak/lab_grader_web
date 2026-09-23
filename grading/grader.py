@@ -522,20 +522,21 @@ class LabGrader:
                 f"Check runs not counted (skipped/neutral): {', '.join(ci_result.ignored)}"
             )
 
-        if ci_result.config_mismatch:
-            # Not one configured job name matches what GitHub reported: the
-            # names in the config are stale, not the student's work. This must
-            # not be written into the student's cell as "x".
+        if ci_result.missing_jobs:
+            # A job the config requires produced no result at all. Either the
+            # name in the config is stale or the job never ran in this
+            # repository - indistinguishable from here, so the grade is withheld
+            # and the jobs are named instead of writing a verdict either way.
             missing = ", ".join(ci_result.missing_jobs)
-            logger.warning(f"No configured CI job matched the check runs: {missing}")
+            logger.warning(f"Required CI jobs missing from check runs: {missing}")
             return CIEvaluation(
                 grade_result=GradeResult(
                     status=GradeStatus.ERROR,
                     result=None,
                     message=(
-                        f"⚠️ Ни одна из джоб, указанных в настройках курса, не найдена среди "
-                        f"проверок CI: {missing}. Проверьте ci.workflows в конфигурации "
-                        f"лабораторной работы."
+                        f"⚠️ Обязательные джобы не найдены среди проверок CI: {missing}. "
+                        f"Либо они не запускались в репозитории студента, либо их имена "
+                        f"устарели в ci.workflows в конфигурации лабораторной работы."
                     ),
                     passed=None,
                     checks=ci_result.summary,

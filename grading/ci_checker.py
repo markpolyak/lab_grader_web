@@ -65,7 +65,6 @@ class CIResult:
     ignored: list[str] = field(default_factory=list)
     pending_jobs: list[str] = field(default_factory=list)
     missing_jobs: list[str] = field(default_factory=list)
-    config_mismatch: bool = False
 
 
 def parse_check_runs(check_runs_data: list[dict[str, Any]]) -> list[CheckRun]:
@@ -161,14 +160,14 @@ def evaluate_ci_results(
       the ratio: it says nothing about the student's work;
     - a skipped or neutral job the config names is a failure, because the
       config demands a success from it and it did not produce one;
-    - a job the config names but GitHub never reported does not count against
-      the student: course configs list job names across template generations
-      (itmo-ml-2026 names both "run-autograding-tests" and "Test python
-      scripts" while the repositories only ever produce the latter), so a name
-      that matches nothing is reported through missing_jobs and otherwise
-      ignored. Only when NOT ONE configured name matches is this treated as a
-      broken config (config_mismatch) - and even then, not while CI is still
-      starting up and not when the commit has no check runs at all.
+    - a job the config names but GitHub never reported blocks the pass through
+      missing_jobs. The config lists the jobs that MUST succeed, and a job that
+      produced no result did not succeed - whether the name is stale or the
+      job never ran in the student's repository. The caller answers this as an
+      error rather than as "x", because which of the two it is cannot be told
+      from here; either way the student is not passed. While CI is still
+      starting up, or on a commit with no check runs at all, the job may yet
+      appear, so that is pending instead.
 
     Args:
         check_runs: List of check runs to evaluate (already filtered)
@@ -234,25 +233,21 @@ def evaluate_ci_results(
 
     reported_names = {run.name for run in check_runs}
     missing_jobs = [name for name in configured_jobs or [] if name not in reported_names]
-    matched_any = bool(required & reported_names)
-    config_mismatch = (
-        bool(missing_jobs)
-        and not matched_any
-        and not ci_in_progress
-        and bool(every_run)  # no check runs at all: CI has not started
-    )
 
-    for name in missing_jobs:
-        if config_mismatch:
-            summary.append(f"❓ {name} — джоба не найдена среди проверок коммита")
-        else:
-            summary.append(f"❓ {name} — джоба не найдена среди проверок коммита, не учитывается")
-
-    if missing_jobs and not matched_any and ci_in_progress:
-        # CI has only just started: the configured jobs may still appear.
+    if missing_jobs and (ci_in_progress or not every_run):
+        # CI has not finished creating its jobs: they may still appear.
         pending_jobs.extend(missing_jobs)
+        for name in missing_jobs:
+            summary.append(f"⏳ {name} — джоба ещё не появилась среди проверок")
+        missing_jobs = []
+    else:
+        for name in missing_jobs:
+            summary.append(
+                f"❌ {name} — джоба обязательна по настройкам курса, "
+                f"но среди проверок коммита её нет"
+            )
 
-    if counted_count == 0 and not config_mismatch and not pending_jobs:
+    if counted_count == 0 and not missing_jobs and not pending_jobs:
         # Nothing to judge by: no checks at all, or every one of them was
         # skipped. Either way this is not a pass - wait for a real result.
         return CIResult(
@@ -278,7 +273,7 @@ def evaluate_ci_results(
             counted_count > 0
             and passed_count == counted_count
             and not has_pending
-            and not config_mismatch
+            and not missing_jobs
         ),
         passed_count=passed_count,
         total_count=counted_count,
@@ -288,7 +283,6 @@ def evaluate_ci_results(
         ignored=ignored,
         pending_jobs=pending_jobs,
         missing_jobs=missing_jobs,
-        config_mismatch=config_mismatch,
     )
 
 

@@ -331,26 +331,27 @@ class TestLabGraderSkippedAndMissingJobs:
         assert result.status == GradeStatus.PENDING
         assert result.result is None
 
-    def test_one_configured_name_missing_still_grades(self, grader, mock_github):
-        """The itmo-ml-2026 shape: two names configured, one produced."""
+    def test_missing_required_job_is_never_a_pass(self, grader, mock_github):
+        """One required job green, the other absent: no grade goes out."""
         config = {
-            "github-prefix": "ml-lab1",
-            "ci": {"workflows": ["run-autograding-tests", "Test python scripts"]},
+            "github-prefix": "lab1",
+            "ci": {"workflows": ["run-autograding-tests", "cpplint"]},
         }
         mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
         mock_github.get_check_runs.return_value = [
-            {"name": "Test python scripts", "conclusion": "success", "html_url": "url1",
+            {"name": "run-autograding-tests", "conclusion": "success", "html_url": "url1",
              "completed_at": "2024-01-15T10:00:00Z"},
         ]
 
-        result = grader.evaluate_ci("org", "ml-lab1-user", config)
+        result = grader.evaluate_ci("org", "lab1-user", config)
 
-        assert result.status == GradeStatus.UPDATED
-        assert result.result == "v"
-        assert "1/1" in result.passed
+        assert result.status == GradeStatus.ERROR
+        assert result.result is None
+        assert result.error_code == "CI_JOBS_NOT_FOUND"
+        assert "cpplint" in result.message
 
-    def test_no_configured_job_matches_is_a_config_error_not_an_x(self, grader, mock_github):
-        """Stale job names must not cost the whole group a failed grade."""
+    def test_no_configured_job_matches_is_not_an_x_either(self, grader, mock_github):
+        """Nothing required was verified: withheld, not marked as failed."""
         config = {"github-prefix": "lab1", "ci": {"workflows": ["cpplint", "clang-tidy"]}}
         mock_github.get_latest_commit.return_value = CommitInfo(sha="abc123", files=[])
         mock_github.get_check_runs.return_value = [
