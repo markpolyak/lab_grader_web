@@ -499,7 +499,10 @@ class LabGrader:
         for run in relevant_runs:
             logger.info(f"  Relevant job: {run.name} (conclusion: {run.conclusion})")
 
-        if not relevant_runs:
+        # A job named in the config but absent from the filtered runs is
+        # reported by evaluate_ci_results, so only the unconfigured case is
+        # answered here.
+        if not relevant_runs and not ci_jobs:
             return CIEvaluation(
                 grade_result=GradeResult(
                     status=GradeStatus.PENDING,
@@ -510,15 +513,61 @@ class LabGrader:
                 ci_passed=False,
             )
 
-        # Evaluate results
-        ci_result = evaluate_ci_results(relevant_runs)
+        # Evaluate results. The unfiltered list goes in too: a job still
+        # running outside the filter means a configured job may not exist yet.
+        ci_result = evaluate_ci_results(relevant_runs, ci_jobs, check_runs)
 
-        if ci_result.has_pending:
+        if ci_result.ignored:
+            logger.info(
+                f"Check runs not counted (skipped/neutral): {', '.join(ci_result.ignored)}"
+            )
+
+        if ci_result.missing_jobs:
+            # A job the config requires produced no result at all. Either the
+            # name in the config is stale or the job never ran in this
+            # repository - indistinguishable from here, so the grade is withheld
+            # and the jobs are named instead of writing a verdict either way.
+            missing = ", ".join(ci_result.missing_jobs)
+            logger.warning(f"Required CI jobs missing from check runs: {missing}")
+            return CIEvaluation(
+                grade_result=GradeResult(
+                    status=GradeStatus.ERROR,
+                    result=None,
+                    message=(
+                        f"⚠️ Обязательные джобы не найдены среди проверок CI: {missing}. "
+                        f"Либо они не запускались в репозитории студента, либо их имена "
+                        f"устарели в ci.workflows в конфигурации лабораторной работы."
+                    ),
+                    passed=None,
+                    checks=ci_result.summary,
+                    error_code="CI_JOBS_NOT_FOUND",
+                ),
+                ci_passed=False,
+            )
+
+        if ci_result.total_count == 0:
+            # Every check run was skipped: nothing judged the work at all.
             return CIEvaluation(
                 grade_result=GradeResult(
                     status=GradeStatus.PENDING,
                     result=None,
-                    message="CI-проверки ещё выполняются ⏳",
+                    message="Нет активных CI-проверок ⏳",
+                    passed=None,
+                    checks=ci_result.summary,
+                ),
+                ci_passed=False,
+            )
+
+        if ci_result.has_pending:
+            pending = ", ".join(ci_result.pending_jobs)
+            return CIEvaluation(
+                grade_result=GradeResult(
+                    status=GradeStatus.PENDING,
+                    result=None,
+                    message=(
+                        f"CI-проверки ещё выполняются ⏳ ({pending})"
+                        if pending else "CI-проверки ещё выполняются ⏳"
+                    ),
                     passed=format_ci_result_string(ci_result.passed_count, ci_result.total_count),
                     checks=ci_result.summary,
                 ),

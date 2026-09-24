@@ -70,8 +70,7 @@ course:
             penalty-max: 2
             ci:
                 workflows:
-                    - run-autograding-tests
-                    - Test python scripts
+                    - Test python scripts   # единственная джоба, которую производит шаблон курса
             files:
                 - exercises.ipynb
             moss:
