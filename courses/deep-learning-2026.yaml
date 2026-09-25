@@ -43,7 +43,7 @@ course:
                 - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
             ci:
                 workflows:
-                    - Lab Tests
+                    - test   # имя джобы в tests.yaml; имя workflow (Lab Tests) в check runs не попадает
             files:
                 - exercises.ipynb
             moss:
@@ -61,7 +61,8 @@ course:
         #       patterns:
         #         - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
         #     ci:
-        #         - workflows
+        #         workflows:
+        #             - test   # имя джобы в tests.yaml; имя workflow (Lab Tests) в check runs не попадает
         #     files:
         #         - exercises.ipynb
         #     moss:
@@ -79,7 +80,8 @@ course:
         #       patterns:
         #         - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
         #     ci:
-        #         - workflows
+        #         workflows:
+        #             - test   # имя джобы в tests.yaml; имя workflow (Lab Tests) в check runs не попадает
         #     files:
         #         - exercises.ipynb
         #     moss:
@@ -97,7 +99,8 @@ course:
         #       patterns:
         #         - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
         #     ci:
-        #         - workflows
+        #         workflows:
+        #             - test   # имя джобы в tests.yaml; имя workflow (Lab Tests) в check runs не попадает
         #     files:
         #         - exercises.ipynb
         #     moss:
@@ -113,7 +116,8 @@ course:
 #              patterns:
 #                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
 #            ci:
-#                - workflows
+#                workflows:
+#                    - test   # имя джобы в tests.yaml; имя workflow (Lab Tests) в check runs не попадает
 #            files:
 #                - exercises.ipynb
 #            moss:
@@ -129,7 +133,8 @@ course:
 #              patterns:
 #                - 'ПРЕДВАРИТЕЛЬНАЯ.*?ОЦЕНКА.*?ЖУРНАЛ:\s*(\d+(?:[.,]\d+)?)'  # Гибкий паттерн для "ПРЕДВАРИТЕЛЬНАЯ ОЦЕНКА В ЖУРНАЛ: 10.0"
 #            ci:
-#                - workflows
+#                workflows:
+#                    - test   # имя джобы в tests.yaml; имя workflow (Lab Tests) в check runs не попадает
 #            files:
 #                - exercises.ipynb
 #            moss:
