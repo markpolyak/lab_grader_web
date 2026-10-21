@@ -54,7 +54,7 @@ course:
             github-prefix: 2
             short-name: ЛР2
             template-repo: itmo-dl-2026/lab2-lora-finetuning
-            repo-provisioning: fork
+            repo-provisioning: template
             taskid-max: 36
             penalty-max: 5
             score:
