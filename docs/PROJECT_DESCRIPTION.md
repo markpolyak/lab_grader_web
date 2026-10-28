@@ -93,10 +93,9 @@
 
 ### Процесс проверки работы
 
-1. Студент заполняет форму (ФИО, GitHub никнейм, номер задания)
+1. Студент указывает GitHub-логин, заранее связанный с его ФИО при регистрации
 2. Backend проверяет:
-   - Наличие студента в Google Sheets (по ФИО)
-   - Существование GitHub аккаунта
+   - Наличие логина в столбце `GitHub` листа группы
    - Наличие репозитория `{org}/{github-prefix}-{username}`
    - Наличие `.github/workflows/` (настроен CI)
    - Наличие обязательных файлов (настраивается в конфиге lab: `files: [...]`)
@@ -120,48 +119,38 @@
 
 ```
 lab_grader_web/
-├── main.py                      # Основной backend сервер
-├── requirements.txt             # Python зависимости
-├── backend.Dockerfile           # Backend контейнер
-├── frontend.Dockerfile          # Frontend контейнер (multi-stage)
-├── nginx.conf                   # Конфигурация Nginx
-├── courses/                     # Конфигурации курсов
-│   ├── index.yaml               # Индекс курсов (управление отображением)
-│   ├── operating-systems-2025.yaml
-│   ├── machine-learning-basics-2025.yaml
-│   └── logos/                   # Логотипы курсов
-│       ├── os-2025-spring.png
-│       └── ml-2025-spring.png
-├── scripts/                     # Deployment и утилиты
-│   ├── switch-branch.sh         # Переключение веток на сервере
-│   └── README.md
-├── tests/                       # Модульные тесты
-│   └── test_lab_column_lookup.py
-├── docs/                        # Документация
-│   ├── PROJECT_DESCRIPTION.md
-│   ├── DEPLOYMENT.md
-│   └── LOGGING.md
-├── frontend/courses-front/      # React приложение
-│   ├── src/
-│   │   ├── components/          # React компоненты
-│   │   │   ├── CourseList.jsx   # Список курсов
-│   │   │   ├── GroupList.jsx    # Список групп
-│   │   │   ├── LabList.jsx      # Список лабораторных
-│   │   │   ├── RegistrationForm.jsx  # Форма проверки
-│   │   │   ├── AdminLogin.jsx   # Админ логин
-│   │   │   └── ProtectedRoute.jsx    # Защита маршрутов
-│   │   ├── api/                 # API клиент (axios)
-│   │   ├── locales/             # Переводы (en, ru, zh)
-│   │   ├── App.jsx              # Главный компонент
-│   │   └── main.jsx             # Точка входа
-│   ├── public/                  # Статические ресурсы
-│   ├── package.json
-│   ├── vite.config.js
-│   └── theme.js                 # Система дизайна
+├── main.py                      # FastAPI-приложение: все HTTP-эндпоинты
+├── grading/                     # Логика, вынесенная из main.py
+│   ├── bulk.py                  # evaluate_student (общая для одиночной и массовой проверки), массовая проверка
+│   ├── grader.py                # Оркестратор проверки (LabGrader)
+│   ├── ci_checker.py            # Разбор результатов CI
+│   ├── github_client.py         # Клиент GitHub REST API
+│   ├── sheets_client.py         # Работа с Google Sheets
+│   ├── penalty.py, score.py, taskid.py  # Штрафы, баллы из логов, номер варианта
+│   ├── repo_provisioning.py     # Создание репозиториев студентов (/join)
+│   ├── propagate.py             # Рассылка обновлений шаблона
+│   ├── teams.py                 # Командные лабораторные
+│   ├── join_links.py            # Секретные ссылки и окна доступности
+│   └── course_index.py          # Чтение courses/index.yaml
+├── courses/                     # Конфигурации курсов (index.yaml + YAML курсов, logos/)
+├── tests/                       # pytest
+├── scripts/                     # join-link.py, switch-branch.sh
+├── docs/                        # Документация (DEVELOPMENT.md — локальная разработка)
+├── frontend/courses-front/      # React-приложение
+│   └── src/
+│       ├── components/          # course-list, group-list, lab-list, registration-form,
+│       │                        # breadcrumb, JoinLab, admin (каждый: index.jsx + styled.js)
+│       ├── api/                 # Базовый URL API
+│       ├── locales/             # Переводы (en, ru, zh)
+│       ├── App.jsx              # Маршруты
+│       └── main.jsx             # Точка входа
+├── requirements.txt, requirements-dev.txt
+├── backend.Dockerfile, frontend.Dockerfile, nginx.conf
+├── docker-compose.yml           # Локальный запуск
+├── docker-compose.example.yaml  # Пример для сервера
 └── .github/workflows/
-    ├── ci.yaml                  # CI/CD pipeline (сборка Docker образов)
-    └── tests.yml                # Запуск тестов (pytest)
-
+    ├── ci.yaml                  # Сборка Docker-образов
+    └── tests.yml                # pytest
 ```
 
 ## API Endpoints
@@ -188,11 +177,14 @@ lab_grader_web/
 
 ### Административные маршруты
 
+Пути указаны так, как их видит backend. В production перед ним стоит
+обратный прокси, который добавляет префикс `/api/v1` (см. `docs/DEPLOYMENT.md`).
+
 | Метод | Путь | Описание |
 |-------|------|----------|
-| POST | `/api/admin/login` | Вход в админ-панель |
-| GET | `/api/admin/check-auth` | Проверка аутентификации |
-| POST | `/api/admin/logout` | Выход из системы |
+| POST | `/admin/login` | Вход в админ-панель |
+| GET | `/admin/check-auth` | Проверка аутентификации |
+| POST | `/admin/logout` | Выход из системы |
 | DELETE | `/courses/{course_id}` | Удаление курса |
 | GET | `/courses/{course_id}/edit` | Получение YAML конфигурации |
 | PUT | `/courses/{course_id}/edit` | Сохранение изменений курса |
@@ -541,12 +533,12 @@ score:
 
 ### Локальная разработка
 
-```bash
-# Запуск через Docker Compose
-docker-compose up
+Пошаговая настройка (своя таблица, service account, GitHub-организация,
+OAuth App, конфигурация курса) — в [`docs/DEVELOPMENT.md`](DEVELOPMENT.md).
 
-# Frontend будет доступен на http://localhost:8080
-# Backend API на http://localhost:8000
+```bash
+docker compose up --build
+# Frontend: http://localhost:8080, backend: http://localhost:8000
 ```
 
 ### Production
@@ -581,9 +573,18 @@ PUBLIC_BASE_URL=https://labgrader.example.ru
 # Адреса обратного прокси, которым можно доверять X-Forwarded-For.
 # Пусто - не доверять никому (см. docs/DEPLOYMENT.md)
 FORWARDED_ALLOW_IPS=
+
+# Путь к ключу Google service account (по умолчанию credentials.json)
+CREDENTIALS_FILE=/app/google-credentials/credentials.json
+
+# Вход студента через GitHub (/join/..., командные работы); без них эти
+# эндпоинты отвечают 503. См. docs/REPO_GENERATION_PLAN.md
+GITHUB_OAUTH_CLIENT_ID=
+GITHUB_OAUTH_CLIENT_SECRET=
+FRONTEND_URL=http://localhost:8080
 ```
 
-Также требуется файл `credentials.json` с учетными данными Google Service Account для доступа к Google Sheets API.
+Полный список с комментариями — в `.env.example`.
 
 ## Безопасность
 
@@ -597,43 +598,37 @@ FORWARDED_ALLOW_IPS=
 
 ## Тестирование
 
-### Unit-тесты
+### Запуск
 
-Проект использует pytest для модульного тестирования:
+`main.py` при импорте требует переменные окружения; тестам достаточно
+фиктивных значений, в Google и GitHub они не ходят:
 
 ```bash
-# Запуск тестов
-pytest tests/ -v
-
-# Запуск с покрытием
-pytest tests/ --cov=. --cov-report=term-missing
+ADMIN_LOGIN=test ADMIN_PASSWORD=test SECRET_KEY=test GITHUB_TOKEN=dummy pytest tests/ -v
+ADMIN_LOGIN=test ADMIN_PASSWORD=test SECRET_KEY=test GITHUB_TOKEN=dummy pytest tests/ --cov=. --cov-report=term-missing
+cd frontend/courses-front && npm test
 ```
 
-### Покрытие тестами
+### Что покрыто
 
-- `test_lab_column_lookup.py` — тесты поиска колонки лабораторной работы:
-  - Поиск по short-name через `sheet.find()`
-  - Fallback на расчет по offset
-  - Парсинг lab_id (ЛР1, ЛР0.1, и т.д.)
-  - Edge cases и специальные символы
-
-- `test_grade_lab_characterization.py` — характеризационные тесты функции проверки:
-  - Успешная проверка (все CI тесты пройдены)
-  - Неуспешная проверка (часть тестов провалена)
-  - Ошибки: отсутствие test_main.py, workflows, коммитов
-  - Защита от модификации тестовых файлов
-  - Валидация формата ответа API
-  - Окно доступности: до `join.opens-at` работа не видна в списке и не проверяется
-
-- `test_join_links.py` — тесты секретных ссылок и окна доступности:
-  - Вычисление токена: детерминированность, длина и алфавит, зависимость от курса, лабы, `revision` и `SECRET_KEY`
-  - `join.id`: ссылка переживает переименование курса и смену ключа лабы
-  - Резолв токена: отзыв через `revision`, отказ для публичной лабы, отсев мусора без перебора
-  - Границы окна и разные умолчания для секретной и обычной лабы
+| Файл | Что проверяет |
+|---|---|
+| `test_grade_lab_characterization.py` | Эндпоинт проверки работы целиком: успех, провал CI, ошибки репозитория, защита тестов, окно доступности |
+| `test_grader.py`, `test_ci_checker.py` | Оркестратор проверки и разбор результатов CI |
+| `test_github_client.py`, `test_sheets_client.py` | Клиенты GitHub и Google Sheets |
+| `test_penalty.py`, `test_score.py`, `test_taskid.py` | Штрафы, баллы из логов, номер варианта |
+| `test_lab_column_lookup.py`, `test_lab_resolution.py` | Поиск столбца лабораторной, разрешение `lab_id` в конфигурацию |
+| `test_bulk_grading.py` | Массовая проверка |
+| `test_join_endpoints.py`, `test_repo_provisioning.py` | Создание репозиториев студентов через `/join` |
+| `test_join_links.py` | Секретные ссылки и окна доступности |
+| `test_teams.py` | Командные лабораторные |
+| `test_propagate.py` | Рассылка обновлений шаблона |
+| `test_admin_endpoints.py` | Авторизация административных маршрутов (`require_admin`) |
+| `test_rate_limit.py` | Ограничение частоты запросов |
 
 ### CI/CD
 
-Тесты автоматически запускаются через GitHub Actions при каждом push и pull request.
+Тесты (pytest) запускаются GitHub Actions (`.github/workflows/tests.yml`) на каждый push и на pull request в `main` и `hackathon/**`.
 
 ## Интернационализация
 
@@ -650,11 +645,9 @@ MIT License (Copyright 2025 Matvey)
 
 ## Технические характеристики
 
-- **Backend**: ~490 строк кода (main.py)
-- **Frontend**: ~821 строк кода (React компоненты)
-- **Общее количество файлов**: 22+ файлов кода
-- **Поддерживаемые языки**: Python, JavaScript/JSX, YAML
-- **Порты**: Frontend (8080), Backend (8000)
+- **Backend**: ~2500 строк в `main.py` и ~7200 в `grading/`
+- **Frontend**: ~4200 строк (React-компоненты и вспомогательный код)
+- **Порты**: frontend 8080, backend 8000
 
 ## Автор
 
