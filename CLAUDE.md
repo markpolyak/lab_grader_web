@@ -1,10 +1,12 @@
 # CLAUDE.md
 
-See `docs/PROJECT_DESCRIPTION.md` for full project documentation.
+See `docs/PROJECT_DESCRIPTION.md` for full project documentation and `docs/DEVELOPMENT.md`
+for local setup (own Google Sheet, service account, GitHub org, OAuth App).
 
 ## Quick Reference
 
-- **Backend**: Single file `main.py` (FastAPI monolith, ~750 LOC)
+- **Backend**: `main.py` (FastAPI app, all HTTP endpoints, ~2500 LOC) + `grading/` (grading,
+  Sheets/GitHub clients, repo provisioning, teams, bulk jobs)
 - **Frontend**: `frontend/courses-front/` (React 19 + Vite)
 - **Courses**: `courses/index.yaml` + individual YAML files (see `docs/COURSE_CONFIG.md` for all options)
 - **Tests**: `tests/` (pytest)
@@ -18,11 +20,13 @@ docker-compose up
 
 # Without Docker
 cd frontend/courses-front && npm install --legacy-peer-deps && npm run dev
-pip install -r requirements.txt && uvicorn main:app --reload --port 8000
+pip install -r requirements-dev.txt && uvicorn main:app --reload --port 8000
 
-# Run tests
+# Run tests (main.py refuses to import without these variables; dummy values are enough)
+export ADMIN_LOGIN=test ADMIN_PASSWORD=test SECRET_KEY=test GITHUB_TOKEN=dummy
 pytest tests/ -v
 pytest tests/ --cov=. --cov-report=term-missing
+cd frontend/courses-front && npm test
 ```
 
 ### Required Environment Variables
@@ -48,7 +52,7 @@ FORWARDED_ALLOW_IPS=
 
 ## Key Conventions
 
-- All backend endpoints in `main.py` - no separate modules
+- All HTTP endpoints live in `main.py`; reusable logic goes to `grading/` (see Common Tasks)
 - Course operations use `course_id` from `index.yaml`, not filename
 - Error messages and UI text are in Russian
 - Frontend components: `componentName/index.jsx` + `styled.js`
@@ -206,8 +210,9 @@ Grades a whole group for one lab in a single run, started from the admin lab lis
 
 ## CI/CD
 
-- **Tests**: Run on every push via `.github/workflows/tests.yml`
-- **Docker images**: Built on push to `main` and `claude/**` branches
+- **Tests**: Run via `.github/workflows/tests.yml` on push and on pull requests into `main`
+  and `hackathon/**`
+- **Docker images**: Built on push to `main`, `claude/**`, `feature/**` and `fix/**` branches
 - Images published to `ghcr.io/markpolyak/lab_grader_web-{frontend,backend}`
 
 ## Notes
