@@ -20,6 +20,7 @@ import {
   SemesterTitle,
   Title,
   FixedAdminButton,
+  StatusSwitcher,
 } from "./styled";
 import { fetchAdminCourses, fetchCourseDetails, fetchCourses } from "../../api";
 import { CourseHistoryDialog } from "../course-history";
@@ -291,19 +292,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
       </Select>
 
       {/* Переключатель статусов курсов - компактный, в углу */}
-      <ButtonGroup
-        style={{
-          position: "fixed",
-          top: 110,
-          right: 16,
-          zIndex: 2999,
-          marginBottom: 0,
-          display: "flex",
-          flexDirection: "column",
-          gap: "4px",
-          width: "120px",
-        }}
-      >
+      <StatusSwitcher $clearPinned={isAdmin}>
         <Button
           onClick={() => setCourseStatus("active")}
           style={{
@@ -348,7 +337,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
             {t("allCourses")}
           </Button>
         )}
-      </ButtonGroup>
+      </StatusSwitcher>
 
       {isAdmin && (
         <>

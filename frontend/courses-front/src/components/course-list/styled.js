@@ -105,6 +105,37 @@ const cardButtonSize = `
   white-space: nowrap;
 `;
 
+// Status filter (active / archived / all). Desktop: a compact column pinned to
+// the right edge. Phone: a normal row above the cards - pinned, it covered the
+// card, since the card takes the whole screen width.
+export const StatusSwitcher = styled.div`
+  position: fixed;
+  top: 110px;
+  right: 16px;
+  z-index: 2999;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 120px;
+
+  @media (max-width: ${breakpoints.tablet}) {
+    position: static;
+    flex-direction: row;
+    width: 100%;
+    max-width: ${sizes.cardWidth};
+    box-sizing: border-box;
+    /* Admin page: nothing above it in the flow, so clear the pinned language
+       select and "upload course" button. The public page has its heading there. */
+    margin-top: ${(props) => (props.$clearPinned ? "72px" : "0")};
+
+    & > button {
+      flex: 1 1 0;
+      min-width: 0;
+      white-space: normal;
+    }
+  }
+`;
+
 export const Button = styled.button`
   ${buttonStyles}
   ${cardButtonSize}
@@ -257,6 +288,7 @@ export const PageTitle = styled.h1`
   font-weight: 600;
   text-align: center;
   width: 100%;
+  box-sizing: border-box; /* padding inside the 100%: no horizontal scroll on phones */
   margin: 24px 0;
   padding: 0 16px;
 
