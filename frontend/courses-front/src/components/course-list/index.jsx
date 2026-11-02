@@ -21,7 +21,7 @@ import {
   Title,
   FixedAdminButton,
 } from "./styled";
-import { fetchCourseDetails, fetchCourses } from "../../api";
+import { fetchAdminCourses, fetchCourseDetails, fetchCourses } from "../../api";
 import { colors } from "../../../theme";
 import {
   Snackbar,
@@ -57,15 +57,25 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
     setSnackbar({ open: true, message, severity });
   };
 
+  // Админка берёт только доступные вошедшему курсы, публичная страница - все.
+  const loadCourses = (status) => (isAdmin ? fetchAdminCourses(status) : fetchCourses(status));
+
+  // 404 на маршрутах курса в админке - и несуществующий, и чужой курс.
+  const errorDetail = (response, data, fallbackKey) =>
+    response.status === 404
+      ? t("adminAuth.courseNotFoundOrNoAccess")
+      : (data && data.detail) || t(fallbackKey);
+
   const handleCloseSnackbar = () => {
     setSnackbar((prev) => ({ ...prev, open: false }));
   };
 
   useEffect(() => {
-    fetchCourses(courseStatus)
+    loadCourses(courseStatus)
       .then(setCourses)
       .catch(() => showSnackbar(t("errorLoadingCourses"), "error"));
-  }, [t, courseStatus]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [t, courseStatus, isAdmin]);
 
   const handleDeleteConfirmation = (courseId) => {
     setSelectedCourseId(courseId);
@@ -81,10 +91,10 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
       if (response.ok) {
         showSnackbar(t("courseDeleted"), "success");
-        fetchCourses(courseStatus).then(setCourses);
+        loadCourses(courseStatus).then(setCourses);
       } else {
-        const data = await response.json();
-        showSnackbar(data.detail || t("errorDeletingCourse"), "error");
+        const data = await response.json().catch(() => null);
+        showSnackbar(errorDetail(response, data, "errorDeletingCourse"), "error");
       }
     } catch (error) {
       console.error(error);
@@ -124,7 +134,11 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         credentials: "include",
       });
       if (!response.ok) {
-        throw new Error(t("errorLoadingCourseForEdit"));
+        throw new Error(
+          response.status === 404
+            ? t("adminAuth.courseNotFoundOrNoAccess")
+            : t("errorLoadingCourseForEdit")
+        );
       }
       const data = await response.json();
       setEditingCourseId(courseId);
@@ -149,10 +163,10 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         showSnackbar(t("changesSaved"), "success");
         setEditingCourseId(null);
         setIsFullscreen(false);
-        fetchCourses(courseStatus).then(setCourses);
+        loadCourses(courseStatus).then(setCourses);
       } else {
-        const data = await response.json();
-        showSnackbar(data.detail || t("errorSavingCourse"), "error");
+        const data = await response.json().catch(() => null);
+        showSnackbar(errorDetail(response, data, "errorSavingCourse"), "error");
       }
     } catch (error) {
       console.error(error);
@@ -186,7 +200,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
 
       if (response.ok) {
         showSnackbar(t("courseUploaded"), "success");
-        fetchCourses(courseStatus).then(setCourses);
+        loadCourses(courseStatus).then(setCourses);
       } else {
         const data = await response.json();
         showSnackbar(data.detail || t("errorUploadingCourse"), "error");

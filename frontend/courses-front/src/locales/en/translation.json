@@ -244,5 +244,27 @@
       "closed": "Submissions are closed: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored.",
       "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
     }
+  },
+  "adminAuth": {
+    "title": "Admin sign-in",
+    "signInWithGithub": "Sign in with GitHub",
+    "emergencyLogin": "Emergency sign-in",
+    "login": "Login",
+    "password": "Password",
+    "submit": "Sign in",
+    "wrongCredentials": "Incorrect login or password",
+    "connectionError": "Could not connect to the server",
+    "errors": {
+      "oauth_failed": "Could not sign in with GitHub. Please try again",
+      "not_a_teacher": "Your GitHub login is not listed as a teacher of any course"
+    },
+    "checking": "Checking access...",
+    "signedInAs": "Signed in as {{login}}",
+    "roles": {
+      "superadmin": "superadmin",
+      "teacher": "teacher"
+    },
+    "logout": "Sign out",
+    "courseNotFoundOrNoAccess": "Course not found or access denied"
   }
 }

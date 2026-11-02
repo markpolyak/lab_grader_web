@@ -206,6 +206,18 @@ export const fetchCourses = async (status = "active") => {
   return response.json();
 };
 
+// Курсы, доступные вошедшему в админку, всех статусов (docs/MULTI_TEACHER_PLAN.md §7.1).
+// Фильтр по статусу - на клиенте: скрытые курсы backend отдаёт наравне с остальными.
+// Относительный путь с cookie - как у остальных запросов админки.
+export const fetchAdminCourses = async (status = "active") => {
+  const response = await fetch("/api/v1/admin/courses", { credentials: "include" });
+  if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+  }
+  const courses = await response.json();
+  return status === "all" ? courses : courses.filter((course) => course.status === status);
+};
+
 export const fetchCourseDetails = async (courseId) => {
   const response = await fetch(`${API_BASE_URL}/courses/${courseId}`);
   if (response.status === 429) {

@@ -160,7 +160,12 @@ export const LabList = ({ courseId, onBack }) => {
       })
       .catch((err) => {
         setLoading(false);
-        showSnackbar(err.message || t("adminLabs.errorLoadingLabs"), "error");
+        showSnackbar(
+          err.status === 404
+            ? t("adminAuth.courseNotFoundOrNoAccess")
+            : err.message || t("adminLabs.errorLoadingLabs"),
+          "error"
+        );
       });
   }, [courseId, t]);
 
