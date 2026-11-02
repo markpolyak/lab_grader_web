@@ -322,7 +322,12 @@ export const LabList = ({ courseId, onBack }) => {
   return (
     <Container>
       <Panel>
-        <BackButton onClick={onBack}>{t("adminLabs.back")}</BackButton>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <BackButton onClick={onBack}>{t("adminLabs.back")}</BackButton>
+          <MuiButton variant="outlined" href={`/admin/courses/${encodeURIComponent(courseId)}/quizzes`}>
+            {t("quizAdmin.title")}
+          </MuiButton>
+        </div>
         <PageTitle>
           {courseName
             ? t("adminLabs.titleWithCourse", { course: courseName })

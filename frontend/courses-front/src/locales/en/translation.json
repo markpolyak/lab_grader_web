@@ -290,5 +290,79 @@
     "restored": "Version restored",
     "close": "Close",
     "messagePlaceholder": "Why restore (optional)"
+  },
+  "quiz": {
+    "loading": "Loading…",
+    "signIn": "Sign in with GitHub",
+    "signInHint": "Sign in once - next time the QR code brings you straight here",
+    "register": "Register in your group",
+    "notInCourseHint": "GitHub login {{login}} is not in the course spreadsheet. Register in your group and open the QR code again.",
+    "waiting": "Waiting for the start",
+    "questionOf": "Question {{n}} of {{total}}",
+    "accepted": "Answer accepted",
+    "correct": "Correct!",
+    "wrong": "Wrong",
+    "noAnswer": "No answer",
+    "finished": "The quiz is over",
+    "score": "Your score: {{score}} of {{max}}",
+    "cancelled": "The quiz was cancelled",
+    "reconnecting": "offline, reconnecting…",
+    "errors": {
+      "not_found": "Quiz not found or already over",
+      "oauth_failed": "Could not sign in with GitHub. Please try again",
+      "NOT_IN_COURSE": "You are not in the course spreadsheet",
+      "TOO_LATE": "Time is up",
+      "ALREADY_ANSWERED": "Answer already accepted",
+      "WRONG_QUESTION": "This question is no longer active",
+      "QUIZ_FINISHED": "The quiz is over",
+      "SESSION_REQUIRED": "Please sign in with GitHub again",
+      "network": "No connection to the server",
+      "unknown": "Something went wrong"
+    }
+  },
+  "quizAdmin": {
+    "title": "Quizzes",
+    "back": "Back",
+    "chooseFile": "Choose question file (.md)",
+    "upload": "Upload",
+    "uploaded": "Quiz uploaded",
+    "empty": "No quizzes yet",
+    "run": "Run",
+    "preview": "Questions",
+    "delete": "Delete",
+    "close": "Close",
+    "confirmDelete": "Delete quiz \"{{id}}\"?",
+    "points": "{{points}} pts",
+    "runNotFound": "Quiz run not found",
+    "fields": {
+      "title": "Title",
+      "shortName": "Spreadsheet column",
+      "shortNameHint": "as in the second row of the group sheet",
+      "maxPoints": "Points for the quiz",
+      "seconds": "Seconds per question"
+    },
+    "columns": {
+      "title": "Quiz",
+      "shortName": "Column",
+      "questions": "Questions",
+      "points": "Points",
+      "seconds": "Seconds"
+    },
+    "projector": {
+      "joined": "joined: {{count}}",
+      "scan": "Scan the QR code or open the link:",
+      "start": "Start",
+      "finish": "Finish",
+      "cancel": "Cancel",
+      "answered": "answered {{answered}} of {{joined}}",
+      "next": "Next",
+      "toResults": "Results",
+      "summary": "Participants: {{participants}}, average: {{average}} of {{max}}",
+      "writing": "Writing scores to the spreadsheet…",
+      "written": "written: {{count}}",
+      "skipped": "not overwritten (cell taken): {{list}}",
+      "missingColumn": "no \"{{column}}\" column",
+      "retryWrite": "Retry writing"
+    }
   }
 }

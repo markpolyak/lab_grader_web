@@ -262,6 +262,7 @@ class QuizRun:
             "version": self.version,
             "state": self.state,
             "course": self.course_name,
+            "course_id": self.course_id,
             "title": self.quiz.settings.title,
             "question": self.question_index,
             "total": self.total,

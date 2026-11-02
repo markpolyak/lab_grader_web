@@ -293,5 +293,79 @@
     "restored": "版本已恢复",
     "close": "关闭",
     "messagePlaceholder": "恢复原因（可选）"
+  },
+  "quiz": {
+    "loading": "加载中…",
+    "signIn": "使用 GitHub 登录",
+    "signInHint": "只需登录一次，下次扫码将直接进入",
+    "register": "在小组中注册",
+    "notInCourseHint": "课程表格中没有 GitHub 用户名 {{login}}。请在小组中注册后重新扫码。",
+    "waiting": "等待开始",
+    "questionOf": "第 {{n}} 题，共 {{total}} 题",
+    "accepted": "答案已提交",
+    "correct": "正确！",
+    "wrong": "错误",
+    "noAnswer": "未作答",
+    "finished": "测验已结束",
+    "score": "你的得分：{{score}} / {{max}}",
+    "cancelled": "测验已取消",
+    "reconnecting": "连接中断，正在重连…",
+    "errors": {
+      "not_found": "测验不存在或已结束",
+      "oauth_failed": "GitHub 登录失败，请重试",
+      "NOT_IN_COURSE": "你不在课程表格中",
+      "TOO_LATE": "答题时间已到",
+      "ALREADY_ANSWERED": "答案已提交",
+      "WRONG_QUESTION": "该题已结束",
+      "QUIZ_FINISHED": "测验已结束",
+      "SESSION_REQUIRED": "请重新使用 GitHub 登录",
+      "network": "无法连接服务器",
+      "unknown": "出错了"
+    }
+  },
+  "quizAdmin": {
+    "title": "测验",
+    "back": "返回",
+    "chooseFile": "选择题目文件 (.md)",
+    "upload": "上传",
+    "uploaded": "测验已上传",
+    "empty": "暂无测验",
+    "run": "开始",
+    "preview": "题目",
+    "delete": "删除",
+    "close": "关闭",
+    "confirmDelete": "删除测验“{{id}}”？",
+    "points": "{{points}} 分",
+    "runNotFound": "未找到测验场次",
+    "fields": {
+      "title": "名称",
+      "shortName": "表格列名",
+      "shortNameHint": "与小组表第二行一致",
+      "maxPoints": "测验总分",
+      "seconds": "每题秒数"
+    },
+    "columns": {
+      "title": "测验",
+      "shortName": "列",
+      "questions": "题数",
+      "points": "分数",
+      "seconds": "秒"
+    },
+    "projector": {
+      "joined": "已加入：{{count}}",
+      "scan": "扫描二维码或打开链接：",
+      "start": "开始",
+      "finish": "结束",
+      "cancel": "取消",
+      "answered": "已作答 {{answered}} / {{joined}}",
+      "next": "下一题",
+      "toResults": "查看结果",
+      "summary": "参与人数：{{participants}}，平均分：{{average}} / {{max}}",
+      "writing": "正在写入表格…",
+      "written": "已写入：{{count}}",
+      "skipped": "未覆盖（单元格已有内容）：{{list}}",
+      "missingColumn": "缺少“{{column}}”列",
+      "retryWrite": "重新写入"
+    }
   }
 }

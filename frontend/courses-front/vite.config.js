@@ -12,7 +12,11 @@ export default defineConfig({
         secure: false,
         rewrite: (path) => {
           // Убираем /api/v1 для admin и courses управления (как делает Caddy в production)
-          if (path.startsWith('/api/v1/admin') || path.startsWith('/api/v1/courses')) {
+          if (
+            path.startsWith('/api/v1/admin') ||
+            path.startsWith('/api/v1/courses') ||
+            path.startsWith('/api/v1/quiz')
+          ) {
             return path.replace(/^\/api\/v1/, '');
           }
           // Убираем /api для публичных маршрутов

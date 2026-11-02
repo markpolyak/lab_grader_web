@@ -290,5 +290,79 @@
     "restored": "Версия восстановлена",
     "close": "Закрыть",
     "messagePlaceholder": "Почему восстанавливаете (необязательно)"
+  },
+  "quiz": {
+    "loading": "Загрузка…",
+    "signIn": "Войти через GitHub",
+    "signInHint": "Войдите один раз - в следующий раз QR-код сразу приведёт сюда",
+    "register": "Зарегистрироваться в группе",
+    "notInCourseHint": "Логин GitHub {{login}} не найден в таблице курса. Зарегистрируйтесь в своей группе и откройте QR-код снова.",
+    "waiting": "Ждём начала",
+    "questionOf": "Вопрос {{n}} из {{total}}",
+    "accepted": "Ответ принят",
+    "correct": "Верно!",
+    "wrong": "Неверно",
+    "noAnswer": "Ответа нет",
+    "finished": "Квиз завершён",
+    "score": "Ваш балл: {{score}} из {{max}}",
+    "cancelled": "Квиз отменён",
+    "reconnecting": "нет связи, переподключаемся…",
+    "errors": {
+      "not_found": "Квиз не найден или уже завершён",
+      "oauth_failed": "Не удалось войти через GitHub. Попробуйте ещё раз",
+      "NOT_IN_COURSE": "Вас нет в таблице курса",
+      "TOO_LATE": "Время на ответ вышло",
+      "ALREADY_ANSWERED": "Ответ уже принят",
+      "WRONG_QUESTION": "Этот вопрос уже не задан",
+      "QUIZ_FINISHED": "Квиз уже завершён",
+      "SESSION_REQUIRED": "Войдите через GitHub заново",
+      "network": "Нет связи с сервером",
+      "unknown": "Что-то пошло не так"
+    }
+  },
+  "quizAdmin": {
+    "title": "Квизы",
+    "back": "Назад",
+    "chooseFile": "Выбрать файл вопросов (.md)",
+    "upload": "Загрузить",
+    "uploaded": "Квиз загружен",
+    "empty": "Квизов пока нет",
+    "run": "Запустить",
+    "preview": "Вопросы",
+    "delete": "Удалить",
+    "close": "Закрыть",
+    "confirmDelete": "Удалить квиз «{{id}}»?",
+    "points": "{{points}} б.",
+    "runNotFound": "Запуск квиза не найден",
+    "fields": {
+      "title": "Название",
+      "shortName": "Столбец в таблице",
+      "shortNameHint": "как во второй строке листа группы",
+      "maxPoints": "Балл за квиз",
+      "seconds": "Секунд на вопрос"
+    },
+    "columns": {
+      "title": "Квиз",
+      "shortName": "Столбец",
+      "questions": "Вопросов",
+      "points": "Балл",
+      "seconds": "Секунд"
+    },
+    "projector": {
+      "joined": "подключились: {{count}}",
+      "scan": "Отсканируйте QR-код или откройте ссылку:",
+      "start": "Начать",
+      "finish": "Завершить",
+      "cancel": "Отменить",
+      "answered": "ответили {{answered}} из {{joined}}",
+      "next": "Дальше",
+      "toResults": "К результатам",
+      "summary": "Участников: {{participants}}, средний балл: {{average}} из {{max}}",
+      "writing": "Записываем баллы в таблицу…",
+      "written": "записано: {{count}}",
+      "skipped": "не перезаписаны (ячейка занята): {{list}}",
+      "missingColumn": "нет столбца «{{column}}»",
+      "retryWrite": "Повторить запись"
+    }
   }
 }

@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 const JOIN_REQUEST_TIMEOUT_MS = 10000;
 
 // Публичные данные для страницы создания репозитория. Сам OAuth намеренно не
