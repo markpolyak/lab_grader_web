@@ -652,6 +652,7 @@ class QuizRunManager:
         has ended (for the projector: after the write report is in).
         """
         last = None
+        last_content = None
         while True:
             # A deadline nobody acted on yet still flips the state for the viewer.
             if run.state == QUESTION and run.deadline is not None and self.clock() > run.deadline + ANSWER_GRACE_SECONDS:
@@ -659,7 +660,14 @@ class QuizRunManager:
             waiter = run.changed
             if run.version != last:
                 last = run.version
-                yield make(self.clock())
+                snapshot = make(self.clock())
+                # Another student's answer changes the version but not this
+                # student's view: 200 phones x 200 answers would otherwise be
+                # 40 000 identical events. `remaining_ms` alone does not count.
+                content = {k: v for k, v in snapshot.items() if k not in ("version", "remaining_ms")}
+                if content != last_content:
+                    last_content = content
+                    yield snapshot
                 if run.state == CANCELLED or (run.state == FINISHED and not run.writing):
                     return
             try:

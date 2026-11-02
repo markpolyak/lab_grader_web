@@ -143,6 +143,28 @@ docker compose logs backend | grep "GET /j/"
 curl -s -o /dev/null -H "X-Forwarded-For: 9.9.9.9" https://labgrader.markpolyak.ru/api/v1/j/aaaaaaaaaa
 ```
 
+### Квизы: SSE за обратным прокси
+
+Квизы передают состояние на телефоны и проектор через SSE
+(`/api/v1/quiz/{code}/events`, `/api/v1/admin/quiz-runs/{id}/events`) -
+долгие HTTP-соединения. Caddy `reverse_proxy` передаёт `text/event-stream`
+без буферизации; backend отвечает с `X-Accel-Buffering: no` и раз в 15 секунд
+шлёт пинг, чтобы соединение не закрывалось по простою. Проверить до первого
+квиза:
+
+```bash
+# события должны приходить сразу, а не пачкой в конце; Ctrl+C - выход
+curl -N https://labgrader.markpolyak.ru/api/v1/quiz/<code>/events
+```
+
+Состояние квиза живёт в памяти единственного процесса backend: не
+перезапускайте контейнер во время квиза (ответы останутся в
+`logs/quiz/<курс>/<run_id>.jsonl`, но баллы придётся переносить вручную).
+Нагрузку проверяет `scripts/quiz-load-test.py` на тестовом стенде.
+
+Необязательная переменная: `STUDENT_SESSION_MAX_AGE` - срок входа студента
+(по умолчанию 180 дней).
+
 ## Switching Between Branches
 
 ### Method 1: Using the Script (Recommended)

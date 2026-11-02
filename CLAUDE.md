@@ -42,6 +42,9 @@ LOG_LEVEL=INFO            # Logging level (optional)
 # Optional: course config storage - local courses/ (default) or a private GitHub repo
 COURSES_SOURCE=local      # github on the server, with COURSES_GITHUB_REPO (token: COURSES_GITHUB_TOKEN, else GITHUB_TOKEN)
 
+# Optional: how long a student stays signed in for quizzes (seconds, default 180 days)
+STUDENT_SESSION_MAX_AGE=15552000
+
 # Optional: GitHub logins (comma-separated) with access to every course in the admin panel
 SUPERADMIN_GITHUB_LOGINS=markpolyak
 
@@ -183,6 +186,29 @@ Course configs are read and written only through a `CourseStore`
 - History/restore exist only when `store.supports_history` (github); logos are served from the
   store at `/courses/logos/{name}`.
 
+## Lecture Quizzes
+
+Live multiple-choice quiz at the end of a lecture, scores written to the course spreadsheet
+(see `docs/QUIZ_PLAN.md`; teacher-facing description in `docs/PROJECT_DESCRIPTION.md`).
+
+- **Files**: `quizzes/{course_id}/{quiz_id}.md` in the `CourseStore` - a `course-maker`
+  `quiz_questions.md` bank with the parameters in a front matter. Parsing and scoring:
+  `grading/quiz.py` (structural parsing, fenced code is never structure; exactly 4 options and
+  one `✓` per variant; every error listed at once).
+- **Runs**: `grading/quiz_runs.py:QuizRunManager` (`main.QUIZ_RUNS`) - in memory, single backend
+  process, mutated only on the event loop under one `asyncio.Lock`. The server owns time
+  (deadline + 1 s grace); the correct answer is not in any snapshot before `reveal`. Option order
+  is shuffled per student with `random.Random(f"{run_id}:{login}:{i}")`.
+- **All quiz endpoints are `async def`**; Sheets and the store are called via `asyncio.to_thread`
+  (roster read on open / re-read for an unknown login after 60 s; score writing after finish).
+- **Student identity** - `student_session` cookie (signed JSON `{"login"}`, 180 days), issued by
+  `/join/callback` for a `state` with `purpose: "student"`. Never from the body or query.
+  Rate limits for join/answer are keyed by that login (`student_rate_key`) - a lecture hall is one NAT.
+- **SSE** sends full snapshots with a version; unchanged snapshots for a viewer are skipped; a
+  stream ends when the run has ended (projector: after the write report). Load test:
+  `scripts/quiz-load-test.py`.
+- Admin routes use `require_course_access`; a run of another course answers 404 like an unknown one.
+
 ## Team (group) Lab Assignments
 
 Labs with a `team` section in their config are done by teams: one repository per team, shared by
@@ -268,7 +294,7 @@ Designs are fully decided in the plans below; implement them as written, in this
 
 1. **Multiple teachers** - `docs/MULTI_TEACHER_PLAN.md`. Implemented - see Admin Access above.
 2. **Course config storage** - `docs/COURSE_STORAGE_PLAN.md`. Implemented - see Course Config Storage above.
-3. **Lecture quizzes** - `docs/QUIZ_PLAN.md`.
+3. **Lecture quizzes** - `docs/QUIZ_PLAN.md`. Implemented - see Lecture Quizzes above.
 
 ## CI/CD
 

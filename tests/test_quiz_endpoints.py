@@ -695,3 +695,28 @@ class TestStudentSignIn:
         same_nat = [request_with({"student_session": main_module._build_student_session(l)}) for l in ("a", "B")]
         assert [main_module.student_rate_key(r) for r in same_nat] == ["student:a", "student:b"]
         assert main_module.student_rate_key(request_with({})) == "10.0.0.1"
+
+
+@pytest.mark.anyio
+async def test_sse_skips_unchanged_student_snapshots(manager):
+    """Another student's answer must not send this student an identical snapshot."""
+    run = await manager.open("os", {}, "k5", make_quiz())
+    for login in ("alice", "Bob"):
+        await manager.join(run, login)
+    await manager.start(run)
+    seen = []
+
+    async def consume():
+        async for snap in manager.snapshots(run, lambda now: run.student_snapshot("alice", now), ping_seconds=5):
+            seen.append(snap)
+
+    task = asyncio.get_running_loop().create_task(consume())
+    await asyncio.sleep(0.01)
+    await manager.answer(run, "Bob", 0, 0)      # alice's view unchanged
+    await asyncio.sleep(0.01)
+    assert len(seen) == 1
+    await manager.answer(run, "alice", 0, 0)    # alice's own answer - sent
+    await asyncio.sleep(0.01)
+    assert len(seen) == 2 and seen[-1]["answer"] == 0
+    await manager.cancel(run)
+    await asyncio.wait_for(task, 2)
