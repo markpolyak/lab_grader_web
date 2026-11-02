@@ -3111,6 +3111,9 @@ def _quiz_summary(quiz_id: str, quiz) -> dict:
         "questions": len(quiz.questions),
         "max_points": format_points(s.max_points),
         "seconds_per_question": s.seconds_per_question,
+        "variants_per_student": s.variants_per_student,
+        # The most variants any question has - per-student variants need > 1
+        "max_variants": max((len(q.variants) for q in quiz.questions), default=0),
     }
 
 
@@ -3142,6 +3145,7 @@ async def admin_upload_quiz(
     short_name: str = Form("", alias="short-name"),
     max_points: str = Form("", alias="max-points"),
     seconds_per_question: str = Form("", alias="seconds-per-question"),
+    variants_per_student: str = Form("", alias="variants-per-student"),
     admin: AdminIdentity = Depends(require_course_access),
 ):
     """Parse and check the bank (§3.1), write it with the parameters in its front matter."""
@@ -3155,6 +3159,7 @@ async def admin_upload_quiz(
             key: value for key, value in {
                 "title": title, "short-name": short_name, "max-points": max_points,
                 "seconds-per-question": seconds_per_question,
+                "variants-per-student": variants_per_student,
             }.items() if str(value).strip()
         }
         quiz = parse_quiz(text, overrides)

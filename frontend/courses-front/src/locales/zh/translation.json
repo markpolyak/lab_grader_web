@@ -342,7 +342,8 @@
       "shortName": "表格列名",
       "shortNameHint": "与小组表第二行一致",
       "maxPoints": "测验总分",
-      "seconds": "每题秒数"
+      "seconds": "每题秒数",
+      "variantsPerStudent": "不同学生使用不同题目变体（考试）"
     },
     "columns": {
       "title": "测验",
@@ -365,7 +366,11 @@
       "written": "已写入：{{count}}",
       "skipped": "未覆盖（单元格已有内容）：{{list}}",
       "missingColumn": "缺少“{{column}}”列",
-      "retryWrite": "重新写入"
-    }
+      "retryWrite": "重新写入",
+      "ownVariants": "每位学生的题目变体不同",
+      "correctOf": "正确 {{correct}} / {{answered}}"
+    },
+    "variantsPerStudentMark": "考试：每题最多 {{count}} 个变体",
+    "variantsPerStudentNoVariants": "考试，但每题只有一个变体——所有人相同"
   }
 }

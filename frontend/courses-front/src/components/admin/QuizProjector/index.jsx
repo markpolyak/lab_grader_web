@@ -152,7 +152,39 @@ export const QuizProjector = () => {
         </div>
       )}
 
-      {(snap.state === "question" || snap.state === "reveal") && (
+      {(snap.state === "question" || snap.state === "reveal") && !snap.options && (
+        // Контрольная: у каждого студента свой вариант - общего текста нет
+        <div style={{ marginTop: 24 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span style={styles.muted}>
+              {t("quiz.questionOf", { n: snap.question + 1, total: snap.total })} ·{" "}
+              {t("quizAdmin.projector.answered", { answered: snap.answered, joined: snap.joined })}
+            </span>
+            {snap.state === "question" && <span style={styles.countdown}>{Math.ceil(remaining / 1000)}</span>}
+          </div>
+          <p style={styles.big}>{snap.label}</p>
+          <p style={styles.muted}>{t("quizAdmin.projector.ownVariants")}</p>
+          {snap.state === "reveal" && snap.by_variant && (
+            <table style={{ fontSize: 24, borderCollapse: "collapse" }}>
+              <tbody>
+                {snap.by_variant.map((v) => (
+                  <tr key={v.label}>
+                    <td style={{ padding: "4px 24px 4px 0" }}>{v.label}</td>
+                    <td>{t("quizAdmin.projector.correctOf", { correct: v.correct, answered: v.answered })}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {snap.state === "reveal" && (
+            <button style={{ ...styles.button("#1976d2"), marginTop: 16 }} onClick={() => act("next")}>
+              {snap.question + 1 < snap.total ? t("quizAdmin.projector.next") : t("quizAdmin.projector.toResults")}
+            </button>
+          )}
+        </div>
+      )}
+
+      {(snap.state === "question" || snap.state === "reveal") && snap.options && (
         <div style={{ marginTop: 24 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={styles.muted}>

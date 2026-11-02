@@ -15,6 +15,8 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Checkbox,
+  FormControlLabel,
 } from "@mui/material";
 import { QuizMarkdown } from "../../quiz-markdown";
 import { BackButton, Container, PageTitle, Panel, TableWrapper } from "../LabList/styled";
@@ -39,9 +41,8 @@ async function api(url, options) {
 // Значения формы из front matter файла, если он уже есть (§3.2).
 function readFrontMatter(text) {
   const match = text.match(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---/);
-  if (!match) return {};
   const values = {};
-  for (const line of match[1].split(/\r?\n/)) {
+  for (const line of match ? match[1].split(/\r?\n/) : []) {
     const m = line.match(/^([a-z-]+):\s*(.*?)\s*(#.*)?$/);
     if (m) values[m[1]] = m[2].replace(/^["']|["']$/g, "");
   }
@@ -50,7 +51,13 @@ function readFrontMatter(text) {
   return values;
 }
 
-const EMPTY_FORM = { title: "", "short-name": "", "max-points": "", "seconds-per-question": "20" };
+const EMPTY_FORM = {
+  title: "",
+  "short-name": "",
+  "max-points": "",
+  "seconds-per-question": "20",
+  "variants-per-student": false,
+};
 
 export const QuizList = () => {
   const { courseId } = useParams();
@@ -86,7 +93,12 @@ export const QuizList = () => {
     if (!picked) return;
     setFile(picked);
     setUploadErrors([]);
-    setForm({ ...EMPTY_FORM, ...readFrontMatter(await picked.text()) });
+    const found = readFrontMatter(await picked.text());
+    setForm({
+      ...EMPTY_FORM,
+      ...found,
+      "variants-per-student": String(found["variants-per-student"] || "").toLowerCase() === "true",
+    });
   };
 
   const upload = async () => {
@@ -94,7 +106,13 @@ export const QuizList = () => {
     setUploadErrors([]);
     const body = new FormData();
     body.append("file", file);
-    Object.entries(form).forEach(([key, value]) => body.append(key, value));
+    Object.entries(form).forEach(([key, value]) => {
+      if (typeof value === "boolean") {
+        if (value) body.append(key, "true");
+      } else {
+        body.append(key, value);
+      }
+    });
     try {
       await api(base, { method: "POST", body });
       setFile(null);
@@ -174,6 +192,15 @@ export const QuizList = () => {
                   style: { flex: "1 1 120px" },
                 })}
               </div>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={form["variants-per-student"]}
+                    onChange={(e) => setForm((prev) => ({ ...prev, "variants-per-student": e.target.checked }))}
+                  />
+                }
+                label={t("quizAdmin.fields.variantsPerStudent")}
+              />
               {uploadErrors.length > 0 && (
                 <Alert severity="error">
                   {uploadErrors.map((e) => (
@@ -209,6 +236,13 @@ export const QuizList = () => {
                   <TableRow key={quiz.id}>
                     <TableCell>
                       {quiz.title || quiz.id}
+                      {quiz.variants_per_student && (
+                        <div style={{ color: "#777", fontSize: 12 }}>
+                          {quiz.max_variants > 1
+                            ? t("quizAdmin.variantsPerStudentMark", { count: quiz.max_variants })
+                            : t("quizAdmin.variantsPerStudentNoVariants")}
+                        </div>
+                      )}
                       {quiz.error && <Alert severity="error">{quiz.error}</Alert>}
                     </TableCell>
                     <TableCell>{quiz.short_name}</TableCell>

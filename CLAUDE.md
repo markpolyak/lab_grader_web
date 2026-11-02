@@ -198,7 +198,10 @@ Live multiple-choice quiz at the end of a lecture, scores written to the course 
 - **Runs**: `grading/quiz_runs.py:QuizRunManager` (`main.QUIZ_RUNS`) - in memory, single backend
   process, mutated only on the event loop under one `asyncio.Lock`. The server owns time
   (deadline + 1 s grace); the correct answer is not in any snapshot before `reveal`. Option order
-  is shuffled per student with `random.Random(f"{run_id}:{login}:{i}")`.
+  is shuffled per student with `random.Random(f"{run_id}:{login}:{i}")`. With
+  `variants-per-student: true` (tests) each student also gets their own variant of every question
+  (`QuizRun.variant_index`, seeded by run/login/question); answers are checked against that variant
+  and the projector shows per-variant stats instead of the text.
 - **All quiz endpoints are `async def`**; Sheets and the store are called via `asyncio.to_thread`
   (roster read on open / re-read for an unknown login after 60 s; score writing after finish).
 - **Student identity** - `student_session` cookie (signed JSON `{"login"}`, 180 days), issued by

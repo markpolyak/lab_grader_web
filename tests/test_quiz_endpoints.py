@@ -543,7 +543,8 @@ class TestQuizFiles:
         response = upload(client, **{"seconds-per-question": "30"})
         assert response.status_code == 201
         assert response.json() == {"id": "lecture-5", "title": "Квиз 5", "short_name": "К5", "questions": 2,
-                                   "max_points": "2", "seconds_per_question": 30}
+                                   "max_points": "2", "seconds_per_question": 30,
+                                   "variants_per_student": False, "max_variants": 2}
         stored = (env / "quizzes" / "os" / "lecture-5.md").read_text(encoding="utf-8")
         assert stored.startswith("---\ntitle: Квиз 5\nshort-name: К5\n")
 
@@ -746,3 +747,124 @@ class TestQuizColumn:
         report = write_scores(FakeSpreadsheet(sheet), "12.11.2026", {"4431": [(entry, "0.5")]}, ",")
         assert report["4431"]["written"] == ["alice"]
         assert sheet.updates[0][0] == [{"range": "E3", "values": [["0,5"]]}]
+
+
+
+# ---------------------------------------------------------------------------
+# Tests (контрольные): a variant per student
+# ---------------------------------------------------------------------------
+
+BANK3 = """### Вопрос 1, 50%
+**Вариант А:** Первый А?
+- a ✓
+- b
+- c
+- d
+
+**Вариант Б:** Первый Б?
+- a
+- b ✓
+- c
+- d
+
+**Вариант В:** Первый В?
+- a
+- b
+- c ✓
+- d
+
+### Вопрос 2, 50%
+Общий второй?
+- a
+- b
+- c
+- d ✓
+"""
+
+
+def make_test_quiz(per_student=True):
+    return parse_quiz(BANK3, {"title": "КР1", "short-name": "КР1", "max-points": 10,
+                              "variants-per-student": "true" if per_student else ""})
+
+
+class TestVariantSetting:
+    def test_front_matter_round_trip(self):
+        quiz = make_test_quiz()
+        assert quiz.settings.variants_per_student is True
+        text = build_quiz_file(quiz.settings, quiz.body)
+        assert "variants-per-student: true" in text
+        assert parse_quiz(text).settings.variants_per_student is True
+
+    def test_off_by_default_and_not_written(self):
+        quiz = make_test_quiz(per_student=False)
+        assert quiz.settings.variants_per_student is False
+        assert "variants-per-student" not in build_quiz_file(quiz.settings, quiz.body)
+
+
+@pytest.mark.anyio
+class TestVariantsPerStudent:
+    @pytest.fixture
+    async def run(self, manager, recorder):
+        recorder.roster = roster_of(*[f"s{i}" for i in range(30)], read_at=0)
+        run = await manager.open("os", {}, "kr1", make_test_quiz())
+        for i in range(30):
+            await manager.join(run, f"s{i}")
+        await manager.start(run)
+        return run
+
+    async def test_stable_and_different(self, run):
+        indices = [run.variant_index(0, f"s{i}") for i in range(30)]
+        assert indices == [run.variant_index(0, f"S{i}") for i in range(30)]   # same after reconnect
+        assert len(set(indices)) == 3                                          # neighbours differ
+        assert {run.variant_index(1, f"s{i}") for i in range(30)} == {0}       # one variant - shared
+
+    async def test_student_sees_own_variant(self, run):
+        for i in range(30):
+            login = f"s{i}"
+            snap = run.student_snapshot(login, 0)
+            assert snap["text"] == run.variant(0, login).text
+            assert "correct" not in snap
+
+    async def test_answer_checked_against_own_variant(self, manager, run):
+        results = {}
+        for i in range(30):
+            login = f"s{i}"
+            results[login] = await manager.answer(run, login, 0, run.variant(0, login).correct)
+        assert all(results.values())
+        await manager.reveal_if_due(run, 0, force=True)
+        for i in range(30):
+            assert run.student_snapshot(f"s{i}", 0)["answered_correctly"] is True
+
+    async def test_projector_shows_no_text_and_stats_by_variant(self, manager, run):
+        snap = run.projector_snapshot(0)
+        assert snap["variants_per_student"] is True
+        assert "text" not in snap and "options" not in snap
+        assert snap["label"] == "Вопрос 1"
+        await manager.answer(run, "s0", 0, run.variant(0, "s0").correct)
+        await manager.reveal_if_due(run, 0, force=True)
+        by_variant = run.projector_snapshot(0)["by_variant"]
+        assert [v["label"] for v in by_variant] == ["Вариант А", "Вариант Б", "Вариант В"]
+        assert sum(v["answered"] for v in by_variant) == 1
+        assert sum(v["correct"] for v in by_variant) == 1
+        assert "correct" not in run.projector_snapshot(0)
+
+    async def test_shared_question_still_shown_on_projector(self, manager, run):
+        await manager.reveal_if_due(run, 0, force=True)
+        await manager.next(run)
+        snap = run.projector_snapshot(0)
+        assert snap["text"] == "Общий второй?"
+
+    async def test_log_records_variant(self, manager, run):
+        await manager.answer(run, "s1", 0, 0)
+        lines = [json.loads(l) for l in open(run.log.path, encoding="utf-8")]
+        answer = [l for l in lines if l["event"] == "answer"][0]
+        assert answer["variant"] == run.variant(0, "s1").label
+        assert lines[0]["variants"] == "per-student"
+
+
+def test_upload_with_variants_per_student(client):
+    as_teacher(client)
+    response = upload(client, name="kr1.md", text=BANK3, title="КР1", **{"variants-per-student": "on"})
+    assert response.status_code == 201
+    assert response.json()["variants_per_student"] is True
+    assert response.json()["max_variants"] == 3

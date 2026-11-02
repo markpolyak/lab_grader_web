@@ -339,7 +339,8 @@
       "shortName": "Spreadsheet column",
       "shortNameHint": "as in the second row of the group sheet",
       "maxPoints": "Points for the quiz",
-      "seconds": "Seconds per question"
+      "seconds": "Seconds per question",
+      "variantsPerStudent": "Different question variants for different students (test)"
     },
     "columns": {
       "title": "Quiz",
@@ -362,7 +363,11 @@
       "written": "written: {{count}}",
       "skipped": "not overwritten (cell taken): {{list}}",
       "missingColumn": "no \"{{column}}\" column",
-      "retryWrite": "Retry writing"
-    }
+      "retryWrite": "Retry writing",
+      "ownVariants": "Every student has their own variant of the question",
+      "correctOf": "correct {{correct}} of {{answered}}"
+    },
+    "variantsPerStudentMark": "test: up to {{count}} variants per question",
+    "variantsPerStudentNoVariants": "test, but every question has one variant - all the same"
   }
 }

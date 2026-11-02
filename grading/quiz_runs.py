@@ -248,12 +248,29 @@ class QuizRun:
     def total(self) -> int:
         return len(self.quiz.questions)
 
-    def variant(self, i: int):
-        return self.quiz.questions[i].variants[self.variant_choice[i]]
+    @property
+    def per_student(self) -> bool:
+        return self.quiz.settings.variants_per_student
+
+    def variant_index(self, i: int, login: str | None = None) -> int:
+        """
+        Which variant of question i this student gets: the run's common choice,
+        or - for a test (`variants-per-student`) - the student's own, stable
+        across reconnects.
+        """
+        count = len(self.quiz.questions[i].variants)
+        if not self.per_student or count == 1:
+            return self.variant_choice[i]
+        if not login:
+            raise ValueError("variants differ per student - a login is required")
+        return random.Random(f"{self.run_id}:{login.casefold()}:{i}:variant").randrange(count)
+
+    def variant(self, i: int, login: str | None = None):
+        return self.quiz.questions[i].variants[self.variant_index(i, login)]
 
     def option_order(self, login: str, i: int) -> list[int]:
         """Per-student shuffle, stable across reconnects (§5.3)."""
-        order = list(range(len(self.variant(i).options)))
+        order = list(range(len(self.variant(i, login or "-").options)))
         random.Random(f"{self.run_id}:{login.casefold()}:{i}").shuffle(order)
         return order
 
@@ -294,7 +311,7 @@ class QuizRun:
         data["joined"] = participant is not None
         if self.state in (QUESTION, REVEAL):
             i = self.question_index
-            variant = self.variant(i)
+            variant = self.variant(i, login or "-")
             order = self.option_order(login or "", i)
             data["text"] = variant.text
             data["options"] = [{"id": o, "text": variant.options[o]} for o in order]
@@ -319,9 +336,28 @@ class QuizRun:
             "joined": len(self.participants),
             "warnings": self.warnings(),
         })
-        if self.state in (QUESTION, REVEAL):
+        data["variants_per_student"] = self.per_student
+        if self.state in (QUESTION, REVEAL) and self.per_student and len(self.quiz.questions[self.question_index].variants) > 1:
+            # No common text to show: everyone has their own variant. The
+            # projector shows progress, then how each variant went.
             i = self.question_index
-            variant = self.variant(i)
+            data["label"] = self.quiz.questions[i].label
+            data["answered"] = sum(1 for p in self.participants.values() if i in p.answers)
+            if self.state == REVEAL:
+                stats = {}
+                for p in self.participants.values():
+                    v = self.variant_index(i, p.entry.login)
+                    row = stats.setdefault(v, {"answered": 0, "correct": 0})
+                    if i in p.answers:
+                        row["answered"] += 1
+                        row["correct"] += int(i in p.correct)
+                data["by_variant"] = [
+                    {"label": variant.label or str(v + 1), **stats.get(v, {"answered": 0, "correct": 0})}
+                    for v, variant in enumerate(self.quiz.questions[i].variants)
+                ]
+        elif self.state in (QUESTION, REVEAL):
+            i = self.question_index
+            variant = self.variant(i, "-")
             data["text"] = variant.text
             data["options"] = [
                 {"id": o, "letter": OPTION_LETTERS[o], "text": text} for o, text in enumerate(variant.options)
@@ -465,7 +501,8 @@ class QuizRunManager:
             self._course_info[run_id] = course_info
             run.log.write(
                 "open", quiz_id=quiz_id, settings=quiz.settings.to_front_matter(),
-                variants=[q.variants[v].label for q, v in zip(quiz.questions, run.variant_choice)],
+                variants="per-student" if quiz.settings.variants_per_student
+                else [q.variants[v].label for q, v in zip(quiz.questions, run.variant_choice)],
                 roster_size=len(roster.entries), sheets_without_column=roster.sheets_without_column,
             )
             return run
@@ -642,7 +679,7 @@ class QuizRunManager:
                 raise QuizRunError("TOO_LATE", 410, "Время на ответ вышло")
             if run.state != QUESTION or question != run.question_index:
                 raise QuizRunError("WRONG_QUESTION", 400, "Этот вопрос сейчас не задан")
-            variant = run.variant(question)
+            variant = run.variant(question, participant.entry.login)
             if not isinstance(option, int) or not 0 <= option < len(variant.options):
                 raise QuizRunError("WRONG_OPTION", 400, "Нет такого варианта ответа")
             if question in participant.answers:
@@ -657,7 +694,8 @@ class QuizRunManager:
 
     def _log_answer(self, run, participant, question, option, received, accepted, correct=None):
         run.log.write(
-            "answer", login=participant.entry.login, question=question, option=option,
+            "answer", login=participant.entry.login, question=question,
+            variant=run.variant(question, participant.entry.login).label, option=option,
             received=received, accepted=accepted, correct=correct,
         )
 

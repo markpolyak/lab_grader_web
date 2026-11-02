@@ -82,14 +82,21 @@ class QuizSettings:
     short_name: str
     max_points: float
     seconds_per_question: int = SECONDS_DEFAULT
+    # A test: each student gets their own variant (А/Б/...) of every question,
+    # so a neighbour's screen does not give the answer away. Off - one variant
+    # for everybody, picked when the run is opened.
+    variants_per_student: bool = False
 
     def to_front_matter(self) -> dict:
-        return {
+        data = {
             "title": self.title,
             "short-name": self.short_name,
             "max-points": self.max_points,
             "seconds-per-question": self.seconds_per_question,
         }
+        if self.variants_per_student:
+            data["variants-per-student"] = True
+        return data
 
 
 @dataclass(frozen=True)
@@ -174,7 +181,17 @@ def settings_from(values: dict, default_title: str | None = None) -> QuizSetting
         raise QuizFormatError(errors)
     if max_points == int(max_points):
         max_points = int(max_points)
-    return QuizSettings(title=title, short_name=short_name, max_points=max_points, seconds_per_question=seconds)
+    return QuizSettings(
+        title=title, short_name=short_name, max_points=max_points, seconds_per_question=seconds,
+        variants_per_student=_as_bool(values.get("variants-per-student")),
+    )
+
+
+def _as_bool(value) -> bool:
+    """YAML true/false, or a form field: "true", "on", "1"."""
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in ("true", "on", "1", "yes", "да")
 
 
 def quiz_id_from_filename(filename: str) -> str:

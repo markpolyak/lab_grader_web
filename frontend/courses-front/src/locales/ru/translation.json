@@ -339,7 +339,8 @@
       "shortName": "Столбец в таблице",
       "shortNameHint": "как во второй строке листа группы",
       "maxPoints": "Балл за квиз",
-      "seconds": "Секунд на вопрос"
+      "seconds": "Секунд на вопрос",
+      "variantsPerStudent": "Разные варианты вопроса разным студентам (контрольная)"
     },
     "columns": {
       "title": "Квиз",
@@ -362,7 +363,11 @@
       "written": "записано: {{count}}",
       "skipped": "не перезаписаны (ячейка занята): {{list}}",
       "missingColumn": "нет столбца «{{column}}»",
-      "retryWrite": "Повторить запись"
-    }
+      "retryWrite": "Повторить запись",
+      "ownVariants": "У каждого студента свой вариант вопроса",
+      "correctOf": "верно {{correct}} из {{answered}}"
+    },
+    "variantsPerStudentMark": "контрольная: до {{count}} вариантов у вопроса",
+    "variantsPerStudentNoVariants": "контрольная, но у вопросов по одному варианту - всем одинаковые"
   }
 }
