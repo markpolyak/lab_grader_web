@@ -275,7 +275,8 @@
     "conflict": "其他用户已修改此课程配置。请复制您的修改并刷新页面",
     "keepEditing": "保留我的修改",
     "loadLatest": "加载最新版本",
-    "unavailable": "配置存储不可用，修改未保存"
+    "unavailable": "配置存储不可用，修改未保存",
+    "messagePlaceholder": "修改说明（可选，将显示在版本历史中）"
   },
   "courseHistory": {
     "button": "历史",
@@ -290,6 +291,7 @@
     "confirmRestore": "此版本的内容将保存为课程的新版本。是否继续？",
     "restoreConfirmButton": "恢复",
     "restored": "版本已恢复",
-    "close": "关闭"
+    "close": "关闭",
+    "messagePlaceholder": "恢复原因（可选）"
   }
 }

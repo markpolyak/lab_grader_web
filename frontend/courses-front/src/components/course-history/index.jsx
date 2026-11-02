@@ -12,6 +12,7 @@ import {
   List,
   ListItemButton,
   ListItemText,
+  TextField,
 } from "@mui/material";
 
 // История версий файла курса (docs/COURSE_STORAGE_PLAN.md §11): список
@@ -47,6 +48,7 @@ export const CourseHistoryDialog = ({ courseId, onClose, onRestored, onError }) 
   const [selected, setSelected] = useState(null); // {sha, content}
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState("");
 
   const base = `/api/v1/admin/courses/${encodeURIComponent(courseId)}`;
 
@@ -89,7 +91,11 @@ export const CourseHistoryDialog = ({ courseId, onClose, onRestored, onError }) 
     fetchJson(`${base}/restore`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ sha: selected.sha, version: currentVersion }),
+      body: JSON.stringify({
+        sha: selected.sha,
+        version: currentVersion,
+        message: restoreMessage.trim() || null,
+      }),
     })
       .then(() => onRestored())
       .catch((err) => {
@@ -142,7 +148,19 @@ export const CourseHistoryDialog = ({ courseId, onClose, onRestored, onError }) 
           />
         )}
 
-        {confirming && <p style={{ marginTop: 12 }}>{t("courseHistory.confirmRestore")}</p>}
+        {confirming && (
+          <>
+            <p style={{ marginTop: 12 }}>{t("courseHistory.confirmRestore")}</p>
+            <TextField
+              size="small"
+              fullWidth
+              value={restoreMessage}
+              onChange={(e) => setRestoreMessage(e.target.value)}
+              placeholder={t("courseHistory.messagePlaceholder")}
+              inputProps={{ maxLength: 200 }}
+            />
+          </>
+        )}
       </DialogContent>
       <DialogActions>
         {selected && !confirming && (

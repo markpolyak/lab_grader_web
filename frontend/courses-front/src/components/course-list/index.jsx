@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
-import { Select, MenuItem } from "@mui/material";
+import { Select, MenuItem, TextField } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -47,6 +47,9 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   // сохранённая за это время, дала 409, а не была молча затёрта.
   const [editVersion, setEditVersion] = useState(null);
   const [conflictMessage, setConflictMessage] = useState(null);
+  // Необязательное описание правки - становится сообщением коммита в
+  // репозитории конфигураций вместо безликого «правка через админку».
+  const [commitMessage, setCommitMessage] = useState("");
   const [historyCourseId, setHistoryCourseId] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [snackbar, setSnackbar] = useState({
@@ -151,6 +154,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
       setEditContent(data.content);
       setOriginalContent(data.content);
       setEditVersion(data.version);
+      setCommitMessage("");
     } catch (error) {
       console.error(error);
       showSnackbar(error.message || t("errorLoadingCourseForEdit"), "error");
@@ -163,7 +167,11 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ content: editContent, version: editVersion }),
+        body: JSON.stringify({
+          content: editContent,
+          version: editVersion,
+          message: commitMessage.trim() || null,
+        }),
       });
 
       if (response.ok) {
@@ -455,6 +463,14 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                   zIndex: 2100,
                 }}
               >
+                <TextField
+                  size="small"
+                  value={commitMessage}
+                  onChange={(e) => setCommitMessage(e.target.value)}
+                  placeholder={t("courseStore.messagePlaceholder")}
+                  inputProps={{ maxLength: 200 }}
+                  style={{ flexBasis: "100%", backgroundColor: "#fff" }}
+                />
                 <Button
                   onClick={handleSave}
                   style={{ backgroundColor: colors.save, minWidth: "120px" }}

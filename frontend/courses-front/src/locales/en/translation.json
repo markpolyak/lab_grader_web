@@ -272,7 +272,8 @@
     "conflict": "Someone else changed this course configuration. Copy your edits and reload the page",
     "keepEditing": "Keep my edits",
     "loadLatest": "Load the latest version",
-    "unavailable": "The configuration store is unavailable, changes were not saved"
+    "unavailable": "The configuration store is unavailable, changes were not saved",
+    "messagePlaceholder": "What changed (optional, shown in version history)"
   },
   "courseHistory": {
     "button": "History",
@@ -287,6 +288,7 @@
     "confirmRestore": "The content of this version will be saved as a new version of the course. Continue?",
     "restoreConfirmButton": "Restore",
     "restored": "Version restored",
-    "close": "Close"
+    "close": "Close",
+    "messagePlaceholder": "Why restore (optional)"
   }
 }

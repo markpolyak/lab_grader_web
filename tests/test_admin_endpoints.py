@@ -1182,3 +1182,39 @@ class TestLogoRoute:
         assert client.get("/courses/logos/none.png").status_code == 404
         assert client.get("/courses/logos/..%2Findex.yaml").status_code == 404
         assert client.get("/courses/logos/.hidden").status_code == 404
+
+
+class TestCommitMessage:
+    def save(self, client, message=None):
+        version = client.get("/courses/test-course/edit").json()["version"]
+        body = {"content": "course:\n  name: X\n", "version": version}
+        if message is not None:
+            body["message"] = message
+        return client.put("/courses/test-course/edit", json=body)
+
+    def test_default_message(self, client, history_store):
+        client.cookies.set("admin_session", valid_cookie())
+        assert self.save(client).status_code == 200
+        assert history_store.writes[-1][2] == "test-course: правка через админку"
+
+    def test_custom_message(self, client, history_store):
+        client.cookies.set("admin_session", valid_cookie())
+        assert self.save(client, "  Добавлен преподаватель\nivanov ").status_code == 200
+        assert history_store.writes[-1][2] == "test-course: Добавлен преподаватель ivanov"
+
+    def test_blank_message_is_default(self, client, history_store):
+        client.cookies.set("admin_session", valid_cookie())
+        self.save(client, "   ")
+        assert history_store.writes[-1][2] == "test-course: правка через админку"
+
+    def test_long_message_is_cut(self, client, history_store):
+        client.cookies.set("admin_session", valid_cookie())
+        self.save(client, "я" * 500)
+        assert history_store.writes[-1][2] == "test-course: " + "я" * main_module.COMMIT_MESSAGE_MAX_LENGTH
+
+    def test_restore_message(self, client, history_store):
+        client.cookies.set("admin_session", valid_cookie())
+        version = client.get("/courses/test-course/edit").json()["version"]
+        client.post("/admin/courses/test-course/restore",
+                    json={"sha": OLD_SHA, "version": version, "message": "откат ошибочной правки"})
+        assert history_store.writes[-1][2] == "test-course: откат ошибочной правки"

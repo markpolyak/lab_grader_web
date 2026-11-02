@@ -887,11 +887,26 @@ def _parse_yaml_or_none(content: bytes):
         return None
 
 
+COMMIT_MESSAGE_MAX_LENGTH = 200
+
+
+def _commit_message(course_id: str, default: str, custom: str | None) -> str:
+    """
+    `{course_id}: {what}` - the teacher's own description of the change when
+    given, the generic one otherwise. One line: the course prefix keeps
+    `git log` of the config repo readable whoever wrote the message.
+    """
+    text = " ".join((custom or "").split())
+    return f"{course_id}: {text[:COMMIT_MESSAGE_MAX_LENGTH] if text else default}"
+
+
 class EditCourseRequest(BaseModel):
     content: str
     # Version of the file the editor loaded (GET .../edit) - a save over a
     # newer version is a conflict, not a silent overwrite.
     version: str
+    # Optional description of the change - becomes the commit message.
+    message: str | None = None
 
 
 @app.get("/courses/{course_id}/edit")
@@ -1031,7 +1046,7 @@ def edit_course_put(
     _store_write(
         {filename: data.content.encode("utf-8")},
         {filename: data.version},
-        f"{course_id}: правка через админку",
+        _commit_message(course_id, "правка через админку", data.message),
         admin,
     )
     return {"message": "Изменения успешно сохранены"}
@@ -1095,6 +1110,7 @@ class RestoreCourseRequest(BaseModel):
     sha: str
     # Version of the current file the teacher saw, as for a save
     version: str
+    message: str | None = None
 
 
 @app.post("/admin/courses/{course_id}/restore")
@@ -1114,7 +1130,7 @@ def course_restore(
     _store_write(
         {filename: old_version.content},
         {filename: body.version},
-        f"{course_id}: восстановлена версия {body.sha[:7]}",
+        _commit_message(course_id, f"восстановлена версия {body.sha[:7]}", body.message),
         admin,
     )
     return {"message": "Версия восстановлена"}

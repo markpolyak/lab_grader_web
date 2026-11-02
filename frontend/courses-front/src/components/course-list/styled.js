@@ -97,8 +97,17 @@ export const ButtonGroup = styled.div`
   }
 `;
 
+// Card buttons size to their label: the shared 89px width cut off long Russian
+// labels ("Редактировать", "Лабораторные работы").
+const cardButtonSize = `
+  width: auto;
+  min-width: 89px;
+  white-space: nowrap;
+`;
+
 export const Button = styled.button`
   ${buttonStyles}
+  ${cardButtonSize}
   color: ${colors.buttonBorder};
 
   &:hover {
@@ -123,6 +132,7 @@ export const ButtonBack = styled.button`
 
 export const SelectButton = styled.button`
   ${buttonStyles}
+  ${cardButtonSize}
   background: ${colors.buttonBackground};
   color: ${colors.buttonText};
 

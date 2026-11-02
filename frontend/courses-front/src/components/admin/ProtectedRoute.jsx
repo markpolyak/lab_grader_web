@@ -31,9 +31,12 @@ const AdminHeader = ({ identity }) => {
         border: "1px solid #ddd",
         fontSize: "13px",
         color: "#333",
+        // Не заезжать под выбор языка справа на узком экране
+        maxWidth: "calc(100vw - 180px)",
+        boxSizing: "border-box",
       }}
     >
-      <span>
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: 0 }}>
         {t("adminAuth.signedInAs", { login: identity.login })} ·{" "}
         {t(`adminAuth.roles.${identity.role}`, { defaultValue: identity.role })}
       </span>
@@ -48,6 +51,7 @@ const AdminHeader = ({ identity }) => {
           padding: "4px 8px",
           cursor: "pointer",
           fontSize: "12px",
+          flexShrink: 0,
         }}
       >
         {t("adminAuth.logout")}
