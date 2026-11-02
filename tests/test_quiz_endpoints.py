@@ -868,3 +868,131 @@ def test_upload_with_variants_per_student(client):
     assert response.status_code == 201
     assert response.json()["variants_per_student"] is True
     assert response.json()["max_variants"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Recovery after a backend restart: runs rebuilt from the answer log
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+class TestRecovery:
+    @pytest.fixture
+    def restart(self, recorder, clock, tmp_path):
+        """A new manager on the same log directory - what a restarted backend gets."""
+        def make():
+            return QuizRunManager(recorder.read, recorder.write, log_dir=str(tmp_path / "logs"), clock=clock)
+        return make
+
+    async def course(self, course_id):
+        return {"name": course_id}
+
+    def loader(self, course_id):
+        return {"name": course_id.upper(), "google": {"spreadsheet": "s"}}
+
+    async def test_continues_mid_question(self, manager, restart, clock):
+        run = await manager.open("os", {"name": "ОС"}, "k5", make_quiz())
+        for login in ("alice", "Bob"):
+            await manager.join(run, login)
+        await manager.start(run)
+        clock.now += 3
+        await manager.answer(run, "alice", 0, run.variant(0).correct)
+
+        new = restart()
+        (recovered,) = await new.recover(self.loader)
+        assert (recovered.run_id, recovered.code) == (run.run_id, run.code)
+        assert new.by_student_code(run.code) is recovered
+        assert (recovered.state, recovered.question_index) == ("question", 0)
+        assert recovered.deadline == run.deadline
+        assert recovered.participants["alice"].answers == {0: run.variant(0).correct}
+        assert recovered.participants["alice"].correct == {0}
+        assert recovered.variant(0).text == run.variant(0).text
+
+        # The quiz goes on: Bob answers, the first answer of alice stays final
+        await new.answer(recovered, "Bob", 0, 1)
+        with pytest.raises(QuizRunError) as e:
+            await new.answer(recovered, "alice", 0, 1)
+        assert e.value.code == "ALREADY_ANSWERED"
+        await new.reveal_if_due(recovered, 0, force=True)
+        await new.next(recovered)
+        assert recovered.question_index == 1
+
+    async def test_deadline_passed_during_restart_reveals(self, manager, restart, clock):
+        run = await manager.open("os", {}, "k5", make_quiz(seconds=10))
+        await manager.start(run)
+        clock.now += 60
+        (recovered,) = await restart().recover(self.loader)
+        assert recovered.state == "reveal"
+
+    async def test_finished_but_not_written_is_written(self, manager, restart, recorder, clock):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.join(run, "alice")
+        await manager.start(run)
+        await manager.answer(run, "alice", 0, run.variant(0).correct)
+        # finish logged, but the process dies before the write
+        async with manager.lock:
+            manager._cancel_timer(run)
+            run.state = "finished"
+            run.ended_at = clock.now
+            run.log.write("finish", asked=1, scores={})
+        assert recorder.writes == []
+
+        new = restart()
+        (recovered,) = await new.recover(self.loader)
+        await settle()
+        assert recorder.writes == [{"4431": [("alice", "1")]}]
+        assert recovered.write_report["4431"]["written"] == ["alice"]
+
+    async def test_new_joins_reread_the_roster(self, manager, restart, recorder):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.join(run, "alice")
+        new = restart()
+        (recovered,) = await new.recover(self.loader)
+        reads = recorder.reads
+        await new.join(recovered, "carol")      # was not a participant before the restart
+        assert recorder.reads == reads + 1
+
+    async def test_per_student_variants_survive(self, manager, restart, recorder):
+        recorder.roster = roster_of(*[f"s{i}" for i in range(10)], read_at=0)
+        run = await manager.open("os", {}, "kr1", make_test_quiz())
+        await manager.start(run)
+        (recovered,) = await restart().recover(self.loader)
+        assert [recovered.variant_index(0, f"s{i}") for i in range(10)] == \
+               [run.variant_index(0, f"s{i}") for i in range(10)]
+
+    async def test_quiz_text_is_taken_from_the_log(self, manager, restart):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        (recovered,) = await restart().recover(self.loader)
+        assert recovered.quiz.settings == run.quiz.settings
+        assert [q.label for q in recovered.quiz.questions] == [q.label for q in run.quiz.questions]
+
+    async def test_ended_runs(self, manager, restart, clock):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.join(run, "alice")
+        await manager.start(run)
+        await manager.finish(run)
+        await settle()
+        # Within the hour: back read-only, the score is still shown
+        (recovered,) = await restart().recover(self.loader)
+        assert recovered.state == "finished"
+        assert recovered.student_snapshot("alice", clock.now)["score"] == "0"
+        # Long over and written: not recovered at all
+        clock.now += 2 * 3600
+        assert await restart().recover(self.loader) == []
+
+    async def test_cancelled_run_does_not_block_course(self, manager, restart):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.cancel(run)
+        new = restart()
+        await new.recover(self.loader)
+        await new.open("os", {}, "k5", make_quiz())     # no 409
+
+    async def test_broken_line_skipped_and_no_duplicates(self, manager, restart):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.join(run, "alice")
+        with open(run.log.path, "a", encoding="utf-8") as f:
+            f.write("{not json\n")
+        new = restart()
+        (recovered,) = await new.recover(self.loader)
+        assert "alice" in recovered.participants
+        assert await new.recover(self.loader) == []     # already there

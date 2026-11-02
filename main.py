@@ -16,6 +16,7 @@ import base64
 import logging
 import threading
 import asyncio
+from contextlib import asynccontextmanager
 import time
 from datetime import datetime
 from urllib.parse import quote, urlencode
@@ -144,7 +145,16 @@ logger = logging.getLogger(__name__)
 logger.info(f"Logging initialized. Log file: {log_file}")
 
 load_dotenv()
-app = FastAPI()
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    # Defined further down; looked up when the app starts.
+    await recover_quiz_runs()
+    yield
+
+
+app = FastAPI(lifespan=_lifespan)
 COURSES_DIR = "courses"
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 
@@ -2980,6 +2990,20 @@ def _write_quiz_scores(course_info: dict, short_name: str, scores: dict):
 
 
 QUIZ_RUNS = QuizRunManager(roster_reader=_read_quiz_roster, score_writer=_write_quiz_scores, log_dir=LOG_DIR)
+
+
+async def recover_quiz_runs():
+    """
+    A restart during a quiz loses only seconds: runs are rebuilt from their
+    answer logs (`{LOG_DIR}/quiz/...`), phones and the projector reconnect.
+    """
+    try:
+        recovered = await QUIZ_RUNS.recover(get_course_by_id)
+    except Exception:
+        logger.exception("Quiz recovery failed")
+        return
+    if recovered:
+        logger.warning(f"Recovered {len(recovered)} quiz run(s) after restart")
 
 
 def _quiz_error(e: QuizRunError) -> JSONResponse:

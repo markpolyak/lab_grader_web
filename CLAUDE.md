@@ -207,6 +207,10 @@ Live multiple-choice quiz at the end of a lecture, scores written to the course 
 - **Student identity** - `student_session` cookie (signed JSON `{"login"}`, 180 days), issued by
   `/join/callback` for a `state` with `purpose: "student"`. Never from the body or query.
   Rate limits for join/answer are keyed by that login (`student_rate_key`) - a lecture hall is one NAT.
+- **Recovery**: every state change is appended to `{LOG_DIR}/quiz/{course}/{run_id}.jsonl` (the
+  `open` event carries the quiz text, code and drawn variants); `QuizRunManager.recover` replays
+  the logs of the last 24 h at startup (FastAPI lifespan): unfinished runs continue, a finished
+  but unwritten run is written. A new state change must be logged with enough data to replay it.
 - **SSE** sends full snapshots with a version; unchanged snapshots for a viewer are skipped; a
   stream ends when the run has ended (projector: after the write report). Load test:
   `scripts/quiz-load-test.py`.

@@ -25,7 +25,7 @@ from typing import Callable
 
 from gspread.utils import ValueInputOption, rowcol_to_a1
 
-from grading.quiz import Quiz, format_points, student_score
+from grading.quiz import Quiz, QuizFormatError, build_quiz_file, format_points, parse_quiz, student_score
 from grading.score import format_score
 from grading.sheets_client import cell_from_grid
 
@@ -500,7 +500,12 @@ class QuizRunManager:
             self.by_code[run.code] = run_id
             self._course_info[run_id] = course_info
             run.log.write(
-                "open", quiz_id=quiz_id, settings=quiz.settings.to_front_matter(),
+                # Everything needed to rebuild the run after a backend restart
+                # (recover): the quiz as it was at opening, the variants drawn.
+                "open", run_id=run_id, code=run.code, course_id=course_id, course_name=run.course_name,
+                created_at=run.created_at, quiz_text=build_quiz_file(quiz.settings, quiz.body),
+                variant_choice=run.variant_choice,
+                quiz_id=quiz_id, settings=quiz.settings.to_front_matter(),
                 variants="per-student" if quiz.settings.variants_per_student
                 else [q.variants[v].label for q, v in zip(quiz.questions, run.variant_choice)],
                 roster_size=len(roster.entries), sheets_without_column=roster.sheets_without_column,
@@ -661,7 +666,7 @@ class QuizRunManager:
             if participant is None:
                 participant = Participant(entry=entry, joined_at=self.clock())
                 run.participants[key] = participant
-                run.log.write("join", login=entry.login, group=entry.group)
+                run.log.write("join", login=entry.login, group=entry.group, row=entry.row, name=entry.name)
                 run.bump()
             return participant
 
@@ -698,6 +703,145 @@ class QuizRunManager:
             variant=run.variant(question, participant.entry.login).label, option=option,
             received=received, accepted=accepted, correct=correct,
         )
+
+    # -- recovery after a restart ---------------------------------------------
+
+    async def recover(self, course_loader: Callable[[str], dict], max_age_seconds: float = 24 * 3600) -> list[QuizRun]:
+        """
+        Rebuild runs from their answer logs after a backend restart.
+
+        Runs that had not ended continue where they were (a question whose
+        deadline passed during the restart is revealed); a finished run whose
+        scores were not written yet is written now; a run ended less than an
+        hour ago comes back read-only, so students still see their score.
+        Phones and the projector reconnect by themselves (EventSource).
+
+        Args:
+            course_loader: course_id -> course_info (blocking, run in a thread)
+        """
+        if not self.log_dir:
+            return []
+        root = os.path.join(self.log_dir, "quiz")
+        if not os.path.isdir(root):
+            return []
+        now = self.clock()
+        recovered = []
+        for course_dir in sorted(os.listdir(root)):
+            directory = os.path.join(root, course_dir)
+            if not os.path.isdir(directory):
+                continue
+            for filename in sorted(os.listdir(directory)):
+                path = os.path.join(directory, filename)
+                if not filename.endswith(".jsonl") or now - os.path.getmtime(path) > max_age_seconds:
+                    continue
+                try:
+                    run = await self._recover_one(path, course_loader, now)
+                except Exception:
+                    logger.exception(f"Quiz recovery: {path} could not be replayed")
+                    continue
+                if run is not None:
+                    recovered.append(run)
+        return recovered
+
+    async def _recover_one(self, path: str, course_loader, now: float) -> QuizRun | None:
+        events = []
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    events.append(json.loads(line))
+                except ValueError:
+                    logger.warning(f"Quiz recovery: unreadable line in {path} skipped")
+        if not events or events[0].get("event") != "open" or "quiz_text" not in events[0]:
+            return None
+        opened = events[0]
+        if opened["run_id"] in self.runs:
+            return None
+
+        ended_at = next((e["ts"] for e in events if e["event"] in ("finish", "cancel")), None)
+        written = any(e["event"] == "write" for e in events)
+        if ended_at is not None and written and now - ended_at > FINISHED_CODE_TTL_SECONDS:
+            return None  # long over and nothing left to do
+
+        try:
+            quiz = parse_quiz(opened["quiz_text"])
+        except QuizFormatError as e:
+            logger.error(f"Quiz recovery: {path}: the quiz no longer parses: {e}")
+            return None
+
+        course_info = {}
+        try:
+            course_info = await asyncio.to_thread(course_loader, opened["course_id"])
+        except Exception as e:
+            logger.warning(f"Quiz recovery: course {opened['course_id']} not loaded ({e}); scores cannot be written")
+
+        async with self.lock:
+            if self.active_for_course(opened["course_id"]) and ended_at is None:
+                logger.warning(f"Quiz recovery: course {opened['course_id']} already has a run, {path} skipped")
+                return None
+            run = QuizRun(
+                run_id=opened["run_id"],
+                code=opened["code"],
+                course_id=opened["course_id"],
+                course_name=opened.get("course_name", opened["course_id"]),
+                quiz_id=opened.get("quiz_id", ""),
+                quiz=quiz,
+                variant_choice=list(opened["variant_choice"]),
+                # Only the participants are known; anyone else re-reads the
+                # sheets on joining (read_at=0 makes the 60 s rule pass).
+                roster=Roster(entries={}, sheets_without_column=list(opened.get("sheets_without_column", [])),
+                              read_at=0.0),
+                log=RunLog(self.log_dir, opened["course_id"], opened["run_id"], self.clock),
+                created_at=opened.get("created_at", opened["ts"]),
+            )
+            report = None
+            for e in events[1:]:
+                kind = e.get("event")
+                if kind == "join":
+                    entry = RosterEntry(login=e["login"], group=e["group"], row=e.get("row", 0), name=e.get("name", ""))
+                    run.roster.entries[entry.login.casefold()] = entry
+                    run.participants.setdefault(entry.login.casefold(), Participant(entry=entry, joined_at=e["ts"]))
+                elif kind == "question":
+                    run.state, run.question_index = QUESTION, e["question"]
+                    run.asked = e["question"] + 1
+                    run.deadline = e["deadline"]
+                elif kind == "reveal":
+                    run.state = REVEAL
+                elif kind == "answer" and e.get("accepted"):
+                    participant = run.participants.get(e["login"].casefold())
+                    if participant is not None:
+                        participant.answers[e["question"]] = e["option"]
+                        if e.get("correct"):
+                            participant.correct.add(e["question"])
+                elif kind == "finish":
+                    run.state, run.ended_at = FINISHED, e["ts"]
+                elif kind == "cancel":
+                    run.state, run.ended_at = CANCELLED, e["ts"]
+                elif kind == "write":
+                    report = _merge_reports(report, e.get("report") or {})
+            run.write_report = report
+
+            self.runs[run.run_id] = run
+            self.by_code[run.code] = run.run_id
+            self._course_info[run.run_id] = course_info
+            run.log.write("recover", state=run.state, question=run.question_index,
+                          participants=len(run.participants))
+            logger.warning(
+                f"Quiz run {run.run_id} ({run.course_id}/{run.quiz_id}) recovered after restart: "
+                f"{run.state}, question {run.question_index + 1}, {len(run.participants)} participants"
+            )
+
+            if run.state == QUESTION:
+                if self.clock() > run.deadline + ANSWER_GRACE_SECONDS:
+                    self._expire_locked(run)
+                else:
+                    i = run.question_index
+                    run.reveal_task = asyncio.get_running_loop().create_task(
+                        self._reveal_later(run, i, run.deadline + ANSWER_GRACE_SECONDS - self.clock())
+                    )
+            if run.state == FINISHED and not written and course_info:
+                self._start_write(run)
+            run.bump()
+            return run
 
     # -- SSE -----------------------------------------------------------------
 
