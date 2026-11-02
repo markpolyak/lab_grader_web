@@ -269,5 +269,27 @@
     },
     "logout": "退出",
     "courseNotFoundOrNoAccess": "课程不存在或无访问权限"
+  },
+  "courseStore": {
+    "conflictTitle": "编辑冲突",
+    "conflict": "其他用户已修改此课程配置。请复制您的修改并刷新页面",
+    "keepEditing": "保留我的修改",
+    "loadLatest": "加载最新版本",
+    "unavailable": "配置存储不可用，修改未保存"
+  },
+  "courseHistory": {
+    "button": "历史",
+    "title": "版本历史",
+    "versionTitle": "版本 {{sha}}",
+    "current": "当前",
+    "empty": "暂无版本",
+    "unavailable": "此存储不支持版本历史",
+    "storeUnavailable": "配置存储不可用",
+    "back": "返回版本列表",
+    "restore": "恢复此版本",
+    "confirmRestore": "此版本的内容将保存为课程的新版本。是否继续？",
+    "restoreConfirmButton": "恢复",
+    "restored": "版本已恢复",
+    "close": "关闭"
   }
 }

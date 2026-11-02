@@ -22,6 +22,7 @@ import {
   FixedAdminButton,
 } from "./styled";
 import { fetchAdminCourses, fetchCourseDetails, fetchCourses } from "../../api";
+import { CourseHistoryDialog } from "../course-history";
 import { colors } from "../../../theme";
 import {
   Snackbar,
@@ -42,6 +43,11 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   const [editingCourseId, setEditingCourseId] = useState(null);
   const [editContent, setEditContent] = useState("");
   const [originalContent, setOriginalContent] = useState("");
+  // Версия файла, загруженная в редактор: уходит в PUT, чтобы чужая правка,
+  // сохранённая за это время, дала 409, а не была молча затёрта.
+  const [editVersion, setEditVersion] = useState(null);
+  const [conflictMessage, setConflictMessage] = useState(null);
+  const [historyCourseId, setHistoryCourseId] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [snackbar, setSnackbar] = useState({
     open: false,
@@ -144,6 +150,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
       setEditingCourseId(courseId);
       setEditContent(data.content);
       setOriginalContent(data.content);
+      setEditVersion(data.version);
     } catch (error) {
       console.error(error);
       showSnackbar(error.message || t("errorLoadingCourseForEdit"), "error");
@@ -156,7 +163,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ content: editContent }),
+        body: JSON.stringify({ content: editContent, version: editVersion }),
       });
 
       if (response.ok) {
@@ -165,13 +172,27 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         setIsFullscreen(false);
         loadCourses(courseStatus).then(setCourses);
       } else {
+        // Правки остаются в редакторе при любой ошибке - их можно скопировать.
         const data = await response.json().catch(() => null);
-        showSnackbar(errorDetail(response, data, "errorSavingCourse"), "error");
+        if (response.status === 409) {
+          setConflictMessage((data && data.detail) || t("courseStore.conflict"));
+        } else if (response.status === 503) {
+          showSnackbar(t("courseStore.unavailable"), "error");
+        } else {
+          showSnackbar(errorDetail(response, data, "errorSavingCourse"), "error");
+        }
       }
     } catch (error) {
       console.error(error);
       showSnackbar(t("errorSavingCourse"), "error");
     }
+  };
+
+  // Заменить содержимое редактора актуальной версией из хранилища (после 409).
+  const handleReloadLatest = async () => {
+    const courseId = editingCourseId;
+    setConflictMessage(null);
+    await handleEdit(courseId);
   };
 
   const handleCancel = () => {
@@ -489,6 +510,13 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                   </Button>
 
                   <Button
+                    onClick={() => setHistoryCourseId(course.id)}
+                    style={{ backgroundColor: "#777", color: "#fff" }}
+                  >
+                    {t("courseHistory.button")}
+                  </Button>
+
+                  <Button
                     onClick={() => navigate(`/admin/courses/${course.id}/labs`)}
                     style={{ backgroundColor: colors.buttonBackground, color: "#fff" }}
                   >
@@ -507,6 +535,34 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
           )}
         </CourseCardContainer>
       ))}
+
+      {/* Конфликт сохранения: правки остаются в редакторе */}
+      <Dialog open={!!conflictMessage} onClose={() => setConflictMessage(null)}>
+        <DialogTitle>{t("courseStore.conflictTitle")}</DialogTitle>
+        <DialogContent>{conflictMessage}</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConflictMessage(null)}>{t("courseStore.keepEditing")}</Button>
+          <Button
+            onClick={handleReloadLatest}
+            style={{ backgroundColor: colors.error, color: "#fff" }}
+          >
+            {t("courseStore.loadLatest")}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {historyCourseId && (
+        <CourseHistoryDialog
+          courseId={historyCourseId}
+          onClose={() => setHistoryCourseId(null)}
+          onError={(message) => showSnackbar(message, "error")}
+          onRestored={() => {
+            setHistoryCourseId(null);
+            showSnackbar(t("courseHistory.restored"), "success");
+            loadCourses(courseStatus).then(setCourses);
+          }}
+        />
+      )}
 
       {/* Диалог подтверждения удаления */}
       <Dialog open={openConfirmDialog} onClose={handleCancelDelete}>

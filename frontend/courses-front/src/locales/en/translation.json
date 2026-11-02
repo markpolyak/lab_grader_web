@@ -266,5 +266,27 @@
     },
     "logout": "Sign out",
     "courseNotFoundOrNoAccess": "Course not found or access denied"
+  },
+  "courseStore": {
+    "conflictTitle": "Edit conflict",
+    "conflict": "Someone else changed this course configuration. Copy your edits and reload the page",
+    "keepEditing": "Keep my edits",
+    "loadLatest": "Load the latest version",
+    "unavailable": "The configuration store is unavailable, changes were not saved"
+  },
+  "courseHistory": {
+    "button": "History",
+    "title": "Version history",
+    "versionTitle": "Version {{sha}}",
+    "current": "current",
+    "empty": "No versions yet",
+    "unavailable": "Version history is not available for this store",
+    "storeUnavailable": "The configuration store is unavailable",
+    "back": "Back to versions",
+    "restore": "Restore this version",
+    "confirmRestore": "The content of this version will be saved as a new version of the course. Continue?",
+    "restoreConfirmButton": "Restore",
+    "restored": "Version restored",
+    "close": "Close"
   }
 }
