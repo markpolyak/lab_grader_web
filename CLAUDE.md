@@ -33,13 +33,17 @@ cd frontend/courses-front && npm test
 
 ```bash
 GITHUB_TOKEN=ghp_...      # GitHub API token (scopes: repo, read:org, workflow)
-ADMIN_LOGIN=admin         # Admin panel login
-ADMIN_PASSWORD=...        # Admin panel password
+ADMIN_LOGIN=admin         # Emergency admin sign-in (superadmin rights)
+ADMIN_PASSWORD=...        # Emergency admin sign-in password
 SECRET_KEY=...            # Cookie signing key AND secret /j/{token} links (changing it revokes every link)
 LOG_DIR=/app/logs         # Log directory (optional)
 LOG_LEVEL=INFO            # Logging level (optional)
 
-# Optional: only needed for /join/... (student repo auto-creation, see docs/REPO_GENERATION_PLAN.md)
+# Optional: GitHub logins (comma-separated) with access to every course in the admin panel
+SUPERADMIN_GITHUB_LOGINS=markpolyak
+
+# Optional: GitHub sign-in for /join/... (students, docs/REPO_GENERATION_PLAN.md) and for
+# the admin panel (teachers, docs/MULTI_TEACHER_PLAN.md); without it only the emergency sign-in works
 GITHUB_OAUTH_CLIENT_ID=...
 GITHUB_OAUTH_CLIENT_SECRET=...
 FRONTEND_URL=http://localhost:8080
@@ -128,7 +132,32 @@ Labs with `repo-provisioning: fork` (see `docs/COURSE_CONFIG.md`) can later have
 to every student fork as pull requests, from the admin lab list page (`/admin/courses/{course_id}/labs`).
 Orchestration lives in `grading/propagate.py` (in-memory job state, single-worker backend required - see
 `docs/PROJECT_DESCRIPTION.md`). All `/admin/...` and course-management routes require the `require_admin`
-FastAPI dependency in `main.py`, not just the frontend's `ProtectedRoute`.
+FastAPI dependency in `main.py`, not just the frontend's `ProtectedRoute`; routes of one course
+use `require_course_access` (see Admin Access below).
+
+## Admin Access (multiple teachers)
+
+Each teacher signs in with GitHub and manages only their own courses (see
+`docs/MULTI_TEACHER_PLAN.md`; teacher-facing description in `docs/PROJECT_DESCRIPTION.md`).
+
+- **Identity from GitHub OAuth only.** `GET /admin/login/github` uses the same OAuth App and the
+  same `/join/callback` as students; the signed `state` carries `purpose: "admin"`
+  (`_build_oauth_state`/`_parse_oauth_state`; a state without `purpose` is a join state, which is
+  also how join states are still encoded). The login comes only from `_exchange_code_for_username`.
+- **Rights from the course config.** A teacher of a course is a login listed in
+  `course.github.teachers` (case-insensitive; name entries grant nothing) -
+  `grading/admin_access.py:is_course_teacher`. Recomputed on every request, never cached in the
+  cookie. `SUPERADMIN_GITHUB_LOGINS` - every course; `ADMIN_LOGIN`/`ADMIN_PASSWORD` is the emergency
+  sign-in with superadmin rights.
+- **`require_admin` returns `AdminIdentity`** (`login`, `role`, `via`), decoded from the signed JSON
+  `admin_session` cookie. Every route of one course uses `require_course_access` instead; jobs
+  (`/admin/propagate-jobs/...`, `/admin/bulk-grade-jobs/...`) check `job.course_id` via
+  `_require_job_access`. New course routes must do the same.
+- **Someone else's course is indistinguishable from a missing one**: same 404 and body
+  (`COURSE_NOT_FOUND_DETAIL`, `JOB_NOT_FOUND_DETAIL`) - like secret labs, never a 403.
+- The admin course list is `GET /admin/courses` (filtered by access, all statuses); the public
+  `GET /courses` is unchanged. A teacher cannot upload a course without themselves in `teachers`
+  or save one after removing themselves.
 
 ## Team (group) Lab Assignments
 
@@ -213,10 +242,7 @@ Grades a whole group for one lab in a single run, started from the admin lab lis
 Designs are fully decided in the plans below; implement them as written, in this order
 (each builds on the previous one; do not run two features that change `require_admin` in parallel):
 
-1. **Multiple teachers** - `docs/MULTI_TEACHER_PLAN.md`: admin sign-in via GitHub OAuth (same OAuth
-   App and `/join/callback`, distinguished by `purpose` in the signed `state`), per-course access from
-   `course.github.teachers`, `SUPERADMIN_GITHUB_LOGINS`, `ADMIN_LOGIN`/`ADMIN_PASSWORD` kept as
-   emergency superadmin sign-in. Another teacher's course or job answers 404, like a missing one.
+1. **Multiple teachers** - `docs/MULTI_TEACHER_PLAN.md`. Implemented - see Admin Access above.
 2. **Course config storage** - `docs/COURSE_STORAGE_PLAN.md`: private GitHub repo written via the
    Git Data API, one commit per save authored by the teacher, 409 on `sha` conflict.
 3. **Lecture quizzes** - `docs/QUIZ_PLAN.md`.

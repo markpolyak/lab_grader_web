@@ -32,6 +32,12 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
+      # Вход через GitHub: студенты (/join) и преподаватели (админка).
+      # Суперадминистраторы - GitHub-логины через запятую (docs/MULTI_TEACHER_PLAN.md)
+      SUPERADMIN_GITHUB_LOGINS: ${SUPERADMIN_GITHUB_LOGINS:-}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      FRONTEND_URL: ${FRONTEND_URL:-https://labgrader.markpolyak.ru}
       # Публичный адрес сервиса - из него собирается секретная ссылка /j/{token}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://labgrader.markpolyak.ru}
       # Адреса Caddy, которым можно доверять X-Forwarded-For: без этого все

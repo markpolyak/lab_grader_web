@@ -68,6 +68,10 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN}
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      SUPERADMIN_GITHUB_LOGINS: ${SUPERADMIN_GITHUB_LOGINS}
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL}
       SECRET_KEY: ${SECRET_KEY}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS}
@@ -88,8 +92,16 @@ networks:
 ```bash
 # /opt/labgrader/.env
 GITHUB_TOKEN=your_github_token
+# Аварийный вход в админку - права суперадминистратора
 ADMIN_LOGIN=your_admin_login
 ADMIN_PASSWORD=your_secure_password
+# Суперадминистраторы по GitHub-логину (через запятую): видят все курсы.
+# Преподаватели получают доступ к своим курсам через course.github.teachers
+SUPERADMIN_GITHUB_LOGINS=markpolyak
+# OAuth App: вход студентов (/join) и преподавателей (админка)
+GITHUB_OAUTH_CLIENT_ID=your_oauth_client_id
+GITHUB_OAUTH_CLIENT_SECRET=your_oauth_client_secret
+FRONTEND_URL=https://labgrader.markpolyak.ru
 SECRET_KEY=your_secret_key
 # Публичный адрес сервиса: из него собирается секретная ссылка /j/{token},
 # которую админка показывает преподавателю

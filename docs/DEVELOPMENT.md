@@ -125,6 +125,7 @@ labs:
 GITHUB_TOKEN=ghp_...
 ADMIN_LOGIN=admin
 ADMIN_PASSWORD=admin
+SUPERADMIN_GITHUB_LOGINS=<ваш GitHub-логин>
 SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
 CREDENTIALS_FILE=credentials.json
 
@@ -158,8 +159,12 @@ npm install --legacy-peer-deps
 npm run dev            # http://localhost:5173
 ```
 
-Админка: `/admin` во frontend, логин и пароль — `ADMIN_LOGIN` /
-`ADMIN_PASSWORD`.
+Админка: `/admin` во frontend. Основной вход — «Войти через GitHub» (тот же
+OAuth App, что и для `/join`): логин из `SUPERADMIN_GITHUB_LOGINS` видит все
+курсы, логин из `course.github.teachers` — только свои. Без OAuth App работает
+аварийный вход по `ADMIN_LOGIN` / `ADMIN_PASSWORD` (права суперадминистратора).
+Чтобы проверить права преподавателя, добавьте свой логин в `teachers` одного
+курса и уберите его из `SUPERADMIN_GITHUB_LOGINS`.
 
 ## 7. Тесты
 
