@@ -40,7 +40,7 @@ LOG_DIR=/app/logs         # Log directory (optional)
 LOG_LEVEL=INFO            # Logging level (optional)
 
 # Optional: course config storage - local courses/ (default) or a private GitHub repo
-COURSES_SOURCE=local      # github on the server, with COURSES_GITHUB_REPO / COURSES_GITHUB_TOKEN
+COURSES_SOURCE=local      # github on the server, with COURSES_GITHUB_REPO (token: COURSES_GITHUB_TOKEN, else GITHUB_TOKEN)
 
 # Optional: GitHub logins (comma-separated) with access to every course in the admin panel
 SUPERADMIN_GITHUB_LOGINS=markpolyak
@@ -169,7 +169,7 @@ Course configs are read and written only through a `CourseStore`
 
 - `COURSES_SOURCE=local` (default) - `LocalCourseStore` over `courses/`; dev and tests.
   `COURSES_SOURCE=github` - `GitHubCourseStore` over a private repo (`COURSES_GITHUB_REPO`,
-  `COURSES_GITHUB_TOKEN`); reads from an in-memory snapshot of the branch (refreshed every
+  `COURSES_GITHUB_TOKEN`, falling back to `GITHUB_TOKEN`); reads from an in-memory snapshot of the branch (refreshed every
   `COURSES_REFRESH_SECONDS`, mirrored to `COURSES_CACHE_DIR`), writes as one Git Data API commit
   (blobs -> tree -> commit -> ref, no force) authored by the teacher.
 - **No direct file access to course configs in `main.py`** - use `get_course_store()`,

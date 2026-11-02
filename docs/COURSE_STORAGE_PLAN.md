@@ -177,7 +177,7 @@ class CourseStore(Protocol):
 | `COURSES_SOURCE` | `local` | `local` или `github` |
 | `COURSES_GITHUB_REPO` | — | `owner/name` репозитория конфигураций |
 | `COURSES_GITHUB_BRANCH` | `main` | ветка |
-| `COURSES_GITHUB_TOKEN` | — | fine-grained токен, Contents: read/write только на этот репозиторий |
+| `COURSES_GITHUB_TOKEN` | `GITHUB_TOKEN` | fine-grained токен, Contents: read/write только на этот репозиторий; необязателен — без него используется основной токен, отдельный даёт хранилищу свой лимит запросов |
 | `COURSES_REFRESH_SECONDS` | `30` | интервал проверки новых коммитов |
 | `COURSES_CACHE_DIR` | `/app/courses-cache` | снимок на диске для старта без GitHub (volume) |
 

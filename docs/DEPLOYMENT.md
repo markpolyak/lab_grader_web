@@ -413,14 +413,18 @@ logos/<file>
 ```bash
 COURSES_SOURCE=github
 COURSES_GITHUB_REPO=markpolyak/lab_grader_courses
-COURSES_GITHUB_TOKEN=github_pat_...   # fine-grained: только этот репозиторий, Contents: Read and write
 # необязательные:
+# Отдельный токен; без него используется GITHUB_TOKEN (у классического токена со
+# scope repo доступ к репозиторию конфигураций уже есть). Отдельный токен даёт
+# хранилищу свой лимит запросов: массовая проверка, исчерпавшая лимит
+# GITHUB_TOKEN, не помешает сохранить курс.
+COURSES_GITHUB_TOKEN=github_pat_...   # fine-grained: только этот репозиторий, Contents: Read and write
 COURSES_GITHUB_BRANCH=main
 COURSES_REFRESH_SECONDS=30
 COURSES_CACHE_DIR=/app/courses-cache  # смонтировать volume
 ```
 
-Без `COURSES_GITHUB_REPO`/`COURSES_GITHUB_TOKEN` при `COURSES_SOURCE=github`, а
+Без `COURSES_GITHUB_REPO` (или без обоих токенов) при `COURSES_SOURCE=github`, а
 также при недоступном GitHub и отсутствии снимка на диске backend не стартует
 и пишет причину в лог.
 

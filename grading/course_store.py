@@ -618,10 +618,15 @@ def create_course_store(env: Mapping[str, str], local_root: str):
         raise CourseStoreConfigError(f"COURSES_SOURCE должен быть local или github, а не {source!r}")
 
     repo = (env.get("COURSES_GITHUB_REPO") or "").strip()
-    token = (env.get("COURSES_GITHUB_TOKEN") or "").strip()
+    # A separate token is optional: by default the service's GITHUB_TOKEN
+    # (classic, `repo` scope) already reaches the config repo. A dedicated one
+    # gives the store its own rate limit, so a bulk grading run that exhausts
+    # GITHUB_TOKEN's quota cannot block saving a course.
+    token = (env.get("COURSES_GITHUB_TOKEN") or env.get("GITHUB_TOKEN") or "").strip()
     if not repo or not token:
         raise CourseStoreConfigError(
-            "COURSES_SOURCE=github требует COURSES_GITHUB_REPO и COURSES_GITHUB_TOKEN"
+            "COURSES_SOURCE=github требует COURSES_GITHUB_REPO и токен "
+            "(COURSES_GITHUB_TOKEN или GITHUB_TOKEN)"
         )
     try:
         refresh_seconds = float(env.get("COURSES_REFRESH_SECONDS") or 30)

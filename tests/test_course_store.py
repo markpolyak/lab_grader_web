@@ -405,6 +405,24 @@ class TestCreateCourseStore:
     def test_github_without_repo_or_token(self, tmp_path):
         with pytest.raises(CourseStoreConfigError):
             create_course_store({"COURSES_SOURCE": "github", "COURSES_GITHUB_REPO": REPO}, str(tmp_path))
+        with pytest.raises(CourseStoreConfigError):
+            create_course_store({"COURSES_SOURCE": "github", "GITHUB_TOKEN": "main"}, str(tmp_path))
+
+    def test_token_falls_back_to_github_token(self, rsps, repo, tmp_path):
+        create_course_store(
+            {"COURSES_SOURCE": "github", "COURSES_GITHUB_REPO": REPO, "GITHUB_TOKEN": "main-token",
+             "COURSES_CACHE_DIR": str(tmp_path)},
+            "unused",
+        )
+        assert rsps.calls[0].request.headers["Authorization"] == "Bearer main-token"
+
+    def test_dedicated_token_wins(self, rsps, repo, tmp_path):
+        create_course_store(
+            {"COURSES_SOURCE": "github", "COURSES_GITHUB_REPO": REPO, "GITHUB_TOKEN": "main-token",
+             "COURSES_GITHUB_TOKEN": "courses-token", "COURSES_CACHE_DIR": str(tmp_path)},
+            "unused",
+        )
+        assert rsps.calls[0].request.headers["Authorization"] == "Bearer courses-token"
 
     def test_unknown_source(self, tmp_path):
         with pytest.raises(CourseStoreConfigError):
