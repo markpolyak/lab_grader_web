@@ -720,3 +720,29 @@ async def test_sse_skips_unchanged_student_snapshots(manager):
     assert len(seen) == 2 and seen[-1]["answer"] == 0
     await manager.cancel(run)
     await asyncio.wait_for(task, 2)
+
+
+class TestQuizColumn:
+    """Attendance quizzes are named by the lecture date; row 1 holds lab deadlines (dates too)."""
+
+    def sheet(self):
+        return FakeWorksheet("4431", [
+            ["", "", "12.11.2026", "Посещаемость лекций", "", "GitHub"],
+            ["№", "ФИО", "ЛР1", "05.11.2026", "12.11.2026", ""],
+            ["1", "Иванов", "", "1", "", "alice"],
+        ])
+
+    def test_only_second_row_counts(self):
+        from grading.quiz_runs import quiz_column
+        values = self.sheet().values
+        assert quiz_column(values, "12.11.2026") == 5      # not 3 - the lab deadline in row 1
+        assert quiz_column(values, " 05.11.2026 ") == 4
+        assert quiz_column(values, "Иванов") is None       # student rows are not headers
+        assert quiz_column(values, "19.11.2026") is None
+
+    def test_scores_go_to_the_lecture_column(self):
+        sheet = self.sheet()
+        entry = RosterEntry("alice", "4431", 3, "Иванов")
+        report = write_scores(FakeSpreadsheet(sheet), "12.11.2026", {"4431": [(entry, "0.5")]}, ",")
+        assert report["4431"]["written"] == ["alice"]
+        assert sheet.updates[0][0] == [{"range": "E3", "values": [["0,5"]]}]

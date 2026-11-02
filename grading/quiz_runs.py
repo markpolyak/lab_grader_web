@@ -27,7 +27,7 @@ from gspread.utils import ValueInputOption, rowcol_to_a1
 
 from grading.quiz import Quiz, format_points, student_score
 from grading.score import format_score
-from grading.sheets_client import cell_from_grid, find_lab_column_in_grid
+from grading.sheets_client import cell_from_grid
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +37,7 @@ ANSWER_GRACE_SECONDS = 1.0
 ROSTER_REREAD_SECONDS = 60
 FINISHED_CODE_TTL_SECONDS = 3600
 FIRST_STUDENT_ROW = 3
+HEADER_ROW = 2
 OPTION_LETTERS = "ABCD"
 
 LOBBY, QUESTION, REVEAL, FINISHED, CANCELLED = "lobby", "question", "reveal", "finished", "cancelled"
@@ -52,6 +53,23 @@ class QuizRunError(Exception):
         self.detail = detail or code
         self.extra = extra
         super().__init__(self.detail)
+
+
+def quiz_column(values: list[list[str]], short_name: str) -> int | None:
+    """
+    1-based column whose header in the SECOND row is `short_name` (§2 of the plan).
+
+    Only that row: the first one holds lab deadlines - dates - and a quiz used
+    for attendance is named by the lecture's date, so a whole-sheet search
+    could land in a lab's column. The header is compared as displayed.
+    """
+    if not short_name or len(values) < HEADER_ROW:
+        return None
+    wanted = short_name.strip()
+    for idx, value in enumerate(values[HEADER_ROW - 1]):
+        if (value or "").strip() == wanted:
+            return idx + 1
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +113,7 @@ def read_roster(spreadsheet, info_sheet: str | None, name_column: int, short_nam
             logger.warning(f"Quiz roster: sheet '{worksheet.title}' has no GitHub column, skipped")
             continue
         github_col = header.index("GitHub") + 1
-        if find_lab_column_in_grid(values, short_name) is None:
+        if quiz_column(values, short_name) is None:
             without_column.append(worksheet.title)
         for row in range(FIRST_STUDENT_ROW, len(values) + 1):
             login = cell_from_grid(values, row, github_col).strip()
@@ -139,7 +157,7 @@ def write_scores(spreadsheet, short_name: str, scores: dict[str, list[tuple[Rost
         try:
             worksheet = spreadsheet.worksheet(group)
             values = worksheet.get_all_values()
-            col = find_lab_column_in_grid(values, short_name)
+            col = quiz_column(values, short_name)
             if col is None:
                 result["missing_column"] = True
                 continue
