@@ -7,6 +7,13 @@ on:
       - 'fix/**'     # Auto-build for all fix branches
   workflow_dispatch:
 
+# Push to ghcr needs packages: write explicitly - the default GITHUB_TOKEN may
+# be read-only. A repository other than the package's own one (the private
+# copy) additionally needs Write in the package's "Manage Actions access".
+permissions:
+  contents: read
+  packages: write
+
 env:
   DOCKER_REGISTRY: ghcr.io
   API_BASE_URL: https://labgrader.markpolyak.ru/api/v1
