@@ -39,6 +39,9 @@ SECRET_KEY=...            # Cookie signing key AND secret /j/{token} links (chan
 LOG_DIR=/app/logs         # Log directory (optional)
 LOG_LEVEL=INFO            # Logging level (optional)
 
+# Optional: course config storage - local courses/ (default) or a private GitHub repo
+COURSES_SOURCE=local      # github on the server, with COURSES_GITHUB_REPO / COURSES_GITHUB_TOKEN
+
 # Optional: GitHub logins (comma-separated) with access to every course in the admin panel
 SUPERADMIN_GITHUB_LOGINS=markpolyak
 
@@ -159,6 +162,27 @@ Each teacher signs in with GitHub and manages only their own courses (see
   `GET /courses` is unchanged. A teacher cannot upload a course without themselves in `teachers`
   or save one after removing themselves.
 
+## Course Config Storage
+
+Course configs are read and written only through a `CourseStore`
+(`grading/course_store.py`; see `docs/COURSE_STORAGE_PLAN.md`):
+
+- `COURSES_SOURCE=local` (default) - `LocalCourseStore` over `courses/`; dev and tests.
+  `COURSES_SOURCE=github` - `GitHubCourseStore` over a private repo (`COURSES_GITHUB_REPO`,
+  `COURSES_GITHUB_TOKEN`); reads from an in-memory snapshot of the branch (refreshed every
+  `COURSES_REFRESH_SECONDS`, mirrored to `COURSES_CACHE_DIR`), writes as one Git Data API commit
+  (blobs -> tree -> commit -> ref, no force) authored by the teacher.
+- **No direct file access to course configs in `main.py`** - use `get_course_store()`,
+  `load_course_index()`, `iter_course_configs()`, `get_course_by_id()`. Tests replace
+  `main.COURSE_STORE` with a `LocalCourseStore` on a temp dir.
+- Every write passes `expected` versions; a mismatch is `StoreConflictError` -> 409, an unreachable
+  store `StoreUnavailableError` -> 503 (`_store_write`). `PUT .../edit` and `restore` take the
+  `version` the editor loaded.
+- `validate_course_change` runs before every save/upload/restore: YAML with a `course` mapping,
+  `join` sections (no lowering `join.revision`), `team` sections, teacher keeps themselves in `teachers`.
+- History/restore exist only when `store.supports_history` (github); logos are served from the
+  store at `/courses/logos/{name}`.
+
 ## Team (group) Lab Assignments
 
 Labs with a `team` section in their config are done by teams: one repository per team, shared by
@@ -243,8 +267,7 @@ Designs are fully decided in the plans below; implement them as written, in this
 (each builds on the previous one; do not run two features that change `require_admin` in parallel):
 
 1. **Multiple teachers** - `docs/MULTI_TEACHER_PLAN.md`. Implemented - see Admin Access above.
-2. **Course config storage** - `docs/COURSE_STORAGE_PLAN.md`: private GitHub repo written via the
-   Git Data API, one commit per save authored by the teacher, 409 on `sha` conflict.
+2. **Course config storage** - `docs/COURSE_STORAGE_PLAN.md`. Implemented - see Course Config Storage above.
 3. **Lecture quizzes** - `docs/QUIZ_PLAN.md`.
 
 ## CI/CD

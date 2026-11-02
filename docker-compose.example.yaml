@@ -23,7 +23,10 @@ services:
     restart: unless-stopped
     volumes:
       - ./google-credentials:/app/google-credentials/
-      - ./courses:/app/courses  # Mount courses directory for easy editing
+      # Снимок репозитория конфигураций курсов: сервис стартует по нему, если
+      # GitHub недоступен (docs/COURSE_STORAGE_PLAN.md §5.2). Сами конфигурации
+      # живут в приватном репозитории, каталог courses/ больше не монтируется.
+      - ./courses-cache:/app/courses-cache
       - ./logs:/app/logs  # Persistent logs (survive container restarts)
     environment:
       # Credentials and secrets
@@ -32,6 +35,12 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
+      # Конфигурации курсов - приватный GitHub-репозиторий (docs/COURSE_STORAGE_PLAN.md)
+      COURSES_SOURCE: ${COURSES_SOURCE:-github}
+      COURSES_GITHUB_REPO: ${COURSES_GITHUB_REPO:-markpolyak/lab_grader_courses}
+      COURSES_GITHUB_BRANCH: ${COURSES_GITHUB_BRANCH:-main}
+      COURSES_GITHUB_TOKEN: ${COURSES_GITHUB_TOKEN}
+      COURSES_CACHE_DIR: /app/courses-cache
       # Вход через GitHub: студенты (/join) и преподаватели (админка).
       # Суперадминистраторы - GitHub-логины через запятую (docs/MULTI_TEACHER_PLAN.md)
       SUPERADMIN_GITHUB_LOGINS: ${SUPERADMIN_GITHUB_LOGINS:-}

@@ -384,7 +384,65 @@ docker compose ps
 
 ## Course Management
 
-### Adding a New Course
+Конфигурации курсов на сервере живут в приватном репозитории конфигураций
+(`COURSES_GITHUB_REPO`, по умолчанию `markpolyak/lab_grader_courses`), а не в
+`courses/` репозитория backend (`docs/COURSE_STORAGE_PLAN.md`):
+
+```
+index.yaml
+<course>.yaml
+logos/<file>
+```
+
+- **Правка курса** — через админку (каждое сохранение — коммит, автор —
+  преподаватель; история и восстановление версии — кнопка «История») или
+  обычным коммитом в репозиторий конфигураций. Внешний коммит сервис
+  подхватывает не позже чем через `COURSES_REFRESH_SECONDS` (30 с), без
+  перезапуска.
+- **Новый курс** — загрузка YAML в админке (файл и строка в `index.yaml`
+  одним коммитом) или коммитом в репозиторий конфигураций.
+- **Логотип** — файл в `logos/` репозитория конфигураций и `logo:
+  "/courses/logos/<file>"` в `index.yaml`; backend раздаёт его из хранилища.
+- Одновременная правка одного курса двумя людьми: второе сохранение получает
+  409, правки остаются в редакторе.
+- Если GitHub недоступен, сервис работает по последнему снимку (volume
+  `./courses-cache`) и стартует по нему; сохранение в это время отвечает 503.
+
+### Переменные хранилища
+
+```bash
+COURSES_SOURCE=github
+COURSES_GITHUB_REPO=markpolyak/lab_grader_courses
+COURSES_GITHUB_TOKEN=github_pat_...   # fine-grained: только этот репозиторий, Contents: Read and write
+# необязательные:
+COURSES_GITHUB_BRANCH=main
+COURSES_REFRESH_SECONDS=30
+COURSES_CACHE_DIR=/app/courses-cache  # смонтировать volume
+```
+
+Без `COURSES_GITHUB_REPO`/`COURSES_GITHUB_TOKEN` при `COURSES_SOURCE=github`, а
+также при недоступном GitHub и отсутствии снимка на диске backend не стартует
+и пишет причину в лог.
+
+### Перенос конфигураций в репозиторий конфигураций (однократно)
+
+```bash
+git clone https://github.com/markpolyak/lab_grader_web.git courses-export
+cd courses-export
+git filter-repo --subdirectory-filter courses
+git remote add origin https://github.com/markpolyak/lab_grader_courses.git
+git push -u origin main
+```
+
+Конфигурации, правленные на сервере и не попавшие в git, сначала скопируйте
+из смонтированного `./courses` и закоммитьте в репозиторий конфигураций.
+
+### Локальный режим (`COURSES_SOURCE=local`)
+
+Для разработки — каталог `courses/` рядом с backend, как раньше. Ниже —
+формат файлов, он одинаков для обоих режимов.
+
+### Adding a New Course (local mode)
 
 1. **Create course YAML file:**
 

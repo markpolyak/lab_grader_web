@@ -131,8 +131,9 @@ lab_grader_web/
 │   ├── propagate.py             # Рассылка обновлений шаблона
 │   ├── teams.py                 # Командные лабораторные
 │   ├── join_links.py            # Секретные ссылки и окна доступности
-│   └── course_index.py          # Чтение courses/index.yaml
-├── courses/                     # Конфигурации курсов (index.yaml + YAML курсов, logos/)
+│   ├── course_store.py          # Хранилище конфигураций: каталог или приватный GitHub-репозиторий
+│   └── course_index.py          # Чтение index.yaml и файлов курсов через хранилище
+├── courses/                     # Конфигурации курсов для локального режима (на сервере - приватный репозиторий)
 ├── tests/                       # pytest
 ├── scripts/                     # join-link.py, switch-branch.sh
 ├── docs/                        # Документация (DEVELOPMENT.md — локальная разработка)
@@ -188,9 +189,12 @@ lab_grader_web/
 | GET | `/admin/courses` | Курсы, доступные вошедшему, всех статусов (включая скрытые) |
 | POST | `/admin/logout` | Выход из системы |
 | DELETE | `/courses/{course_id}` | Удаление курса |
-| GET | `/courses/{course_id}/edit` | Получение YAML конфигурации |
-| PUT | `/courses/{course_id}/edit` | Сохранение изменений курса |
-| POST | `/courses/upload` | Загрузка нового курса |
+| GET | `/courses/{course_id}/edit` | Получение YAML конфигурации и её версии (`version`) |
+| PUT | `/courses/{course_id}/edit` | Сохранение изменений курса (`content`, `version`; 409 - курс изменён другим пользователем, 503 - хранилище недоступно) |
+| POST | `/courses/upload` | Загрузка нового курса (файл и строка индекса - одна запись) |
+| GET | `/admin/courses/{course_id}/history` | История версий файла курса (только хранилище `github`) |
+| GET | `/admin/courses/{course_id}/history/{sha}` | Содержимое файла курса в версии `sha` |
+| POST | `/admin/courses/{course_id}/restore` | Сохранить версию `sha` как новую (`{"sha", "version"}`) |
 | GET | `/admin/courses/{course_id}/labs` | Список лаб курса для админки (номер, github-prefix, template-repo, repo-provisioning, files, student-name-file, готовая секретная ссылка и состояние окна) |
 | POST | `/admin/courses/{course_id}/labs/{lab_id}/propagate-template-update` | Рассылка обновлений шаблона в репозитории студентов через fork PR (только `repo-provisioning: fork`, см. ниже) |
 | GET | `/admin/propagate-jobs/{job_id}` | Статус фоновой рассылки обновлений |
@@ -199,6 +203,18 @@ lab_grader_web/
 | POST | `/admin/bulk-grade-jobs/{job_id}/cancel` | Остановка массовой проверки |
 
 Все административные маршруты (включая перечисленные выше) защищены зависимостью `require_admin` - её отсутствие раньше означало, что `POST /courses/upload`, `DELETE /courses/{course_id}` и `GET/PUT /courses/{course_id}/edit` были доступны без аутентификации на уровне API (защита была только на уровне фронтенда). Маршруты конкретного курса дополнительно защищены `require_course_access` (см. ниже).
+
+### Хранилище конфигураций курсов
+
+Подробности - `docs/COURSE_STORAGE_PLAN.md`, эксплуатация - `docs/DEPLOYMENT.md`.
+
+- Источник выбирается `COURSES_SOURCE`: `local` - каталог `courses/` (разработка, тесты), `github` - приватный репозиторий конфигураций (сервер).
+- В режиме `github` каждое сохранение из админки - коммит через Git Data API, автор - GitHub-логин преподавателя. Создание курса (файл + `index.yaml`) - один коммит.
+- Чтения обслуживаются из снимка ветки в памяти; новые коммиты подхватываются не реже раза в `COURSES_REFRESH_SECONDS`. Снимок сохраняется на диск, и при недоступном GitHub сервис работает и стартует по нему.
+- Редактор хранит версию загруженного файла; сохранение поверх чужой правки - 409, правки остаются в редакторе, можно загрузить актуальную версию.
+- До записи проверяются YAML, секции `join` (в том числе запрет уменьшать `join.revision` - и при восстановлении старой версии) и `team`, и то, что преподаватель не убрал себя из `teachers`.
+- Кнопка «История» у курса: версии (дата, автор, сообщение), просмотр, восстановление с подтверждением.
+- Логотипы (`/courses/logos/{name}`) раздаются из хранилища с `ETag`.
 
 ### Вход преподавателей и права
 
