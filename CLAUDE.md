@@ -208,6 +208,19 @@ Grades a whole group for one lab in a single run, started from the admin lab lis
 - Reads the worksheet once via `get_all_values()` and writes grades in batches of 10: the per-cell
   helpers spend ~6 Sheets requests per student, over the 60 reads/minute quota for a group of 30.
 
+## Planned Features (specs)
+
+Designs are fully decided in the plans below; implement them as written, in this order
+(each builds on the previous one; do not run two features that change `require_admin` in parallel):
+
+1. **Multiple teachers** - `docs/MULTI_TEACHER_PLAN.md`: admin sign-in via GitHub OAuth (same OAuth
+   App and `/join/callback`, distinguished by `purpose` in the signed `state`), per-course access from
+   `course.github.teachers`, `SUPERADMIN_GITHUB_LOGINS`, `ADMIN_LOGIN`/`ADMIN_PASSWORD` kept as
+   emergency superadmin sign-in. Another teacher's course or job answers 404, like a missing one.
+2. **Course config storage** - `docs/COURSE_STORAGE_PLAN.md`: private GitHub repo written via the
+   Git Data API, one commit per save authored by the teacher, 409 on `sha` conflict.
+3. **Lecture quizzes** - `docs/QUIZ_PLAN.md`.
+
 ## CI/CD
 
 - **Tests**: Run via `.github/workflows/tests.yml` on push and on pull requests into `main`
