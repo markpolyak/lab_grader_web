@@ -15,6 +15,8 @@ import json
 import base64
 import logging
 import threading
+import asyncio
+import time
 from datetime import datetime
 from urllib.parse import quote, urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -1604,7 +1606,8 @@ def _oauth_redirect_uri(request: Request) -> str:
 
 OAUTH_PURPOSE_JOIN = "join"
 OAUTH_PURPOSE_ADMIN = "admin"
-OAUTH_PURPOSES = (OAUTH_PURPOSE_JOIN, OAUTH_PURPOSE_ADMIN)
+OAUTH_PURPOSE_STUDENT = "student"
+OAUTH_PURPOSES = (OAUTH_PURPOSE_JOIN, OAUTH_PURPOSE_ADMIN, OAUTH_PURPOSE_STUDENT)
 
 
 def _build_oauth_state(purpose: str, **payload) -> str:
@@ -2080,6 +2083,8 @@ def join_callback(
 
     if purpose == OAUTH_PURPOSE_ADMIN:
         return _admin_oauth_callback(request, code, error)
+    if purpose == OAUTH_PURPOSE_STUDENT:
+        return _student_oauth_callback(request, code, error, payload)
 
     course_id = payload["course_id"]
     lab_id = payload["lab_id"]
@@ -2919,3 +2924,428 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: A
         "course_id": course_id,
         "filename": filename
     }
+
+# ===========================================================================
+# Lecture quizzes (docs/QUIZ_PLAN.md)
+#
+# Quiz files live in the config store (quizzes/{course_id}/{quiz_id}.md); runs
+# live in memory (grading/quiz_runs.py, single backend process). Every quiz
+# endpoint is `async def` and touches only memory: Sheets and the store are
+# called in threads, so 200 phones answering within 20 seconds never wait for
+# the sync endpoints' thread pool.
+# ===========================================================================
+
+from fastapi import Form  # noqa: E402
+from fastapi.responses import StreamingResponse  # noqa: E402
+
+from grading.quiz import (  # noqa: E402
+    QuizFormatError,
+    build_quiz_file,
+    format_points,
+    parse_quiz,
+    quiz_id_from_filename,
+)
+from grading.quiz_runs import (  # noqa: E402
+    QuizRunError,
+    QuizRunManager,
+    read_roster,
+    write_scores,
+)
+
+STUDENT_SESSION_COOKIE = "student_session"
+STUDENT_SESSION_MAX_AGE = int(os.getenv("STUDENT_SESSION_MAX_AGE", str(180 * 24 * 3600)))
+QUIZ_CODE_RE = re.compile(r"^[a-z0-9]{6}$")
+QUIZ_ID_RE = re.compile(r"^[a-z0-9-]{1,64}$")
+QUIZ_NOT_FOUND_DETAIL = "Квиз не найден или уже завершён"
+SSE_PING_SECONDS = 15.0
+
+
+def _quiz_path(course_id: str, quiz_id: str) -> str:
+    return f"quizzes/{course_id}/{quiz_id}.md"
+
+
+def _read_quiz_roster(course_info: dict, short_name: str):
+    """Blocking: every group sheet of the course, once (runs in a thread)."""
+    google = course_info.get("google", {})
+    spreadsheet = sheets_client().open_by_key(google.get("spreadsheet"))
+    return read_roster(
+        spreadsheet, google.get("info-sheet"), int(google.get("student-name-column", 1)), short_name, time.time()
+    )
+
+
+def _write_quiz_scores(course_info: dict, short_name: str, scores: dict):
+    """Blocking: write scores into the group sheets (runs in a thread)."""
+    spreadsheet = sheets_client().open_by_key(course_info.get("google", {}).get("spreadsheet"))
+    return write_scores(spreadsheet, short_name, scores, get_decimal_separator(spreadsheet))
+
+
+QUIZ_RUNS = QuizRunManager(roster_reader=_read_quiz_roster, score_writer=_write_quiz_scores, log_dir=LOG_DIR)
+
+
+def _quiz_error(e: QuizRunError) -> JSONResponse:
+    return JSONResponse(status_code=e.status, content={"detail": e.code, "message": e.detail, **e.extra})
+
+
+def _quiz_format_error(e: QuizFormatError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": "; ".join(e.errors), "errors": e.errors})
+
+
+# -- student session ---------------------------------------------------------
+
+
+def _build_student_session(login: str) -> str:
+    payload_b64 = base64.urlsafe_b64encode(json.dumps({"login": login}).encode("utf-8")).decode("ascii")
+    return signer.sign(payload_b64.encode("ascii")).decode("ascii")
+
+
+def student_login(request: Request) -> str | None:
+    """
+    The GitHub login from the `student_session` cookie - the only source of a
+    student's identity in a quiz, as in /join (never the body or the query).
+    """
+    cookie = request.cookies.get(STUDENT_SESSION_COOKIE)
+    if not cookie:
+        return None
+    try:
+        payload_b64 = signer.unsign(cookie, max_age=STUDENT_SESSION_MAX_AGE).decode("ascii")
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+    except (BadSignature, ValueError, TypeError, UnicodeDecodeError):
+        return None
+    login = payload.get("login") if isinstance(payload, dict) else None
+    return login if isinstance(login, str) and login else None
+
+
+def student_rate_key(request: Request) -> str:
+    """
+    Rate-limit key for quiz actions: the student, not the address - a whole
+    lecture hall reaches the server through one NAT (§9.4).
+    """
+    login = student_login(request)
+    return f"student:{login.casefold()}" if login else get_remote_address(request)
+
+
+def _quiz_frontend_url(code: str, **params) -> str:
+    query = f"?{urlencode(params)}" if params else ""
+    return f"{FRONTEND_URL.rstrip('/')}/q/{code}{query}"
+
+
+@app.get("/quiz/login/start")
+@limiter.limit("60/minute")
+async def quiz_login_start(request: Request, code: str = ""):
+    """Sign the student in through GitHub once a semester (§6.1)."""
+    code = code.lower()
+    if not QUIZ_CODE_RE.match(code):
+        raise HTTPException(status_code=404, detail=QUIZ_NOT_FOUND_DETAIL)
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        raise HTTPException(status_code=503, detail="Вход через GitHub временно недоступен: OAuth App не настроен")
+    params = {
+        "client_id": GITHUB_OAUTH_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri(request),
+        "scope": "read:user",
+        "state": _build_oauth_state(OAUTH_PURPOSE_STUDENT, code=code),
+    }
+    return RedirectResponse(url=f"https://github.com/login/oauth/authorize?{urlencode(params)}")
+
+
+def _student_oauth_callback(request: Request, code: str | None, error: str | None, payload: dict):
+    quiz_code = str(payload.get("code", ""))
+    if not QUIZ_CODE_RE.match(quiz_code):
+        return RedirectResponse(url=_join_error_redirect("invalid_state"))
+    if error or not code or not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        return RedirectResponse(url=_quiz_frontend_url(quiz_code, error="oauth_failed"))
+
+    login = _exchange_code_for_username(code, _oauth_redirect_uri(request))
+    if login is None:
+        return RedirectResponse(url=_quiz_frontend_url(quiz_code, error="oauth_failed"))
+
+    logger.info(f"Quiz student sign-in: '{login}'")
+    response = RedirectResponse(url=_quiz_frontend_url(quiz_code))
+    response.set_cookie(
+        key=STUDENT_SESSION_COOKIE,
+        value=_build_student_session(login),
+        httponly=True,
+        samesite="lax",
+        max_age=STUDENT_SESSION_MAX_AGE,
+        path="/",
+        secure=False,
+    )
+    return response
+
+
+# -- SSE -----------------------------------------------------------------------
+
+
+def _sse_response(run, make) -> StreamingResponse:
+    async def stream():
+        async for snapshot in QUIZ_RUNS.snapshots(run, make, ping_seconds=SSE_PING_SECONDS):
+            if snapshot is None:
+                yield ": ping\n\n"
+            else:
+                yield f"id: {snapshot['version']}\ndata: {json.dumps(snapshot, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# -- admin: quiz files (§9.1) --------------------------------------------------
+
+
+def _load_quiz(course_id: str, quiz_id: str):
+    if not QUIZ_ID_RE.match(quiz_id):
+        raise HTTPException(status_code=404, detail="Квиз не найден")
+    stored = get_course_store().read(_quiz_path(course_id, quiz_id))
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Квиз не найден")
+    return stored
+
+
+def _quiz_summary(quiz_id: str, quiz) -> dict:
+    s = quiz.settings
+    return {
+        "id": quiz_id,
+        "title": s.title,
+        "short_name": s.short_name,
+        "questions": len(quiz.questions),
+        "max_points": format_points(s.max_points),
+        "seconds_per_question": s.seconds_per_question,
+    }
+
+
+@app.get("/admin/courses/{course_id}/quizzes")
+@limiter.limit("60/minute")
+async def admin_list_quizzes(request: Request, course_id: str, admin: AdminIdentity = Depends(require_course_access)):
+    store = get_course_store()
+    prefix = f"quizzes/{course_id}/"
+    result = []
+    for path in await asyncio.to_thread(store.list, prefix):
+        if not path.endswith(".md") or "/" in path[len(prefix):]:
+            continue
+        quiz_id = path[len(prefix):-3]
+        stored = await asyncio.to_thread(store.read, path)
+        try:
+            result.append(_quiz_summary(quiz_id, parse_quiz(stored.text)))
+        except QuizFormatError as e:
+            result.append({"id": quiz_id, "error": "; ".join(e.errors)})
+    return result
+
+
+@app.post("/admin/courses/{course_id}/quizzes", status_code=201)
+@limiter.limit("20/minute")
+async def admin_upload_quiz(
+    request: Request,
+    course_id: str,
+    file: UploadFile = File(...),
+    title: str = Form(""),
+    short_name: str = Form("", alias="short-name"),
+    max_points: str = Form("", alias="max-points"),
+    seconds_per_question: str = Form("", alias="seconds-per-question"),
+    admin: AdminIdentity = Depends(require_course_access),
+):
+    """Parse and check the bank (§3.1), write it with the parameters in its front matter."""
+    try:
+        quiz_id = quiz_id_from_filename(file.filename or "")
+        try:
+            text = (await file.read()).decode("utf-8")
+        except UnicodeDecodeError:
+            raise QuizFormatError(["Файл должен быть в кодировке UTF-8"])
+        overrides = {
+            key: value for key, value in {
+                "title": title, "short-name": short_name, "max-points": max_points,
+                "seconds-per-question": seconds_per_question,
+            }.items() if str(value).strip()
+        }
+        quiz = parse_quiz(text, overrides)
+    except QuizFormatError as e:
+        return _quiz_format_error(e)
+
+    path = _quiz_path(course_id, quiz_id)
+    store = get_course_store()
+    if await asyncio.to_thread(store.read, path) is not None:
+        raise HTTPException(status_code=409, detail=f"Квиз «{quiz_id}» уже есть: удалите его или переименуйте файл")
+
+    content = build_quiz_file(quiz.settings, quiz.body).encode("utf-8")
+    await asyncio.to_thread(
+        _store_write, {path: content}, {path: None}, f"{course_id}: квиз {quiz_id}", admin
+    )
+    return _quiz_summary(quiz_id, quiz)
+
+
+@app.get("/admin/courses/{course_id}/quizzes/{quiz_id}")
+@limiter.limit("60/minute")
+async def admin_get_quiz(
+    request: Request, course_id: str, quiz_id: str, admin: AdminIdentity = Depends(require_course_access)
+):
+    """Questions with the correct answers - the teacher's preview."""
+    stored = await asyncio.to_thread(_load_quiz, course_id, quiz_id)
+    try:
+        quiz = parse_quiz(stored.text)
+    except QuizFormatError as e:
+        return _quiz_format_error(e)
+    points = quiz.question_points()
+    return {
+        **_quiz_summary(quiz_id, quiz),
+        "items": [{**q.to_dict(), "points": format_points(p)} for q, p in zip(quiz.questions, points)],
+    }
+
+
+@app.delete("/admin/courses/{course_id}/quizzes/{quiz_id}")
+@limiter.limit("20/minute")
+async def admin_delete_quiz(
+    request: Request, course_id: str, quiz_id: str, admin: AdminIdentity = Depends(require_course_access)
+):
+    stored = await asyncio.to_thread(_load_quiz, course_id, quiz_id)
+    path = _quiz_path(course_id, quiz_id)
+    await asyncio.to_thread(
+        _store_write, {path: None}, {path: stored.version}, f"{course_id}: квиз {quiz_id} удалён", admin
+    )
+    return {"message": "Квиз удалён"}
+
+
+# -- admin: runs ---------------------------------------------------------------
+
+
+@app.post("/admin/courses/{course_id}/quizzes/{quiz_id}/runs", status_code=201)
+@limiter.limit("20/minute")
+async def admin_open_quiz_run(
+    request: Request, course_id: str, quiz_id: str, admin: AdminIdentity = Depends(require_course_access)
+):
+    """Open a run (lobby): roster, variants, code. 409 with `run_id` if one is going."""
+    stored = await asyncio.to_thread(_load_quiz, course_id, quiz_id)
+    try:
+        quiz = parse_quiz(stored.text)
+    except QuizFormatError as e:
+        return _quiz_format_error(e)
+    course_info = await asyncio.to_thread(get_course_by_id, course_id)
+    try:
+        run = await QUIZ_RUNS.open(course_id, course_info, quiz_id, quiz)
+    except QuizRunError as e:
+        return _quiz_error(e)
+    except Exception:
+        logger.exception(f"Quiz run for {course_id}/{quiz_id}: reading the roster failed")
+        raise HTTPException(status_code=502, detail="Не удалось прочитать состав курса из Google-таблицы")
+    logger.info(f"Quiz run {run.run_id} ({course_id}/{quiz_id}) opened by '{admin.login}', code {run.code}")
+    return {**run.summary(), "link": f"{_public_base_url(request)}/q/{run.code}"}
+
+
+def _require_run(run_id: str, admin: AdminIdentity):
+    """A run of a course the user can't manage looks like an unknown run_id."""
+    run = QUIZ_RUNS.get(run_id)
+    if run is None or not can_access_course(admin, run.course_id):
+        raise HTTPException(status_code=404, detail="Запуск квиза не найден")
+    return run
+
+
+@app.get("/admin/quiz-runs/{run_id}")
+@limiter.limit("120/minute")
+async def admin_quiz_run(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    run = await asyncio.to_thread(_require_run, run_id, admin)
+    await QUIZ_RUNS.reveal_if_due(run)
+    return {**run.projector_snapshot(QUIZ_RUNS.clock()), "link": f"{_public_base_url(request)}/q/{run.code}"}
+
+
+@app.get("/admin/quiz-runs/{run_id}/events")
+async def admin_quiz_run_events(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    run = await asyncio.to_thread(_require_run, run_id, admin)
+    return _sse_response(run, run.projector_snapshot)
+
+
+async def _run_action(run_id: str, admin: AdminIdentity, action: str):
+    run = await asyncio.to_thread(_require_run, run_id, admin)
+    try:
+        await getattr(QUIZ_RUNS, action)(run)
+    except QuizRunError as e:
+        return _quiz_error(e)
+    logger.info(f"Quiz run {run_id}: {action} by '{admin.login}'")
+    return run.projector_snapshot(QUIZ_RUNS.clock())
+
+
+@app.post("/admin/quiz-runs/{run_id}/start")
+@limiter.limit("60/minute")
+async def admin_quiz_start(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    return await _run_action(run_id, admin, "start")
+
+
+@app.post("/admin/quiz-runs/{run_id}/next")
+@limiter.limit("120/minute")
+async def admin_quiz_next(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    return await _run_action(run_id, admin, "next")
+
+
+@app.post("/admin/quiz-runs/{run_id}/finish")
+@limiter.limit("60/minute")
+async def admin_quiz_finish(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    return await _run_action(run_id, admin, "finish")
+
+
+@app.post("/admin/quiz-runs/{run_id}/cancel")
+@limiter.limit("60/minute")
+async def admin_quiz_cancel(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    return await _run_action(run_id, admin, "cancel")
+
+
+@app.post("/admin/quiz-runs/{run_id}/write-results")
+@limiter.limit("20/minute")
+async def admin_quiz_write(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    return await _run_action(run_id, admin, "retry_write")
+
+
+# -- students (§9.2) ---------------------------------------------------------------
+
+
+def _student_run(code: str):
+    run = QUIZ_RUNS.by_student_code(code) if QUIZ_CODE_RE.match(code.lower()) else None
+    if run is None:
+        raise HTTPException(status_code=404, detail=QUIZ_NOT_FOUND_DETAIL)
+    return run
+
+
+@app.get("/quiz/{code}")
+@limiter.limit("1000/minute")
+async def quiz_info(request: Request, code: str):
+    run = _student_run(code)
+    await QUIZ_RUNS.reveal_if_due(run)
+    login = student_login(request)
+    return {**run.student_snapshot(login, QUIZ_RUNS.clock()), "logged_in": login is not None, "login": login}
+
+
+@app.post("/quiz/{code}/join")
+@limiter.limit("30/minute", key_func=student_rate_key)
+async def quiz_join(request: Request, code: str):
+    run = _student_run(code)
+    login = student_login(request)
+    if login is None:
+        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
+    try:
+        participant = await QUIZ_RUNS.join(run, login)
+    except QuizRunError as e:
+        return _quiz_error(e)
+    return {"joined": True, "group": participant.entry.group, "name": participant.entry.name}
+
+
+@app.get("/quiz/{code}/events")
+async def quiz_events(request: Request, code: str):
+    run = _student_run(code)
+    login = student_login(request)
+    return _sse_response(run, lambda now: run.student_snapshot(login, now))
+
+
+class QuizAnswer(BaseModel):
+    question: int
+    option: int
+
+
+@app.post("/quiz/{code}/answer")
+@limiter.limit("30/minute", key_func=student_rate_key)
+async def quiz_answer(request: Request, code: str, body: QuizAnswer):
+    run = _student_run(code)
+    login = student_login(request)
+    if login is None:
+        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
+    try:
+        await QUIZ_RUNS.answer(run, login, body.question, body.option)
+    except QuizRunError as e:
+        return _quiz_error(e)
+    return {"accepted": True}
