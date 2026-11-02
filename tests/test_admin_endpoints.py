@@ -968,3 +968,217 @@ class TestBulkGradeIgnoresJoinWindow:
             )
 
         assert response.status_code == 202
+
+
+# ---------------------------------------------------------------------------
+# Хранилище конфигураций: версии, конфликты, история, логотипы
+# (docs/COURSE_STORAGE_PLAN.md §7, §13).
+# ---------------------------------------------------------------------------
+
+from grading.course_store import (  # noqa: E402
+    Revision,
+    StoreUnavailableError,
+    StoredFile,
+    content_version,
+)
+
+
+class HistoryStore(LocalCourseStore):
+    """LocalCourseStore with a hand-made history: {sha: {path: content}}."""
+
+    supports_history = True
+
+    def __init__(self, root, versions):
+        super().__init__(root)
+        self.versions = versions
+        self.writes = []
+
+    def write(self, changes, expected, message, author):
+        self.writes.append((dict(changes), dict(expected), message, author))
+        super().write(changes, expected, message, author)
+
+    def history(self, path, limit=30):
+        return [
+            Revision(sha=sha, date=None, author="alice", message=f"{sha}: правка")
+            for sha, files in self.versions.items() if path in files
+        ]
+
+    def read_at(self, path, sha):
+        content = self.versions.get(sha, {}).get(path)
+        if content is None:
+            return None
+        return StoredFile(path=path, content=content, version=content_version(content))
+
+
+OLD_SHA = "a" * 40
+
+
+@pytest.fixture
+def history_store(admin_course_env, monkeypatch):
+    store = HistoryStore(str(admin_course_env), {
+        OLD_SHA: {"test-course.yaml": b"course:\n  name: Old Name\n"},
+    })
+    monkeypatch.setattr(main_module, "COURSE_STORE", store)
+    return store
+
+
+class TestEditVersion:
+    def test_get_returns_version(self, client, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        data = client.get("/courses/test-course/edit").json()
+        content = (admin_course_env / "test-course.yaml").read_bytes()
+        assert data["version"] == content_version(content)
+
+    def test_stale_version_is_409_and_file_untouched(self, client, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        stale = client.get("/courses/test-course/edit").json()["version"]
+        assert put_course(client, "course:\n  name: First\n").status_code == 200
+
+        response = client.put(
+            "/courses/test-course/edit", json={"content": "course:\n  name: Second\n", "version": stale}
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"].startswith("Конфигурацию курса изменил другой пользователь")
+        assert "First" in (admin_course_env / "test-course.yaml").read_text(encoding="utf-8")
+
+    def test_store_unavailable_is_503(self, client, admin_course_env, monkeypatch):
+        client.cookies.set("admin_session", valid_cookie())
+        version = client.get("/courses/test-course/edit").json()["version"]
+
+        def unavailable(*args, **kwargs):
+            raise StoreUnavailableError("down")
+
+        monkeypatch.setattr(main_module.COURSE_STORE, "write", unavailable)
+        response = client.put("/courses/test-course/edit", json={"content": "course: {}", "version": version})
+        assert response.status_code == 503
+        assert response.json()["detail"] == "Хранилище конфигураций недоступно, изменения не сохранены"
+
+    def test_course_key_is_required(self, client, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        assert put_course(client, "name: no course key\n").status_code == 400
+
+    def test_broken_team_section_blocks_save(self, client, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        content = 'course:\n  labs:\n    "1":\n      team:\n        size-max: "много"\n'
+        assert put_course(client, content).status_code == 400
+
+
+class TestUploadSingleWrite:
+    def test_file_and_index_in_one_write(self, client, history_store, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.post(
+            "/courses/upload", files={"file": ("new-course.yaml", b"course: {name: New}\n", "application/x-yaml")}
+        )
+        assert response.status_code == 200
+        assert len(history_store.writes) == 1
+        changes, expected, message, author = history_store.writes[0]
+        assert set(changes) == {"new-course.yaml", "index.yaml"}
+        assert expected["new-course.yaml"] is None
+        assert message == "new-course: новый курс"
+        assert author == main_module.ADMIN_LOGIN
+
+    @pytest.mark.parametrize("filename", ["index.yaml", "../evil.yaml", ".hidden.yaml", "sub/x.yaml"])
+    def test_bad_file_names(self, client, admin_course_env, filename):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.post(
+            "/courses/upload", files={"file": (filename, b"course: {}\n", "application/x-yaml")}
+        )
+        assert response.status_code == 400
+
+
+class TestDeleteThroughStore:
+    def test_hide_is_one_index_write(self, client, history_store, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        assert client.delete("/courses/test-course").status_code == 200
+        changes, _expected, message, _author = history_store.writes[0]
+        assert set(changes) == {"index.yaml"}
+        assert message == "test-course: курс скрыт"
+        assert "hidden" in (admin_course_env / "index.yaml").read_text(encoding="utf-8")
+
+
+class TestHistoryAndRestore:
+    def test_no_history_in_local_store_is_404(self, client, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        assert client.get("/admin/courses/test-course/history").status_code == 404
+
+    def test_history(self, client, history_store):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.get("/admin/courses/test-course/history")
+        assert response.status_code == 200
+        assert response.json() == [
+            {"sha": OLD_SHA, "date": None, "author": "alice", "message": f"{OLD_SHA}: правка"}
+        ]
+
+    def test_version_content(self, client, history_store):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.get(f"/admin/courses/test-course/history/{OLD_SHA}")
+        assert response.json()["content"] == "course:\n  name: Old Name\n"
+        assert client.get("/admin/courses/test-course/history/" + "b" * 40).status_code == 404
+        assert client.get("/admin/courses/test-course/history/not-a-sha").status_code == 404
+
+    def test_restore(self, client, history_store, admin_course_env):
+        client.cookies.set("admin_session", valid_cookie())
+        version = client.get("/courses/test-course/edit").json()["version"]
+        response = client.post(
+            "/admin/courses/test-course/restore", json={"sha": OLD_SHA, "version": version}
+        )
+        assert response.status_code == 200
+        assert "Old Name" in (admin_course_env / "test-course.yaml").read_text(encoding="utf-8")
+        assert history_store.writes[-1][2] == f"test-course: восстановлена версия {OLD_SHA[:7]}"
+
+    def test_restore_with_stale_version_is_409(self, client, history_store):
+        client.cookies.set("admin_session", valid_cookie())
+        response = client.post("/admin/courses/test-course/restore", json={"sha": OLD_SHA, "version": "stale"})
+        assert response.status_code == 409
+
+    def test_restoring_lower_join_revision_is_400(self, client, history_store, admin_course_env):
+        """Восстановление старой версии не должно воскрешать отозванную ссылку."""
+        (admin_course_env / "test-course.yaml").write_text(SECRET_LAB_YAML, encoding="utf-8")
+        history_store.versions[OLD_SHA]["test-course.yaml"] = (
+            SECRET_LAB_YAML.replace("revision: 3", "revision: 1").encode("utf-8")
+        )
+        client.cookies.set("admin_session", valid_cookie())
+        version = client.get("/courses/test-course/edit").json()["version"]
+        response = client.post("/admin/courses/test-course/restore", json={"sha": OLD_SHA, "version": version})
+        assert response.status_code == 400
+        assert "revision" in response.json()["detail"]
+        assert (admin_course_env / "test-course.yaml").read_text(encoding="utf-8") == SECRET_LAB_YAML
+
+    @pytest.mark.parametrize("method,path,kwargs", [
+        ("GET", "/admin/courses/test-course/history", {}),
+        ("GET", f"/admin/courses/test-course/history/{OLD_SHA}", {}),
+        ("POST", "/admin/courses/test-course/restore", {"json": {"sha": OLD_SHA, "version": "x"}}),
+    ])
+    def test_foreign_course_is_404(self, client, history_store, method, path, kwargs):
+        stranger = main_module.AdminIdentity(login="stranger", role="teacher", via="github")
+        client.cookies.set("admin_session", main_module._build_admin_session(stranger))
+        response = client.request(method, path, **kwargs)
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Курс не найден"}
+        assert history_store.writes == []
+
+
+class TestLogoRoute:
+    @pytest.fixture
+    def logo(self, admin_course_env):
+        (admin_course_env / "logos").mkdir()
+        (admin_course_env / "logos" / "os.png").write_bytes(b"\x89PNG-data")
+        return b"\x89PNG-data"
+
+    def test_content_type_and_etag(self, client, logo):
+        response = client.get("/courses/logos/os.png")
+        assert response.status_code == 200
+        assert response.content == logo
+        assert response.headers["content-type"] == "image/png"
+        assert response.headers["etag"] == f'"{content_version(logo)}"'
+        assert response.headers["cache-control"] == "public, max-age=3600"
+
+    def test_not_modified(self, client, logo):
+        etag = client.get("/courses/logos/os.png").headers["etag"]
+        response = client.get("/courses/logos/os.png", headers={"If-None-Match": etag})
+        assert response.status_code == 304
+
+    def test_missing_and_bad_names(self, client, logo):
+        assert client.get("/courses/logos/none.png").status_code == 404
+        assert client.get("/courses/logos/..%2Findex.yaml").status_code == 404
+        assert client.get("/courses/logos/.hidden").status_code == 404
