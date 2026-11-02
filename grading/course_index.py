@@ -1,10 +1,9 @@
 """
 Reading the course index and the course configs it points at.
 
-One place reads `courses/index.yaml` and the `courses/*.yaml` files it names,
-so that moving the configs into another store (a database, a private git
-repository) is a change in one module rather than in every caller - see
-docs/SECRET_JOIN_LINKS_PLAN.md §13.
+All reading goes through a CourseStore (grading/course_store.py): the
+`courses/` directory locally, a private GitHub repository on the server
+(docs/COURSE_STORAGE_PLAN.md). Nothing here opens files itself.
 
 `main.iter_course_configs()` is the server's entry point into this module and
 the single enumeration point of the project; `scripts/join-link.py` uses the
@@ -12,36 +11,39 @@ functions here directly, because importing `main` would require the server's
 whole environment just to print a link.
 """
 import logging
-import os
 
 import yaml
 
+from grading.course_store import INDEX_PATH, StoredFile
+
 logger = logging.getLogger(__name__)
 
-INDEX_FILENAME = "index.yaml"
+INDEX_FILENAME = INDEX_PATH
 
 
-def index_path(courses_dir: str) -> str:
-    return os.path.join(courses_dir, INDEX_FILENAME)
-
-
-def load_course_index(index_file: str) -> dict:
+def parse_course_index(stored: StoredFile | None) -> dict:
     """
-    Load and validate the course index file.
+    Parse index.yaml as read from the store.
 
     Raises:
-        RuntimeError: the file is missing or has no `courses` key
+        RuntimeError: the file is missing, unparseable or has no `courses` list
     """
-    if not os.path.exists(index_file):
-        raise RuntimeError(f"Course index file not found: {index_file}")
+    if stored is None:
+        raise RuntimeError(f"Course index file not found: {INDEX_FILENAME}")
+    try:
+        index_data = yaml.safe_load(stored.content)
+    except yaml.YAMLError as e:
+        raise RuntimeError(f"Invalid index.yaml: {e}")
 
-    with open(index_file, "r", encoding="utf-8") as f:
-        index_data = yaml.safe_load(f)
-
-    if not isinstance(index_data, dict) or "courses" not in index_data:
+    if not isinstance(index_data, dict) or not isinstance(index_data.get("courses"), list):
         raise RuntimeError("Invalid index.yaml structure: missing 'courses' key")
 
     return index_data
+
+
+def load_course_index(store) -> dict:
+    """Load and validate the course index (see parse_course_index)."""
+    return parse_course_index(store.read(INDEX_FILENAME))
 
 
 def course_meta(entry: dict) -> dict:
@@ -55,7 +57,7 @@ def course_meta(entry: dict) -> dict:
     }
 
 
-def read_course_file(courses_dir: str, entry: dict) -> dict | None:
+def read_course_file(store, entry: dict) -> dict | None:
     """
     Read one course file named by an index entry.
 
@@ -64,19 +66,18 @@ def read_course_file(courses_dir: str, entry: dict) -> dict | None:
         missing, unparseable or not a course config (logged, never fatal -
         one broken file must not take the whole list down).
     """
-    file_path = os.path.join(courses_dir, entry["file"])
-    if not os.path.exists(file_path):
+    stored = store.read(entry["file"])
+    if stored is None:
         logger.warning(f"Course file {entry['file']} not found, skipping")
         return None
 
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            data = yaml.safe_load(f)
+        data = yaml.safe_load(stored.content)
     except yaml.YAMLError as e:
         logger.error(f"Error parsing YAML in {entry['file']}: {e}")
         return None
 
-    if not isinstance(data, dict) or "course" not in data:
+    if not isinstance(data, dict) or not isinstance(data.get("course"), dict):
         logger.warning(f"Skipping file {entry['file']}: invalid structure")
         return None
 
@@ -85,20 +86,45 @@ def read_course_file(courses_dir: str, entry: dict) -> dict | None:
     return course_info
 
 
-def iter_course_configs(courses_dir: str, index_file: str | None = None):
-    """
-    Yield (course_id, course_info) for every course in the index.
-
-    Args:
-        courses_dir: directory holding the course YAML files
-        index_file: path to index.yaml (defaults to one inside `courses_dir`)
-    """
-    index_file = index_file or index_path(courses_dir)
-    for entry in load_course_index(index_file).get("courses", []):
+def iter_course_configs(store):
+    """Yield (course_id, course_info) for every course in the index."""
+    for entry in load_course_index(store).get("courses", []):
+        if not isinstance(entry, dict):
+            continue
         course_id = entry.get("id")
         if not course_id or not entry.get("file"):
             continue
-        course_info = read_course_file(courses_dir, entry)
+        course_info = read_course_file(store, entry)
         if course_info is None:
             continue
         yield course_id, course_info
+
+
+def course_files(store) -> set[str]:
+    """Course YAML files at the top level of the store (index.yaml excluded)."""
+    return {
+        path for path in store.list()
+        if "/" not in path and path.endswith((".yaml", ".yml")) and path != INDEX_FILENAME
+    }
+
+
+def index_errors(index_data: dict, existing_files: set[str]) -> list[str]:
+    """
+    Problems that make an index unusable: duplicate ids, entries without id or
+    file, files the index points at that do not exist. Checked at startup and
+    before writing a changed index (§6 of the plan).
+    """
+    errors = []
+    ids = []
+    for entry in index_data.get("courses", []):
+        if not isinstance(entry, dict) or not entry.get("id") or not entry.get("file"):
+            errors.append(f"Index entry without id or file: {entry!r}")
+            continue
+        ids.append(entry["id"])
+        if entry["file"] not in existing_files:
+            errors.append(f"File referenced in index but not found: {entry['file']}")
+
+    duplicates = sorted({x for x in ids if ids.count(x) > 1})
+    if duplicates:
+        errors.append(f"Duplicate course IDs in index: {duplicates}")
+    return errors

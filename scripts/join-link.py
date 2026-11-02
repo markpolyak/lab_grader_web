@@ -27,6 +27,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from grading.course_index import iter_course_configs  # noqa: E402
+from grading.course_store import create_course_store  # noqa: E402
 from grading.join_links import (  # noqa: E402
     STATE_CLOSED,
     STATE_NOT_OPEN,
@@ -97,7 +98,7 @@ def main() -> int:
     parser.add_argument(
         "--courses-dir",
         default=os.path.join(PROJECT_ROOT, "courses"),
-        help="каталог с конфигами курсов",
+        help="каталог с конфигами курсов (при COURSES_SOURCE=local, по умолчанию)",
     )
     args = parser.parse_args()
 
@@ -112,7 +113,11 @@ def main() -> int:
     base_url = args.base_url.rstrip("/")
     found = 0
 
-    for course_id, course_info in iter_course_configs(args.courses_dir):
+    # Тот же источник, что у сервера: COURSES_SOURCE и COURSES_GITHUB_*
+    # (docs/COURSE_STORAGE_PLAN.md §8); по умолчанию - локальный каталог.
+    store = create_course_store(os.environ, args.courses_dir)
+
+    for course_id, course_info in iter_course_configs(store):
         if args.course and course_id != args.course:
             continue
 

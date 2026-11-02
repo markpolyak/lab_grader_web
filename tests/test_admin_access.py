@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main as main_module
+from grading.course_store import LocalCourseStore
 from main import app
 from grading.admin_access import AdminIdentity, is_course_teacher, parse_login_list
 from grading.propagate import _jobs, _running_lab_keys, try_start_propagate_job
@@ -106,8 +107,7 @@ def courses_env(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(main_module, "COURSES_DIR", str(courses_dir))
-    monkeypatch.setattr(main_module, "INDEX_FILE", str(index_file))
+    monkeypatch.setattr(main_module, "COURSE_STORE", LocalCourseStore(str(courses_dir)))
     return courses_dir
 
 
@@ -357,7 +357,7 @@ class TestIsCourseTeacher:
 def course_routes(course_id: str):
     return [
         ("GET", f"/courses/{course_id}/edit", {}),
-        ("PUT", f"/courses/{course_id}/edit", {"json": {"content": yaml.dump(course_yaml("X", ["alice", "bob"]))}}),
+        ("PUT", f"/courses/{course_id}/edit", {"json": {"content": yaml.dump(course_yaml("X", ["alice", "bob"])), "version": "x"}}),
         ("DELETE", f"/courses/{course_id}", {}),
         ("GET", f"/admin/courses/{course_id}/labs", {}),
         ("POST", f"/admin/courses/{course_id}/labs/1/propagate-template-update", {"json": {"dry_run": True}}),
@@ -366,6 +366,14 @@ def course_routes(course_id: str):
 
 
 ROUTE_IDS = ["edit-get", "edit-put", "delete", "labs", "propagate", "bulk-grade"]
+
+
+def with_current_version(client, method, path, kwargs):
+    """A save carries the version the editor loaded - fetch it like the editor does."""
+    if method == "PUT" and path.endswith("/edit"):
+        version = client.get(path).json()["version"]
+        kwargs = {"json": {**kwargs["json"], "version": version}}
+    return kwargs
 
 
 def reached_handler(response) -> bool:
@@ -385,7 +393,8 @@ class TestCourseRoutes:
     @pytest.mark.parametrize("index", range(6), ids=ROUTE_IDS)
     def test_own_course(self, courses_env, stub_github_and_sheets, index):
         method, path, kwargs = course_routes("alice-course")[index]
-        response = client_as(ALICE).request(method, path, **kwargs)
+        client = client_as(ALICE)
+        response = client.request(method, path, **with_current_version(client, method, path, kwargs))
         assert reached_handler(response), response.text
         assert response.status_code < 400, response.text
 
@@ -403,11 +412,12 @@ class TestCourseRoutes:
     @pytest.mark.parametrize("index", range(6), ids=ROUTE_IDS)
     def test_superadmin(self, courses_env, stub_github_and_sheets, index):
         method, path, kwargs = course_routes("bob-course")[index]
-        response = client_as(ROOT).request(method, path, **kwargs)
+        client = client_as(ROOT)
+        response = client.request(method, path, **with_current_version(client, method, path, kwargs))
         assert response.status_code < 400, response.text
 
     def test_foreign_course_is_left_untouched(self, courses_env):
-        client_as(ALICE).put("/courses/bob-course/edit", json={"content": "course: {}"})
+        client_as(ALICE).put("/courses/bob-course/edit", json={"content": "course: {}", "version": "x"})
         client_as(ALICE).delete("/courses/bob-course")
         assert yaml.safe_load((courses_env / "bob-course.yaml").read_text(encoding="utf-8")) == course_yaml(
             "Bob Course", ["bob"]
@@ -522,8 +532,11 @@ class TestUploadAndSave:
         assert self.upload(ROOT, ["bob"]).status_code == 200
 
     def save(self, identity, teachers):
-        return client_as(identity).put(
-            "/courses/alice-course/edit", json={"content": yaml.dump(course_yaml("Alice Course", teachers))}
+        client = client_as(identity)
+        version = client.get("/courses/alice-course/edit").json()["version"]
+        return client.put(
+            "/courses/alice-course/edit",
+            json={"content": yaml.dump(course_yaml("Alice Course", teachers)), "version": version},
         )
 
     def test_teacher_removing_self_is_refused(self, courses_env):

@@ -107,34 +107,32 @@ class TestFindLabConfigNotFound:
 
 
 class TestNoRegressionForEveryProductionCourse:
-    """Сквозная проверка по реальным конфигам: обращение и по ключу, и по
-    short-name должно приводить ровно в ту лабу, которой они принадлежат."""
+    """Сквозная проверка по конфигам из хранилища курсов: обращение и по ключу,
+    и по short-name должно приводить ровно в ту лабу, которой они принадлежат.
+
+    Конфиги читаются через хранилище (docs/COURSE_STORAGE_PLAN.md §10): после
+    переноса реальных курсов в приватный репозиторий в courses/ остаётся
+    только пример, и тест проверяет то, что есть, а не конкретные файлы."""
 
     def test_every_lab_of_every_course_resolves_to_itself(self):
-        import glob
-        import yaml
-
         checked = 0
-        for path in sorted(glob.glob("courses/*.yaml")):
-            if os.path.basename(path) == "index.yaml":
-                continue
-            with open(path, encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            labs = (data.get("course") or {}).get("labs") or {}
+        for course_id, course_info in main_module.iter_course_configs():
+            labs = course_info.get("labs") or {}
             for key, config in labs.items():
                 by_key = main_module.find_lab_config(labs, str(key))
-                assert by_key is not None, f"{path}: ключ {key!r} не разрешается"
-                assert by_key[0] == str(key), f"{path}: ключ {key!r} -> {by_key[0]!r}"
+                assert by_key is not None, f"{course_id}: ключ {key!r} не разрешается"
+                assert by_key[0] == str(key), f"{course_id}: ключ {key!r} -> {by_key[0]!r}"
 
                 short_name = config.get("short-name")
                 if short_name:
                     by_name = main_module.find_lab_config(labs, short_name)
-                    assert by_name is not None, f"{path}: short-name {short_name!r} не разрешается"
+                    assert by_name is not None, f"{course_id}: short-name {short_name!r} не разрешается"
                     assert by_name[0] == str(key), (
-                        f"{path}: short-name {short_name!r} -> ключ {by_name[0]!r}, ожидался {key!r}"
+                        f"{course_id}: short-name {short_name!r} -> ключ {by_name[0]!r}, ожидался {key!r}"
                     )
                 checked += 1
-        assert checked > 0
+        if checked == 0:
+            pytest.skip("В хранилище курсов нет ни одной лабы")
 
 
 class TestJoinResolvesFractionalLab:

@@ -1,5 +1,4 @@
 from fastapi import FastAPI, Request, Response, HTTPException, Depends
-from fastapi.staticfiles import StaticFiles
 import os
 import yaml
 import gspread
@@ -84,11 +83,21 @@ from grading import (
     resolve_token,
 )
 from grading.course_index import (
+    INDEX_FILENAME,
+    course_files,
     course_meta,
+    index_errors,
     iter_course_configs as _iter_course_configs,
     load_course_index as _load_course_index,
+    parse_course_index,
+    read_course_file,
 )
-import tempfile
+from grading.course_store import (
+    StoreConflictError,
+    StoreUnavailableError,
+    create_course_store,
+)
+import mimetypes
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -233,12 +242,19 @@ app.add_middleware(
 )
 signer = TimestampSigner(SECRET_KEY)
 
-# Course index management
-INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
+# Course configs live in a CourseStore (docs/COURSE_STORAGE_PLAN.md): the
+# courses/ directory by default, a private GitHub repository with
+# COURSES_SOURCE=github. Created once at startup; tests replace it.
+COURSE_STORE = create_course_store(os.environ, COURSES_DIR)
+
+
+def get_course_store():
+    return COURSE_STORE
+
 
 def load_course_index():
     """Load and validate course index file"""
-    return _load_course_index(INDEX_FILE)
+    return _load_course_index(get_course_store())
 
 def iter_course_configs():
     """
@@ -256,7 +272,7 @@ def iter_course_configs():
     Yields:
         (course_id, course_info) - `course_info` с заполненным `_meta`
     """
-    yield from _iter_course_configs(COURSES_DIR, INDEX_FILE)
+    yield from _iter_course_configs(get_course_store())
 
 
 def warn_about_join_links(filename: str, course_info: dict) -> None:
@@ -310,7 +326,8 @@ def warn_about_team_labs(filename: str, course_info: dict) -> None:
 
 
 def validate_course_index():
-    """Validate that index.yaml is synchronized with course files"""
+    """Validate that index.yaml is synchronized with course files (through the store)"""
+    store = get_course_store()
     try:
         index_data = load_course_index()
     except Exception as e:
@@ -318,45 +335,27 @@ def validate_course_index():
         return False
 
     courses = index_data.get("courses", [])
+    actual_files = course_files(store)
 
-    # Collect indexed files
-    indexed_files = {entry["file"] for entry in courses if "file" in entry}
-
-    # Collect actual files
-    actual_files = {
-        f for f in os.listdir(COURSES_DIR)
-        if f.endswith(".yaml") and f != "index.yaml" and os.path.isfile(os.path.join(COURSES_DIR, f))
-    }
-
-    # Check for missing files
-    missing_files = indexed_files - actual_files
-    if missing_files:
-        print(f"❌ ERROR: Files referenced in index but not found: {missing_files}")
+    errors = index_errors(index_data, actual_files)
+    if errors:
+        for error in errors:
+            print(f"❌ ERROR: {error}")
         return False
 
-    # Check for orphaned files
-    orphaned_files = actual_files - indexed_files
+    orphaned_files = actual_files - {entry["file"] for entry in courses}
     if orphaned_files:
         print(f"⚠️  WARNING: Course files not in index (will be ignored): {orphaned_files}")
 
-    # Check for duplicate IDs
-    ids = [entry.get("id") for entry in courses if "id" in entry]
-    if len(ids) != len(set(ids)):
-        duplicates = {x for x in ids if ids.count(x) > 1}
-        print(f"❌ ERROR: Duplicate course IDs in index: {duplicates}")
-        return False
-
     # Validate each indexed file can be loaded
     for entry in courses:
-        file_path = os.path.join(COURSES_DIR, entry["file"])
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-                if not isinstance(data, dict) or "course" not in data:
-                    print(f"❌ ERROR: Invalid course structure in {entry['file']}")
-                    return False
-                warn_about_team_labs(entry["file"], data["course"])
-                warn_about_join_links(entry["file"], data["course"])
+            data = yaml.safe_load(store.read(entry["file"]).content)
+            if not isinstance(data, dict) or not isinstance(data.get("course"), dict):
+                print(f"❌ ERROR: Invalid course structure in {entry['file']}")
+                return False
+            warn_about_team_labs(entry["file"], data["course"])
+            warn_about_join_links(entry["file"], data["course"])
         except Exception as e:
             print(f"❌ ERROR: Failed to load {entry['file']}: {e}")
             return False
@@ -378,17 +377,10 @@ def get_course_by_id(course_id: str):
     if not course_entry:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    # Load course file
-    file_path = os.path.join(COURSES_DIR, course_entry["file"])
-    if not os.path.exists(file_path):
+    # Course file with index metadata merged in as `_meta`
+    course_info = read_course_file(get_course_store(), course_entry)
+    if course_info is None:
         raise HTTPException(status_code=404, detail="Course file not found")
-
-    with open(file_path, "r", encoding="utf-8") as f:
-        course_data = yaml.safe_load(f)
-
-    # Merge index metadata with course data
-    course_info = course_data.get("course", {})
-    course_info["_meta"] = course_meta(course_entry)
 
     return course_info
 
@@ -397,19 +389,41 @@ print("Validating course index...")
 if not validate_course_index():
     raise RuntimeError("Course index validation failed. Please fix index.yaml before starting.")
 
-# Two secret links resolving to the same lab would be silent; three lines turn
-# that into a startup log line a teacher can fix by raising join.revision
-# (docs/SECRET_JOIN_LINKS_PLAN.md §3.1).
-for _collision in check_token_collisions(SECRET_KEY, iter_course_configs()):
-    logger.error(f"Конфликт секретных ссылок: {_collision}")
+def log_token_collisions() -> None:
+    """
+    Two secret links resolving to the same lab would be silent; this turns that
+    into a log line a teacher can fix by raising join.revision
+    (docs/SECRET_JOIN_LINKS_PLAN.md §3.1). Run at startup and after every
+    refresh of the config store that brought a new commit.
+    """
+    for collision in check_token_collisions(SECRET_KEY, iter_course_configs()):
+        logger.error(f"Конфликт секретных ссылок: {collision}")
 
-# Mount static files for course logos
-LOGOS_DIR = os.path.join(COURSES_DIR, "logos")
-if os.path.exists(LOGOS_DIR):
-    app.mount("/courses/logos", StaticFiles(directory=LOGOS_DIR), name="course_logos")
-    print(f"✅ Course logos available at /courses/logos")
-else:
-    print(f"⚠️  Warning: Logos directory not found at {LOGOS_DIR}")
+
+log_token_collisions()
+if hasattr(COURSE_STORE, "add_listener"):
+    COURSE_STORE.add_listener(log_token_collisions)
+
+
+# Course logos are served from the config store (`logos/{name}`), not from a
+# mounted directory - on the server the configs live in another repository.
+# Registered before the /courses/{course_id}/... routes so it wins the match.
+LOGO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+@app.get("/courses/logos/{name}")
+def course_logo(request: Request, name: str):
+    stored = get_course_store().read(f"logos/{name}") if LOGO_NAME_RE.match(name) else None
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Логотип не найден")
+
+    etag = f'"{stored.version}"'
+    headers = {"ETag": etag, "Cache-Control": "public, max-age=3600"}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=headers)
+
+    media_type = mimetypes.guess_type(name)[0] or "application/octet-stream"
+    return Response(content=stored.content, media_type=media_type, headers=headers)
 
 class AuthRequest(BaseModel):
     login: str
@@ -805,7 +819,9 @@ def delete_course(request: Request, course_id: str, admin: AdminIdentity = Depen
     Mark course as hidden in index (soft delete)
     The course file is preserved in repository
     """
-    index_data = load_course_index()
+    store = get_course_store()
+    index_file = store.read(INDEX_FILENAME)
+    index_data = parse_course_index(index_file)
 
     # Find course in index
     course_found = False
@@ -818,32 +834,72 @@ def delete_course(request: Request, course_id: str, admin: AdminIdentity = Depen
     if not course_found:
         raise HTTPException(status_code=404, detail="Курс не найден")
 
-    # Save updated index
-    with open(INDEX_FILE, "w", encoding="utf-8") as f:
-        yaml.dump(index_data, f, allow_unicode=True, sort_keys=False)
+    _store_write(
+        {INDEX_FILENAME: _dump_index(index_data)},
+        {INDEX_FILENAME: index_file.version},
+        f"{course_id}: курс скрыт",
+        admin,
+    )
 
     return {"message": "Курс успешно скрыт (файл сохранен в репозитории)"}
 
 
+STORE_CONFLICT_DETAIL = (
+    "Конфигурацию курса изменил другой пользователь. Скопируйте свои правки и обновите страницу"
+)
+STORE_UNAVAILABLE_DETAIL = "Хранилище конфигураций недоступно, изменения не сохранены"
+
+
+def _store_write(changes: dict, expected: dict, message: str, admin: AdminIdentity) -> None:
+    """
+    One write to the config store (one commit on GitHub), authored by the
+    signed-in user. Store errors become the HTTP answers of §7.1 of
+    docs/COURSE_STORAGE_PLAN.md.
+    """
+    try:
+        get_course_store().write(changes, expected, message, admin.login)
+    except StoreConflictError as e:
+        logger.info(f"Config store conflict on {e} ({message}, login='{admin.login}')")
+        raise HTTPException(status_code=409, detail=STORE_CONFLICT_DETAIL)
+    except StoreUnavailableError as e:
+        logger.error(f"Config store unavailable ({message}, login='{admin.login}'): {e}")
+        raise HTTPException(status_code=503, detail=STORE_UNAVAILABLE_DETAIL)
+
+
+def _dump_index(index_data: dict) -> bytes:
+    return yaml.dump(index_data, allow_unicode=True, sort_keys=False).encode("utf-8")
+
+
+def _read_course_file(course_id: str):
+    """The stored file of a course (content + version) and its filename."""
+    course_info = get_course_by_id(course_id)
+    filename = course_info["_meta"]["filename"]
+    stored = get_course_store().read(filename)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Файл курса не найден")
+    return filename, stored
+
+
+def _parse_yaml_or_none(content: bytes):
+    try:
+        return yaml.safe_load(content)
+    except yaml.YAMLError:
+        return None
+
+
 class EditCourseRequest(BaseModel):
     content: str
+    # Version of the file the editor loaded (GET .../edit) - a save over a
+    # newer version is a conflict, not a silent overwrite.
+    version: str
 
 
 @app.get("/courses/{course_id}/edit")
 @limiter.limit("30/minute")
 def edit_course_get(request: Request, course_id: str, admin: AdminIdentity = Depends(require_course_access)):
     """Получить YAML содержимое курса для редактирования"""
-    course_info = get_course_by_id(course_id)
-    filename = course_info["_meta"]["filename"]
-
-    file_path = os.path.join(COURSES_DIR, filename)
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="Файл курса не найден")
-
-    with open(file_path, "r", encoding="utf-8") as file:
-        content = file.read()
-
-    return {"filename": filename, "content": content}
+    filename, stored = _read_course_file(course_id)
+    return {"filename": filename, "content": stored.text, "version": stored.version}
 
 
 def _labs_of(course_data) -> dict:
@@ -918,27 +974,46 @@ def _validate_teacher_keeps_access(admin: AdminIdentity, new_data) -> None:
         raise HTTPException(status_code=400, detail="Нельзя удалить себя из преподавателей курса")
 
 
-def _write_file_atomically(file_path: str, content: str) -> None:
-    """
-    Записать файл целиком или не записать вовсе.
+def _validate_team_sections(new_data) -> None:
+    """A broken `team` section blocks the save instead of only reaching the startup log."""
+    for lab_key, lab_config in _labs_of(new_data).items():
+        if not is_team_lab(lab_config):
+            continue
+        try:
+            parse_team_config(lab_config)
+        except TeamConfigError as e:
+            raise HTTPException(status_code=400, detail=f"Лаба '{lab_key}': {e}")
 
-    Прежняя запись усечением оставляла обрезанный YAML, если процесс умирал
-    посреди неё; во время идущей контрольной это ломает ссылку сразу.
-    Временный файл создаётся рядом с целевым, чтобы os.replace был
-    атомарным переименованием в пределах одной файловой системы.
+
+def validate_course_change(course_id: str | None, new_text, old_data, identity: AdminIdentity):
     """
-    directory = os.path.dirname(os.path.abspath(file_path))
-    tmp_fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".course-", suffix=".yaml.tmp")
+    Checks before any course file is written - save, upload and restore alike
+    (docs/COURSE_STORAGE_PLAN.md §6):
+
+    1. YAML parses and has a `course` mapping;
+    2. `join` sections parse and `join.revision` does not go down (a restored
+       old version too - it would revive a revoked link);
+    3. `team` sections parse;
+    4. a teacher does not remove themselves from `teachers`.
+
+    Returns:
+        The parsed YAML
+
+    Raises:
+        HTTPException(400)
+    """
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_file:
-            tmp_file.write(content)
-            tmp_file.flush()
-            os.fsync(tmp_file.fileno())
-        os.replace(tmp_path, file_path)
-    except Exception:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+        new_data = yaml.safe_load(new_text)
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка в YAML формате: {str(e)}")
+
+    if not isinstance(new_data, dict) or not isinstance(new_data.get("course"), dict):
+        raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
+
+    _validate_join_sections(new_data, old_data)
+    _validate_team_sections(new_data)
+    _validate_teacher_keeps_access(identity, new_data)
+    return new_data
 
 
 @app.put("/courses/{course_id}/edit")
@@ -950,28 +1025,99 @@ def edit_course_put(
     admin: AdminIdentity = Depends(require_course_access),
 ):
     """Сохранить изменения в YAML файле курса"""
-    course_info = get_course_by_id(course_id)
-    filename = course_info["_meta"]["filename"]
+    filename, stored = _read_course_file(course_id)
+    validate_course_change(course_id, data.content, _parse_yaml_or_none(stored.content), admin)
 
-    file_path = os.path.join(COURSES_DIR, filename)
-
-    try:
-        new_data = yaml.safe_load(data.content)
-    except yaml.YAMLError as e:
-        raise HTTPException(status_code=400, detail=f"Ошибка в YAML формате: {str(e)}")
-
-    try:
-        with open(file_path, "r", encoding="utf-8") as file:
-            old_data = yaml.safe_load(file.read())
-    except (OSError, yaml.YAMLError):
-        old_data = None
-
-    _validate_join_sections(new_data, old_data)
-    _validate_teacher_keeps_access(admin, new_data)
-
-    _write_file_atomically(file_path, data.content)
-
+    _store_write(
+        {filename: data.content.encode("utf-8")},
+        {filename: data.version},
+        f"{course_id}: правка через админку",
+        admin,
+    )
     return {"message": "Изменения успешно сохранены"}
+
+
+# ---------------------------------------------------------------------------
+# Version history of a course file (docs/COURSE_STORAGE_PLAN.md §7.2)
+# ---------------------------------------------------------------------------
+
+REVISION_SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+HISTORY_UNSUPPORTED_DETAIL = "История версий недоступна для этого хранилища"
+
+
+def _history_store():
+    store = get_course_store()
+    if not store.supports_history:
+        raise HTTPException(status_code=404, detail=HISTORY_UNSUPPORTED_DETAIL)
+    return store
+
+
+def _read_revision(store, filename: str, sha: str):
+    if not REVISION_SHA_RE.match(sha):
+        raise HTTPException(status_code=404, detail="Версия не найдена")
+    try:
+        stored = store.read_at(filename, sha)
+    except StoreUnavailableError as e:
+        logger.error(f"Config store unavailable reading {filename}@{sha}: {e}")
+        raise HTTPException(status_code=503, detail="Хранилище конфигураций недоступно")
+    if stored is None:
+        raise HTTPException(status_code=404, detail="Версия не найдена")
+    return stored
+
+
+@app.get("/admin/courses/{course_id}/history")
+@limiter.limit("30/minute")
+def course_history(request: Request, course_id: str, admin: AdminIdentity = Depends(require_course_access)):
+    """Versions of the course file, newest first: sha, date, author, message."""
+    store = _history_store()
+    filename = get_course_by_id(course_id)["_meta"]["filename"]
+    try:
+        revisions = store.history(filename)
+    except StoreUnavailableError as e:
+        logger.error(f"Config store unavailable reading history of {filename}: {e}")
+        raise HTTPException(status_code=503, detail="Хранилище конфигураций недоступно")
+    return [revision.to_dict() for revision in revisions]
+
+
+@app.get("/admin/courses/{course_id}/history/{sha}")
+@limiter.limit("60/minute")
+def course_history_version(
+    request: Request, course_id: str, sha: str, admin: AdminIdentity = Depends(require_course_access)
+):
+    """The course file as it was in one version (read-only)."""
+    store = _history_store()
+    filename = get_course_by_id(course_id)["_meta"]["filename"]
+    stored = _read_revision(store, filename, sha)
+    return {"sha": sha, "filename": filename, "content": stored.text}
+
+
+class RestoreCourseRequest(BaseModel):
+    sha: str
+    # Version of the current file the teacher saw, as for a save
+    version: str
+
+
+@app.post("/admin/courses/{course_id}/restore")
+@limiter.limit("10/minute")
+def course_restore(
+    request: Request,
+    course_id: str,
+    body: RestoreCourseRequest,
+    admin: AdminIdentity = Depends(require_course_access),
+):
+    """Save the content of an old version as a new version - same checks as a save."""
+    store = _history_store()
+    filename, current = _read_course_file(course_id)
+    old_version = _read_revision(store, filename, body.sha)
+
+    validate_course_change(course_id, old_version.content, _parse_yaml_or_none(current.content), admin)
+    _store_write(
+        {filename: old_version.content},
+        {filename: body.version},
+        f"{course_id}: восстановлена версия {body.sha[:7]}",
+        admin,
+    )
+    return {"message": "Версия восстановлена"}
 
 
 @app.get("/courses/{course_id}/groups")
@@ -2689,12 +2835,16 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: A
     The course will be added with status='active', priority=0 by default
     The ID will be generated from filename (e.g., 'os-2025.yaml' -> 'os-2025')
     """
-    if not file.filename.endswith(".yaml") and not file.filename.endswith(".yml"):
+    filename = file.filename or ""
+    if not filename.endswith(".yaml") and not filename.endswith(".yml"):
         raise HTTPException(status_code=400, detail="Только YAML файлы разрешены")
+    # A bare file name at the top of the store: no directories, no hidden
+    # files, never the index itself.
+    if "/" in filename or "\\" in filename or filename.startswith(".") or filename == INDEX_FILENAME:
+        raise HTTPException(status_code=400, detail="Недопустимое имя файла")
 
-    file_location = os.path.join(COURSES_DIR, file.filename)
-
-    if os.path.exists(file_location):
+    store = get_course_store()
+    if store.read(filename) is not None:
         raise HTTPException(status_code=400, detail="Файл с таким именем уже существует")
 
     content = await file.read()
@@ -2704,7 +2854,7 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: A
         raise HTTPException(status_code=400, detail="Некорректный YAML файл")
 
     # Validate course structure
-    if not isinstance(course_data, dict) or "course" not in course_data:
+    if not isinstance(course_data, dict) or not isinstance(course_data.get("course"), dict):
         raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
 
     # A teacher can only upload a course they will be able to manage
@@ -2712,15 +2862,13 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: A
     if not admin.is_superadmin and not is_teacher_in_upload(course_data, admin.login):
         raise HTTPException(status_code=400, detail=TEACHER_NOT_LISTED_DETAIL)
 
-    # Save course file
-    with open(file_location, "wb") as f:
-        f.write(content)
+    validate_course_change(None, content, None, admin)
 
     # Generate course ID from filename (e.g., 'operating-systems-2025.yaml' -> 'operating-systems-2025')
-    course_id = file.filename.replace(".yaml", "").replace(".yml", "")
+    course_id = filename.replace(".yaml", "").replace(".yml", "")
 
-    # Update index
-    index_data = load_course_index()
+    index_file = store.read(INDEX_FILENAME)
+    index_data = parse_course_index(index_file)
 
     # Check if ID already exists
     existing_ids = {entry.get("id") for entry in index_data.get("courses", [])}
@@ -2732,20 +2880,26 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: A
         course_id = f"{course_id}-{counter}"
 
     # Add new course to index
-    new_entry = {
+    index_data["courses"].append({
         "id": course_id,
-        "file": file.filename,
+        "file": filename,
         "status": "active",
         "priority": 0
-    }
-    index_data["courses"].append(new_entry)
+    })
+    errors = index_errors(index_data, course_files(store) | {filename})
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
 
-    # Save updated index
-    with open(INDEX_FILE, "w", encoding="utf-8") as f:
-        yaml.dump(index_data, f, allow_unicode=True, sort_keys=False)
+    # The course file and its index entry - one write, one commit.
+    _store_write(
+        {filename: content, INDEX_FILENAME: _dump_index(index_data)},
+        {filename: None, INDEX_FILENAME: index_file.version},
+        f"{course_id}: новый курс",
+        admin,
+    )
 
     return {
         "detail": "Курс успешно загружен и добавлен в индекс",
         "course_id": course_id,
-        "filename": file.filename
+        "filename": filename
     }

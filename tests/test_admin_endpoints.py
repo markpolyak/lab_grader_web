@@ -22,6 +22,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import main as main_module
+from grading.course_store import LocalCourseStore
 from main import app
 from grading.grader import CIEvaluation, GradeResult, GradeStatus
 from grading.propagate import _jobs, _running_lab_keys
@@ -62,6 +63,12 @@ SUPERADMIN = main_module.AdminIdentity(
 )
 
 
+def put_course(client, content, course_id="test-course"):
+    """PUT .../edit with the version the editor would have loaded first."""
+    version = client.get(f"/courses/{course_id}/edit").json()["version"]
+    return client.put(f"/courses/{course_id}/edit", json={"content": content, "version": version})
+
+
 def valid_cookie():
     """Emergency (password) sign-in session - superadmin rights."""
     return main_module._build_admin_session(SUPERADMIN)
@@ -84,8 +91,7 @@ def admin_course_env(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(main_module, "COURSES_DIR", str(courses_dir))
-    monkeypatch.setattr(main_module, "INDEX_FILE", str(index_file))
+    monkeypatch.setattr(main_module, "COURSE_STORE", LocalCourseStore(str(courses_dir)))
     return courses_dir
 
 
@@ -93,7 +99,7 @@ PROTECTED_ROUTES = [
     ("GET", "/admin/check-auth", {}),
     ("DELETE", "/courses/test-course", {}),
     ("GET", "/courses/test-course/edit", {}),
-    ("PUT", "/courses/test-course/edit", {"json": {"content": "course: {}"}}),
+    ("PUT", "/courses/test-course/edit", {"json": {"content": "course: {}", "version": "x"}}),
     ("GET", "/admin/courses/test-course/labs", {}),
     (
         "POST",
@@ -155,10 +161,7 @@ class TestRequireAdminAllowsValidSession:
 
     def test_edit_put_returns_200(self, client, admin_course_env):
         client.cookies.set("admin_session", valid_cookie())
-        response = client.put(
-            "/courses/test-course/edit",
-            json={"content": yaml.dump({"course": {"name": "Updated"}}, allow_unicode=True)},
-        )
+        response = put_course(client, yaml.dump({"course": {"name": "Updated"}}, allow_unicode=True))
         assert response.status_code == 200
 
     def test_delete_returns_200(self, client, admin_course_env):
@@ -731,7 +734,7 @@ class TestEditCourseJoinValidation:
     def test_saving_a_valid_change_works(self, client, secret_lab_course):
         client.cookies.set("admin_session", valid_cookie())
         updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 4")
-        response = client.put("/courses/test-course/edit", json={"content": updated})
+        response = put_course(client, updated)
         assert response.status_code == 200
         assert "revision: 4" in secret_lab_course.read_text(encoding="utf-8")
 
@@ -739,7 +742,7 @@ class TestEditCourseJoinValidation:
         """Откат ревизии воскресил бы уже отозванную ссылку (§13 плана)."""
         client.cookies.set("admin_session", valid_cookie())
         updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 2")
-        response = client.put("/courses/test-course/edit", json={"content": updated})
+        response = put_course(client, updated)
         assert response.status_code == 400
         assert "revision" in response.json()["detail"]
         # Файл на диске не тронут
@@ -748,7 +751,7 @@ class TestEditCourseJoinValidation:
     def test_broken_join_section_is_rejected_before_writing(self, client, secret_lab_course):
         client.cookies.set("admin_session", valid_cookie())
         updated = SECRET_LAB_YAML.replace('link: secret', 'link: sekret')
-        response = client.put("/courses/test-course/edit", json={"content": updated})
+        response = put_course(client, updated)
         assert response.status_code == 400
         assert "join.link" in response.json()["detail"]
         assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
@@ -756,7 +759,7 @@ class TestEditCourseJoinValidation:
     def test_unparseable_window_is_rejected(self, client, secret_lab_course):
         client.cookies.set("admin_session", valid_cookie())
         updated = SECRET_LAB_YAML.replace('opens-at: "2026-10-15 10:00"', 'opens-at: "когда-нибудь"')
-        response = client.put("/courses/test-course/edit", json={"content": updated})
+        response = put_course(client, updated)
         assert response.status_code == 400
         assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
 
@@ -765,13 +768,13 @@ class TestEditCourseJoinValidation:
         updated = SECRET_LAB_YAML.replace(
             "      join:", "      team:\n        size-max: 4\n      join:"
         )
-        response = client.put("/courses/test-course/edit", json={"content": updated})
+        response = put_course(client, updated)
         assert response.status_code == 400
         assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
 
     def test_invalid_yaml_is_still_rejected(self, client, secret_lab_course):
         client.cookies.set("admin_session", valid_cookie())
-        response = client.put("/courses/test-course/edit", json={"content": "course: [unclosed"})
+        response = put_course(client, "course: [unclosed")
         assert response.status_code == 400
         assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
 
@@ -779,14 +782,14 @@ class TestEditCourseJoinValidation:
         """Обратная совместимость: конфиг без join сохраняется как раньше."""
         client.cookies.set("admin_session", valid_cookie())
         content = "course:\n  name: Test Course\n  labs:\n    \"1\":\n      short-name: ЛР1\n"
-        response = client.put("/courses/test-course/edit", json={"content": content})
+        response = put_course(client, content)
         assert response.status_code == 200
         assert (admin_course_env / "test-course.yaml").read_text(encoding="utf-8") == content
 
     def test_write_is_atomic_and_leaves_no_temporary_files(self, client, secret_lab_course, admin_course_env):
         client.cookies.set("admin_session", valid_cookie())
         updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 9")
-        assert client.put("/courses/test-course/edit", json={"content": updated}).status_code == 200
+        assert put_course(client, updated).status_code == 200
         leftovers = [p.name for p in admin_course_env.iterdir() if p.name.endswith(".tmp")]
         assert leftovers == []
 
@@ -802,7 +805,7 @@ class TestEditCourseJoinValidation:
         monkeypatch.setattr(main_module.os, "replace", failing_replace)
         updated = SECRET_LAB_YAML.replace("revision: 3", "revision: 5")
         with pytest.raises(OSError):
-            client.put("/courses/test-course/edit", json={"content": updated})
+            put_course(client, updated)
         monkeypatch.setattr(main_module.os, "replace", real_replace)
         assert secret_lab_course.read_text(encoding="utf-8") == SECRET_LAB_YAML
 
