@@ -22,6 +22,17 @@ from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+from grading.admin_access import (
+    AdminIdentity,
+    ROLE_SUPERADMIN,
+    ROLE_TEACHER,
+    VIA_GITHUB,
+    VIA_PASSWORD,
+    course_teachers as _admin_course_teachers,
+    is_course_teacher,
+    is_teacher_in_upload,
+    parse_login_list,
+)
 from grading import (
     LabGrader,
     GitHubClient,
@@ -159,6 +170,12 @@ def _start_background_job(func, *args, name: str) -> None:
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+# GitHub logins with access to every course in the admin panel
+# (docs/MULTI_TEACHER_PLAN.md §3.3). Comma-separated, case-insensitive.
+SUPERADMIN_GITHUB_LOGINS = parse_login_list(os.getenv("SUPERADMIN_GITHUB_LOGINS"))
+# Admin session lifetime (seconds) - same for both ways of signing in.
+ADMIN_SESSION_COOKIE = "admin_session"
+ADMIN_SESSION_MAX_AGE = 3600
 SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
 
 # GitHub OAuth App for the /join student repo creation flow (see docs/REPO_GENERATION_PLAN.md).
@@ -411,52 +428,194 @@ class StudentRegistration(BaseModel):
 async def read_index(request: Request):
     return FileResponse("dist/index.html")
 
+def _build_admin_session(identity: AdminIdentity) -> str:
+    """
+    Signed value of the `admin_session` cookie: JSON {login, role, via},
+    encoded like the OAuth `state` (docs/MULTI_TEACHER_PLAN.md §5).
+    """
+    payload = json.dumps(identity.to_dict()).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload).decode("ascii")
+    return signer.sign(payload_b64.encode("ascii")).decode("ascii")
+
+
+def _parse_admin_session(cookie: str) -> AdminIdentity | None:
+    """
+    Verify and decode an `admin_session` cookie.
+
+    Returns:
+        The identity, or None if the cookie is forged, expired, or of the old
+        format (a bare signed login) - that one just means "sign in again".
+    """
+    try:
+        payload_b64 = signer.unsign(cookie, max_age=ADMIN_SESSION_MAX_AGE).decode("ascii")
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+    except (BadSignature, ValueError, TypeError, UnicodeDecodeError):
+        return None
+    return AdminIdentity.from_dict(payload)
+
+
+def _set_admin_session_cookie(response: Response, identity: AdminIdentity) -> None:
+    response.set_cookie(
+        key=ADMIN_SESSION_COOKIE,
+        value=_build_admin_session(identity),
+        httponly=True,
+        max_age=ADMIN_SESSION_MAX_AGE,
+        path="/",
+        secure=False,
+    )
+
+
+def _is_superadmin_login(login: str) -> bool:
+    return login.casefold() in SUPERADMIN_GITHUB_LOGINS
+
+
 @app.post("/admin/login")
 @limiter.limit("5/minute")
 def admin_login(request: Request, data: AuthRequest, response: Response):
+    """
+    Emergency sign-in (GitHub unavailable, OAuth App not configured):
+    ADMIN_LOGIN/ADMIN_PASSWORD, with superadmin rights (§3.3 of the plan).
+    """
     if data.login == ADMIN_LOGIN and data.password == ADMIN_PASSWORD:
-        token = signer.sign(data.login.encode()).decode()
-        response.set_cookie(
-            key="admin_session",
-            value=token,
-            httponly=True,
-            max_age=3600,
-            path="/",
-            secure=False
-        )
+        identity = AdminIdentity(login=data.login, role=ROLE_SUPERADMIN, via=VIA_PASSWORD)
+        _set_admin_session_cookie(response, identity)
+        logger.info(f"Admin sign-in: login='{identity.login}', role={identity.role}, via={identity.via}")
         return {"authenticated": True}
+    logger.warning("Admin sign-in refused: wrong login or password")
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
 
-def require_admin(request: Request) -> str:
+def require_admin(request: Request) -> AdminIdentity:
     """
-    Reusable auth dependency for admin-only endpoints (see issue #52).
+    Auth dependency for every admin-only endpoint (issue #52), now returning
+    who is signed in (docs/MULTI_TEACHER_PLAN.md §6).
 
-    Same check /admin/check-auth used to do inline - factored out so it can
-    be attached via Depends() to every admin route instead of relying on the
-    frontend's ProtectedRoute alone.
+    Attached via Depends() to every admin route instead of relying on the
+    frontend's ProtectedRoute alone. Routes of one particular course use
+    require_course_access on top of it.
     """
-    cookie = request.cookies.get("admin_session")
+    cookie = request.cookies.get(ADMIN_SESSION_COOKIE)
     if not cookie:
         raise HTTPException(status_code=401, detail="Нет сессии")
-    try:
-        login = signer.unsign(cookie, max_age=3600).decode()
-    except BadSignature:
+    identity = _parse_admin_session(cookie)
+    if identity is None:
         raise HTTPException(status_code=401, detail="Невалидная или просроченная сессия")
-    if login != ADMIN_LOGIN:
+
+    if identity.via == VIA_PASSWORD and identity.login != ADMIN_LOGIN:
+        # ADMIN_LOGIN changed since this cookie was issued.
         raise HTTPException(status_code=401, detail="Невалидная сессия")
-    return login
+
+    if identity.is_superadmin and identity.via == VIA_GITHUB and not _is_superadmin_login(identity.login):
+        # Removed from SUPERADMIN_GITHUB_LOGINS after signing in: the right is
+        # gone now, not when the cookie expires.
+        logger.warning(f"Superadmin session of '{identity.login}' refused: no longer in SUPERADMIN_GITHUB_LOGINS")
+        raise HTTPException(status_code=401, detail="Невалидная сессия")
+
+    return identity
+
+
+# Same answer for a course that does not exist and for someone else's course,
+# so the admin API never confirms that another teacher's course exists (§6).
+COURSE_NOT_FOUND_DETAIL = "Курс не найден"
+JOB_NOT_FOUND_DETAIL = "Работа не найдена"
+
+
+def _course_info_or_none(course_id: str) -> dict | None:
+    try:
+        return get_course_by_id(course_id)
+    except HTTPException as e:
+        if e.status_code == 404:
+            return None
+        raise
+
+
+def can_access_course(identity: AdminIdentity, course_id: str, course_info: dict | None = None) -> bool:
+    """
+    Superadmin - any course; teacher - a course listing their login in
+    `course.github.teachers`, checked against the config as it is now.
+    """
+    if identity.is_superadmin:
+        return True
+    if course_info is None:
+        course_info = _course_info_or_none(course_id)
+    return course_info is not None and is_course_teacher(course_info, identity.login)
+
+
+def require_course_access(
+    request: Request,
+    course_id: str,
+    identity: AdminIdentity = Depends(require_admin),
+) -> AdminIdentity:
+    """
+    Dependency for the admin routes of one course: 404 - the same answer as
+    for a course that does not exist - unless the signed-in user may manage it.
+    """
+    course_info = _course_info_or_none(course_id)
+    if course_info is None:
+        raise HTTPException(status_code=404, detail=COURSE_NOT_FOUND_DETAIL)
+    if not can_access_course(identity, course_id, course_info):
+        logger.warning(f"Course access refused: login='{identity.login}', course_id='{course_id}'")
+        raise HTTPException(status_code=404, detail=COURSE_NOT_FOUND_DETAIL)
+    return identity
+
+
+def _require_job_access(identity: AdminIdentity, job, job_id: str) -> None:
+    """A background job of a course the user can't manage looks like an unknown job_id."""
+    if job is None:
+        raise HTTPException(status_code=404, detail=JOB_NOT_FOUND_DETAIL)
+    if not can_access_course(identity, job.course_id):
+        logger.warning(
+            f"Job access refused: login='{identity.login}', job_id='{job_id}', course_id='{job.course_id}'"
+        )
+        raise HTTPException(status_code=404, detail=JOB_NOT_FOUND_DETAIL)
 
 
 @app.get("/admin/check-auth")
 @limiter.limit("30/minute")
-def check_auth(request: Request, admin: str = Depends(require_admin)):
-    return {"authenticated": True}
+def check_auth(request: Request, admin: AdminIdentity = Depends(require_admin)):
+    return {"authenticated": True, **admin.to_dict()}
 
 @app.post("/admin/logout")
 @limiter.limit("30/minute")
 def logout(request: Request, response: Response):
-    response.delete_cookie("admin_session", path="/")
+    response.delete_cookie(ADMIN_SESSION_COOKIE, path="/")
     return {"message": "Logged out"}
+
+
+def _course_list_item(course_id: str, course_info: dict) -> dict:
+    """One element of the course lists - public GET /courses and GET /admin/courses."""
+    meta = course_info["_meta"]
+    return {
+        "id": course_id,
+        "name": course_info.get("name", "Unknown"),
+        "university": course_info.get("university", ""),
+        "semester": course_info.get("semester", "Unknown"),
+        "logo": meta["logo"],  # Logo from index, not course file
+        "email": course_info.get("email", ""),
+        "status": meta["status"],
+        "priority": meta["priority"],
+        "featured": meta["featured"],
+    }
+
+
+def _sort_course_list(courses: list[dict]) -> list[dict]:
+    # Sort by priority (descending), then by name
+    courses.sort(key=lambda x: (-x["priority"], x["name"]))
+    return courses
+
+
+@app.get("/admin/courses")
+@limiter.limit("60/minute")
+def admin_list_courses(request: Request, admin: AdminIdentity = Depends(require_admin)):
+    """
+    Courses the signed-in user may manage, of every status - hidden and
+    archived included (§7.1 of the plan). The public GET /courses is unchanged.
+    """
+    courses = [
+        _course_list_item(course_id, course_info)
+        for course_id, course_info in iter_course_configs()
+        if can_access_course(admin, course_id, course_info)
+    ]
+    return _sort_course_list(courses)
 
 
 @app.get("/courses")
@@ -471,29 +630,12 @@ def get_courses(request: Request, status: str = "active"):
     courses = []
 
     for course_id, course_info in iter_course_configs():
-        meta = course_info["_meta"]
-        course_status = meta["status"]
-
         # Filter by status
-        if status != "all" and course_status != status:
+        if status != "all" and course_info["_meta"]["status"] != status:
             continue
+        courses.append(_course_list_item(course_id, course_info))
 
-        courses.append({
-            "id": course_id,
-            "name": course_info.get("name", "Unknown"),
-            "university": course_info.get("university", ""),
-            "semester": course_info.get("semester", "Unknown"),
-            "logo": meta["logo"],  # Logo from index, not course file
-            "email": course_info.get("email", ""),
-            "status": course_status,
-            "priority": meta["priority"],
-            "featured": meta["featured"],
-        })
-
-    # Sort by priority (descending), then by name
-    courses.sort(key=lambda x: (-x["priority"], x["name"]))
-
-    return courses
+    return _sort_course_list(courses)
 
 
 def parse_lab_id(lab_id: str) -> int:
@@ -658,7 +800,7 @@ def get_course(request: Request, course_id: str):
 
 @app.delete("/courses/{course_id}")
 @limiter.limit("20/minute")
-def delete_course(request: Request, course_id: str, admin: str = Depends(require_admin)):
+def delete_course(request: Request, course_id: str, admin: AdminIdentity = Depends(require_course_access)):
     """
     Mark course as hidden in index (soft delete)
     The course file is preserved in repository
@@ -689,7 +831,7 @@ class EditCourseRequest(BaseModel):
 
 @app.get("/courses/{course_id}/edit")
 @limiter.limit("30/minute")
-def edit_course_get(request: Request, course_id: str, admin: str = Depends(require_admin)):
+def edit_course_get(request: Request, course_id: str, admin: AdminIdentity = Depends(require_course_access)):
     """Получить YAML содержимое курса для редактирования"""
     course_info = get_course_by_id(course_id)
     filename = course_info["_meta"]["filename"]
@@ -759,6 +901,23 @@ def _validate_join_sections(new_data, old_data) -> None:
             )
 
 
+TEACHER_NOT_LISTED_DETAIL = "Добавьте свой GitHub-логин в course.github.teachers"
+
+
+def _validate_teacher_keeps_access(admin: AdminIdentity, new_data) -> None:
+    """
+    A teacher (not a superadmin) may not save a course without themselves in
+    `course.github.teachers` - that would lock them out of it (§7.2 of the plan).
+
+    Raises:
+        HTTPException(400)
+    """
+    if admin.is_superadmin:
+        return
+    if not is_teacher_in_upload(new_data, admin.login):
+        raise HTTPException(status_code=400, detail="Нельзя удалить себя из преподавателей курса")
+
+
 def _write_file_atomically(file_path: str, content: str) -> None:
     """
     Записать файл целиком или не записать вовсе.
@@ -784,7 +943,12 @@ def _write_file_atomically(file_path: str, content: str) -> None:
 
 @app.put("/courses/{course_id}/edit")
 @limiter.limit("20/minute")
-def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, admin: str = Depends(require_admin)):
+def edit_course_put(
+    request: Request,
+    course_id: str,
+    data: EditCourseRequest,
+    admin: AdminIdentity = Depends(require_course_access),
+):
     """Сохранить изменения в YAML файле курса"""
     course_info = get_course_by_id(course_id)
     filename = course_info["_meta"]["filename"]
@@ -803,6 +967,7 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
         old_data = None
 
     _validate_join_sections(new_data, old_data)
+    _validate_teacher_keeps_access(admin, new_data)
 
     _write_file_atomically(file_path, data.content)
 
@@ -1275,22 +1440,44 @@ def _oauth_redirect_uri(request: Request) -> str:
     return f"{str(request.base_url).rstrip('/')}/join/callback"
 
 
-def _build_join_state(course_id: str, lab_id: str) -> str:
+OAUTH_PURPOSE_JOIN = "join"
+OAUTH_PURPOSE_ADMIN = "admin"
+OAUTH_PURPOSES = (OAUTH_PURPOSE_JOIN, OAUTH_PURPOSE_ADMIN)
+
+
+def _build_oauth_state(purpose: str, **payload) -> str:
     """
-    Build a signed `state` param carrying course_id/lab_id, using the same
-    itsdangerous signer already used for admin_session (see §3.3 of the plan).
+    Build a signed OAuth `state` param, using the same itsdangerous signer as
+    admin_session (see §3.3 of docs/REPO_GENERATION_PLAN.md).
+
+    One OAuth App and one callback URL (/join/callback) serve every sign-in -
+    GitHub accepts only the registered callback or its subpaths - so `purpose`
+    tells the callback what the sign-in was for (docs/MULTI_TEACHER_PLAN.md §4.1).
     """
-    payload = json.dumps({"course_id": course_id, "lab_id": lab_id}).encode("utf-8")
-    payload_b64 = base64.urlsafe_b64encode(payload).decode("ascii")
+    if purpose not in OAUTH_PURPOSES:
+        raise ValueError(f"Unknown OAuth purpose: {purpose}")
+    # A join state carries no `purpose`: that is how it was encoded before
+    # this field existed, and _parse_oauth_state reads its absence as "join".
+    fields = payload if purpose == OAUTH_PURPOSE_JOIN else {"purpose": purpose, **payload}
+    data = json.dumps(fields).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(data).decode("ascii")
     return signer.sign(payload_b64.encode("ascii")).decode("ascii")
 
 
-def _parse_join_state(state: str | None) -> dict:
+def _parse_oauth_state(state: str | None) -> tuple[str, dict]:
     """
-    Verify and decode a `state` param built by _build_join_state.
+    Verify and decode a `state` param built by _build_oauth_state.
+
+    A state without `purpose` is a join state issued before this field
+    existed: a student who went to github.com right before a deploy comes
+    back without an error.
+
+    Returns:
+        (purpose, payload without `purpose`)
 
     Raises:
-        HTTPException(400): if the state is missing, malformed, unsigned, or expired
+        HTTPException(400): if the state is missing, malformed, unsigned, or
+        expired, or a join state lacks course_id/lab_id
     """
     try:
         payload_b64 = signer.unsign(state, max_age=JOIN_STATE_MAX_AGE).decode("ascii")
@@ -1301,10 +1488,22 @@ def _parse_join_state(state: str | None) -> dict:
             detail="Невалидная или просроченная ссылка. Запросите ссылку на подключение заново",
         )
 
-    if not isinstance(payload, dict) or "course_id" not in payload or "lab_id" not in payload:
+    if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Невалидная ссылка")
 
-    return payload
+    purpose = payload.pop("purpose", OAUTH_PURPOSE_JOIN)
+    if purpose not in OAUTH_PURPOSES:
+        raise HTTPException(status_code=400, detail="Невалидная ссылка")
+
+    if purpose == OAUTH_PURPOSE_JOIN and ("course_id" not in payload or "lab_id" not in payload):
+        raise HTTPException(status_code=400, detail="Невалидная ссылка")
+
+    return purpose, payload
+
+
+def _build_join_state(course_id: str, lab_id: str) -> str:
+    """Signed `state` for a student's /join sign-in, carrying course_id/lab_id."""
+    return _build_oauth_state(OAUTH_PURPOSE_JOIN, course_id=course_id, lab_id=lab_id)
 
 
 def _build_join_session(username: str, course_id: str, lab_id: str) -> str:
@@ -1713,9 +1912,13 @@ def join_callback(
     # expired state can't redirect to the (unknown) frontend course/lab page -
     # it goes to the course/lab-agnostic /join/error page instead.
     try:
-        payload = _parse_join_state(state)
+        purpose, payload = _parse_oauth_state(state)
     except HTTPException:
         return RedirectResponse(url=_join_error_redirect("invalid_state"))
+
+    if purpose == OAUTH_PURPOSE_ADMIN:
+        return _admin_oauth_callback(request, code, error)
+
     course_id = payload["course_id"]
     lab_id = payload["lab_id"]
 
@@ -1802,6 +2005,76 @@ def join_callback(
 
 
 # ---------------------------------------------------------------------------
+# Admin sign-in through GitHub (docs/MULTI_TEACHER_PLAN.md §4). Same OAuth App
+# and callback as /join; the `purpose` in the signed state routes it here.
+# ---------------------------------------------------------------------------
+
+
+def _admin_login_redirect(error: str | None = None) -> str:
+    base = f"{FRONTEND_URL.rstrip('/')}/admin"
+    return f"{base}?{urlencode({'error': error})}" if error else base
+
+
+def _is_teacher_of_any_course(login: str) -> bool:
+    return any(is_course_teacher(course_info, login) for _course_id, course_info in iter_course_configs())
+
+
+@app.get("/admin/login/github")
+@limiter.limit("20/minute")
+def admin_login_github(request: Request):
+    """Start a teacher's sign-in through GitHub (§4.2 of the plan)."""
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        raise HTTPException(status_code=503, detail="Вход через GitHub временно недоступен: OAuth App не настроен")
+
+    params = {
+        "client_id": GITHUB_OAUTH_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri(request),
+        "scope": "read:user",
+        "state": _build_oauth_state(OAUTH_PURPOSE_ADMIN),
+    }
+    logger.info("Redirecting to GitHub OAuth for admin sign-in")
+    return RedirectResponse(url=f"https://github.com/login/oauth/authorize?{urlencode(params)}")
+
+
+def _admin_oauth_callback(request: Request, code: str | None, error: str | None) -> RedirectResponse:
+    """
+    Finish a teacher's GitHub sign-in: confirmed login -> role -> admin_session.
+
+    The login comes only from _exchange_code_for_username, never from the
+    request. Membership in some course's `teachers` is checked here only to
+    keep strangers out; access to a particular course is computed on every
+    request (require_course_access), so editing `teachers` needs no re-sign-in.
+    """
+    if error or not code:
+        logger.info(f"Admin GitHub sign-in not completed: {error or 'missing code'}")
+        return RedirectResponse(url=_admin_login_redirect("oauth_failed"))
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        return RedirectResponse(url=_admin_login_redirect("oauth_failed"))
+
+    login = _exchange_code_for_username(code, _oauth_redirect_uri(request))
+    if login is None:
+        logger.warning("Admin GitHub sign-in refused: code exchange failed")
+        return RedirectResponse(url=_admin_login_redirect("oauth_failed"))
+
+    if _is_superadmin_login(login):
+        role = ROLE_SUPERADMIN
+    elif _is_teacher_of_any_course(login):
+        role = ROLE_TEACHER
+    else:
+        logger.warning(f"Admin GitHub sign-in refused: '{login}' is not a teacher of any course")
+        return RedirectResponse(url=_admin_login_redirect("not_a_teacher"))
+
+    identity = AdminIdentity(login=login, role=role, via=VIA_GITHUB)
+    logger.info(f"Admin sign-in: login='{identity.login}', role={identity.role}, via={identity.via}")
+    response = RedirectResponse(url=f"{FRONTEND_URL.rstrip('/')}/admin/courses")
+    _set_admin_session_cookie(response, identity)
+    return response
+
+
+# ---------------------------------------------------------------------------
 # /join: team (group) lab assignments - one repository per team
 # See docs/TEAM_ASSIGNMENTS_PLAN.md for the full design.
 # ---------------------------------------------------------------------------
@@ -1814,8 +2087,7 @@ def _team_registry() -> TeamRegistry:
 
 def _course_teachers(course_info: dict) -> list[str]:
     """`course.github.teachers` - a mixed list of names and GitHub logins."""
-    teachers = course_info.get("github", {}).get("teachers") or []
-    return [str(entry) for entry in teachers if entry]
+    return _admin_course_teachers(course_info)
 
 
 def _load_team_lab(course_id: str, lab_id: str) -> tuple[dict, str, dict, str, TeamConfig]:
@@ -2108,7 +2380,7 @@ def _join_fields(
 
 @app.get("/admin/courses/{course_id}/labs")
 @limiter.limit("30/minute")
-def admin_list_course_labs(request: Request, course_id: str, admin: str = Depends(require_admin)):
+def admin_list_course_labs(request: Request, course_id: str, admin: AdminIdentity = Depends(require_course_access)):
     """Labs of a course with the fields the admin lab list page needs."""
     course_info = get_course_by_id(course_id)
     labs = course_info.get("labs", {})
@@ -2197,7 +2469,7 @@ def propagate_template_update(
     course_id: str,
     lab_id: str,
     body: PropagateRequest = PropagateRequest(),
-    admin: str = Depends(require_admin),
+    admin: AdminIdentity = Depends(require_course_access),
 ):
     """
     Preview (dry_run=true, default) or start (dry_run=false) sending PR
@@ -2235,7 +2507,7 @@ def propagate_template_update(
             detail="Рассылка обновлений для этой лабораторной уже выполняется",
         )
 
-    logger.info(f"Starting propagate job {job.job_id} for {course_id}/{lab_id} (admin={admin})")
+    logger.info(f"Starting propagate job {job.job_id} for {course_id}/{lab_id} (admin={admin.login})")
     _start_background_job(
         run_propagation,
         job, github_client, org, github_prefix, template_repo, body.repos,
@@ -2246,10 +2518,9 @@ def propagate_template_update(
 
 @app.get("/admin/propagate-jobs/{job_id}")
 @limiter.limit("60/minute")
-def get_propagate_job_status(request: Request, job_id: str, admin: str = Depends(require_admin)):
+def get_propagate_job_status(request: Request, job_id: str, admin: AdminIdentity = Depends(require_admin)):
     job = get_propagate_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Работа не найдена")
+    _require_job_access(admin, job, job_id)
     return job.to_dict()
 
 
@@ -2296,7 +2567,7 @@ def start_bulk_grade(
     group_id: str,
     lab_id: str,
     body: BulkGradeRequest = BulkGradeRequest(),
-    admin: str = Depends(require_admin),
+    admin: AdminIdentity = Depends(require_course_access),
 ):
     """
     Start grading a whole group for one lab in the background.
@@ -2356,7 +2627,7 @@ def start_bulk_grade(
 
     logger.info(
         f"Starting bulk grading job {job.job_id} for {course_id}/{group_id}/{lab_id} "
-        f"(mode={mode}, dry_run={body.dry_run}, admin={admin})"
+        f"(mode={mode}, dry_run={body.dry_run}, admin={admin.login})"
     )
     try:
         github_client = GitHubClient(GITHUB_TOKEN)
@@ -2385,22 +2656,24 @@ def start_bulk_grade(
 
 @app.get("/admin/bulk-grade-jobs/{job_id}")
 @limiter.limit("120/minute")
-def get_bulk_grade_job_status(request: Request, job_id: str, admin: str = Depends(require_admin)):
+def get_bulk_grade_job_status(request: Request, job_id: str, admin: AdminIdentity = Depends(require_admin)):
     job = get_bulk_job(job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Работа не найдена")
+    _require_job_access(admin, job, job_id)
     return job.to_dict()
 
 
 @app.post("/admin/bulk-grade-jobs/{job_id}/cancel")
 @limiter.limit("30/minute")
-def cancel_bulk_grade_job(request: Request, job_id: str, admin: str = Depends(require_admin)):
+def cancel_bulk_grade_job(request: Request, job_id: str, admin: AdminIdentity = Depends(require_admin)):
     """
     Ask a running bulk grading job to stop.
 
     It finishes the student it is on, flushes the grades buffered so far and
     ends with status "cancelled".
     """
+    # Access is checked before anything is touched: someone else's job must
+    # neither be stopped nor confirmed to exist.
+    _require_job_access(admin, get_bulk_job(job_id), job_id)
     job = request_bulk_job_cancel(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Работа не найдена")
@@ -2409,7 +2682,7 @@ def cancel_bulk_grade_job(request: Request, job_id: str, admin: str = Depends(re
 
 @app.post("/courses/upload")
 @limiter.limit("10/minute")
-async def upload_course(request: Request, file: UploadFile = File(...), admin: str = Depends(require_admin)):
+async def upload_course(request: Request, file: UploadFile = File(...), admin: AdminIdentity = Depends(require_admin)):
     """
     Upload a new course file and add it to index
 
@@ -2433,6 +2706,11 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
     # Validate course structure
     if not isinstance(course_data, dict) or "course" not in course_data:
         raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
+
+    # A teacher can only upload a course they will be able to manage
+    # (docs/MULTI_TEACHER_PLAN.md §7.2).
+    if not admin.is_superadmin and not is_teacher_in_upload(course_data, admin.login):
+        raise HTTPException(status_code=400, detail=TEACHER_NOT_LISTED_DETAIL)
 
     # Save course file
     with open(file_location, "wb") as f:

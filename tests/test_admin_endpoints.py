@@ -57,8 +57,14 @@ def client():
     return TestClient(app)
 
 
+SUPERADMIN = main_module.AdminIdentity(
+    login=main_module.ADMIN_LOGIN, role="superadmin", via="password"
+)
+
+
 def valid_cookie():
-    return main_module.signer.sign(main_module.ADMIN_LOGIN.encode()).decode()
+    """Emergency (password) sign-in session - superadmin rights."""
+    return main_module._build_admin_session(SUPERADMIN)
 
 
 @pytest.fixture
@@ -134,7 +140,12 @@ class TestRequireAdminAllowsValidSession:
         client.cookies.set("admin_session", valid_cookie())
         response = client.get("/admin/check-auth")
         assert response.status_code == 200
-        assert response.json() == {"authenticated": True}
+        assert response.json() == {
+            "authenticated": True,
+            "login": main_module.ADMIN_LOGIN,
+            "role": "superadmin",
+            "via": "password",
+        }
 
     def test_edit_get_returns_200(self, client, admin_course_env):
         client.cookies.set("admin_session", valid_cookie())
@@ -336,7 +347,7 @@ class TestPropagateTemplateUpdateEndpoint:
             with pytest.raises(HTTPException) as exc_info:
                 main_module.propagate_template_update(
                     mock_request, "test-course", "1",
-                    body=main_module.PropagateRequest(dry_run=True), admin="admin",
+                    body=main_module.PropagateRequest(dry_run=True), admin=SUPERADMIN,
                 )
         assert exc_info.value.status_code == 400
 
@@ -346,7 +357,7 @@ class TestPropagateTemplateUpdateEndpoint:
             with pytest.raises(HTTPException) as exc_info:
                 main_module.propagate_template_update(
                     mock_request, "test-course", "1",
-                    body=main_module.PropagateRequest(dry_run=True), admin="admin",
+                    body=main_module.PropagateRequest(dry_run=True), admin=SUPERADMIN,
                 )
         assert exc_info.value.status_code == 400
 
@@ -389,7 +400,7 @@ class TestPropagateTemplateUpdateEndpoint:
 
         result = main_module.propagate_template_update(
             mock_request, "test-course", "1",
-            body=main_module.PropagateRequest(dry_run=True), admin="admin",
+            body=main_module.PropagateRequest(dry_run=True), admin=SUPERADMIN,
         )
 
         assert result["total"] == 1
@@ -435,7 +446,7 @@ class TestPropagateTemplateUpdateEndpoint:
 
         response = main_module.propagate_template_update(
             mock_request, "test-course", "1",
-            body=main_module.PropagateRequest(dry_run=False), admin="admin",
+            body=main_module.PropagateRequest(dry_run=False), admin=SUPERADMIN,
         )
         assert response.status_code == 202
         import json
@@ -454,13 +465,13 @@ class TestPropagateTemplateUpdateEndpoint:
         with pytest.raises(HTTPException) as exc_info:
             main_module.propagate_template_update(
                 mock_request, "test-course", "1",
-                body=main_module.PropagateRequest(dry_run=False), admin="admin",
+                body=main_module.PropagateRequest(dry_run=False), admin=SUPERADMIN,
             )
         assert exc_info.value.status_code == 409
 
     def test_unknown_job_status_is_404(self, mock_request):
         with pytest.raises(HTTPException) as exc_info:
-            main_module.get_propagate_job_status(mock_request, "does-not-exist", admin="admin")
+            main_module.get_propagate_job_status(mock_request, "does-not-exist", admin=SUPERADMIN)
         assert exc_info.value.status_code == 404
 
 
@@ -492,7 +503,7 @@ class TestBulkGradeEndpoint:
             with pytest.raises(HTTPException) as exc_info:
                 main_module.start_bulk_grade(
                     mock_request, "test-course", "P3300", "ЛР1",
-                    body=main_module.BulkGradeRequest(), admin="admin",
+                    body=main_module.BulkGradeRequest(), admin=SUPERADMIN,
                 )
         assert exc_info.value.status_code == 400
 
@@ -501,7 +512,7 @@ class TestBulkGradeEndpoint:
             with pytest.raises(HTTPException) as exc_info:
                 main_module.start_bulk_grade(
                     mock_request, "test-course", "P3300", "ЛР42",
-                    body=main_module.BulkGradeRequest(), admin="admin",
+                    body=main_module.BulkGradeRequest(), admin=SUPERADMIN,
                 )
         assert exc_info.value.status_code == 400
 
@@ -511,7 +522,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "ЛР1",
-                body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
+                body=main_module.BulkGradeRequest(dry_run=True), admin=SUPERADMIN,
             )
             assert response.status_code == 202
             job_id = json.loads(response.body)["job_id"]
@@ -543,7 +554,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "ЛР1",
-                body=main_module.BulkGradeRequest(name_file="info.md"), admin="admin",
+                body=main_module.BulkGradeRequest(name_file="info.md"), admin=SUPERADMIN,
             )
 
         job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
@@ -558,7 +569,7 @@ class TestBulkGradeEndpoint:
             with pytest.raises(HTTPException) as exc_info:
                 main_module.start_bulk_grade(
                     mock_request, "test-course", "P3300", "ЛР1",
-                    body=main_module.BulkGradeRequest(name_file="info.md"), admin="admin",
+                    body=main_module.BulkGradeRequest(name_file="info.md"), admin=SUPERADMIN,
                 )
 
         assert exc_info.value.status_code == 400
@@ -571,7 +582,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "ЛР1",
-                body=main_module.BulkGradeRequest(), admin="admin",
+                body=main_module.BulkGradeRequest(), admin=SUPERADMIN,
             )
 
         job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
@@ -583,7 +594,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "ЛР1",
-                body=main_module.BulkGradeRequest(name_file="   "), admin="admin",
+                body=main_module.BulkGradeRequest(name_file="   "), admin=SUPERADMIN,
             )
 
         job = main_module.get_bulk_job(json.loads(response.body)["job_id"])
@@ -603,7 +614,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "quiz",
-                body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
+                body=main_module.BulkGradeRequest(dry_run=True), admin=SUPERADMIN,
             )
 
         assert response.status_code == 202
@@ -624,14 +635,14 @@ class TestBulkGradeEndpoint:
             with pytest.raises(RuntimeError):
                 main_module.start_bulk_grade(
                     mock_request, "test-course", "P3300", "ЛР1",
-                    body=main_module.BulkGradeRequest(), admin="admin",
+                    body=main_module.BulkGradeRequest(), admin=SUPERADMIN,
                 )
 
         assert main_module.get_running_bulk_job("test-course", "P3300", "ЛР1") is None
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             retry = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "ЛР1",
-                body=main_module.BulkGradeRequest(), admin="admin",
+                body=main_module.BulkGradeRequest(), admin=SUPERADMIN,
             )
         assert retry.status_code == 202
 
@@ -642,7 +653,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "ЛР1",
-                body=main_module.BulkGradeRequest(), admin="admin",
+                body=main_module.BulkGradeRequest(), admin=SUPERADMIN,
             )
 
         assert [func for func, _args in captured_jobs] == [main_module.run_bulk_grading]
@@ -659,7 +670,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "ЛР1",
-                body=main_module.BulkGradeRequest(), admin="admin",
+                body=main_module.BulkGradeRequest(), admin=SUPERADMIN,
             )
 
         assert response.status_code == 409
@@ -672,7 +683,7 @@ class TestBulkGradeEndpoint:
         with patch("main.get_course_by_id", return_value=bulk_course_config):
             response = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3301", "ЛР1",
-                body=main_module.BulkGradeRequest(), admin="admin",
+                body=main_module.BulkGradeRequest(), admin=SUPERADMIN,
             )
         assert response.status_code == 202
 
@@ -680,7 +691,7 @@ class TestBulkGradeEndpoint:
         from grading.bulk import try_start_bulk_job
         job = try_start_bulk_job("test-course", "P3300", "ЛР1", "by_sheet", False, None)
 
-        result = main_module.cancel_bulk_grade_job(mock_request, job.job_id, admin="admin")
+        result = main_module.cancel_bulk_grade_job(mock_request, job.job_id, admin=SUPERADMIN)
 
         assert result["status"] == "running"
         assert job.cancel_requested is True
@@ -827,7 +838,7 @@ def labs_course(join_section, **lab_extra):
 def list_labs(mock_request, course, monkeypatch, base_url="https://labgrader.example.ru"):
     monkeypatch.setattr(main_module, "PUBLIC_BASE_URL", base_url)
     with patch("main.get_course_by_id", return_value=course):
-        labs = main_module.admin_list_course_labs(mock_request, "test-course", admin="admin")
+        labs = main_module.admin_list_course_labs(mock_request, "test-course", admin=SUPERADMIN)
     return {lab["id"]: lab for lab in labs}
 
 
@@ -950,7 +961,7 @@ class TestBulkGradeIgnoresJoinWindow:
         with patch("main.get_course_by_id", return_value=course):
             response = main_module.start_bulk_grade(
                 mock_request, "test-course", "P3300", "7",
-                body=main_module.BulkGradeRequest(dry_run=True), admin="admin",
+                body=main_module.BulkGradeRequest(dry_run=True), admin=SUPERADMIN,
             )
 
         assert response.status_code == 202
