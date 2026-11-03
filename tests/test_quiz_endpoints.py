@@ -996,3 +996,130 @@ class TestRecovery:
         (recovered,) = await new.recover(self.loader)
         assert "alice" in recovered.participants
         assert await new.recover(self.loader) == []     # already there
+
+
+# ---------------------------------------------------------------------------
+# "In the room only": question on the projector, changing QR, early join only
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+class TestInRoom:
+    @pytest.fixture
+    async def run(self, manager):
+        return await manager.open("os", {}, "k5", make_quiz(), in_room=True)
+
+    async def test_entry_token_lives_15_to_30_seconds(self, run, clock):
+        clock.now = 1_000_005.0          # 5 s into a 15 s slot
+        token = run.current_entry_token(clock.now)
+        assert run.check_entry_token(token, clock.now)
+        assert run.check_entry_token(token.upper(), clock.now)
+        clock.now += 15                  # next slot - still valid
+        assert run.check_entry_token(token, clock.now)
+        clock.now += 15                  # two slots later - expired
+        assert not run.check_entry_token(token, clock.now)
+        assert not run.check_entry_token("", clock.now)
+        assert not run.check_entry_token("aaaaaaaa", clock.now)
+
+    async def test_join_needs_entry_and_closes_after_first_question(self, manager, run):
+        with pytest.raises(QuizRunError) as e:
+            await manager.join(run, "alice", entry_ok=False)
+        assert (e.value.code, e.value.status) == ("ENTRY_REQUIRED", 403)
+        await manager.join(run, "alice", entry_ok=True)
+        await manager.start(run)
+        await manager.join(run, "Bob", entry_ok=True)          # still question 1 - allowed
+        await manager.reveal_if_due(run, 0, force=True)
+        with pytest.raises(QuizRunError) as e:
+            await manager.join(run, "carol", entry_ok=True)
+        assert e.value.code == "JOIN_CLOSED"
+        # Already joined students reconnect without a token
+        assert (await manager.join(run, "alice", entry_ok=False)).entry.login == "alice"
+
+    async def test_question_only_on_projector_answers_shuffled_on_phone(self, manager, run):
+        await manager.join(run, "alice")
+        await manager.start(run)
+        student = run.student_snapshot("alice", 0)
+        assert "text" not in student and student["in_room"] is True
+        assert [o["id"] for o in student["options"]] == run.option_order("alice", 0)
+        assert student["options"][0]["text"]                     # answers are on the phone
+        projector = run.projector_snapshot(0)
+        assert projector["text"] == run.variant(0).text
+        assert "options" not in projector                        # not on the projector...
+        await manager.reveal_if_due(run, 0, force=True)
+        projector = run.projector_snapshot(0)
+        assert len(projector["options"]) == 4 and "distribution" in projector   # ...until reveal
+
+    async def test_off_by_default(self, manager):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.join(run, "alice", entry_ok=False)
+        await manager.start(run)
+        await manager.reveal_if_due(run, 0, force=True)
+        await manager.join(run, "Bob", entry_ok=False)           # late join is fine
+        assert "text" in run.student_snapshot("alice", 0)
+
+    async def test_incompatible_with_variants_per_student(self, manager):
+        with pytest.raises(QuizRunError) as e:
+            await manager.open("os", {}, "kr1", make_test_quiz(), in_room=True)
+        assert (e.value.code, e.value.status) == ("IN_ROOM_WITH_VARIANTS", 400)
+
+    async def test_survives_restart(self, manager, run, recorder, clock, tmp_path):
+        token = run.current_entry_token(clock.now)
+        new = QuizRunManager(recorder.read, recorder.write, log_dir=str(tmp_path / "logs"), clock=clock)
+        (recovered,) = await new.recover(lambda c: {})
+        assert recovered.in_room is True
+        assert recovered.check_entry_token(token, clock.now)
+
+
+class TestInRoomHttp:
+    @pytest.fixture
+    def opened(self, client):
+        as_teacher(client)
+        assert upload(client).status_code == 201
+        response = client.post("/admin/courses/os/quizzes/lecture-5/runs", json={"in_room": True})
+        assert response.status_code == 201
+        return response.json()
+
+    def test_link_carries_current_token(self, opened):
+        run = main_module.QUIZ_RUNS.get(opened["run_id"])
+        assert opened["in_room"] is True
+        assert opened["link"] == f"http://public/q/{run.code}?t={run.current_entry_token(main_module.QUIZ_RUNS.clock())}"
+
+    def test_pass_from_qr_survives_sign_in(self, client, opened):
+        run = main_module.QUIZ_RUNS.get(opened["run_id"])
+        client.cookies.clear()
+        # Opened without the token (link from a chat): no entry
+        info = client.get(f"/quiz/{run.code}").json()
+        assert info["entry_ok"] is False and info["in_room"] is True
+        # Scanned from the projector: a pass cookie, then sign-in, then join
+        token = run.current_entry_token(main_module.QUIZ_RUNS.clock())
+        assert client.get(f"/quiz/{run.code}", params={"t": token}).json()["entry_ok"] is True
+        as_student(client, "alice")
+        assert client.post(f"/quiz/{run.code}/join").status_code == 200
+
+    def test_join_without_pass_is_refused(self, client, opened):
+        run = main_module.QUIZ_RUNS.get(opened["run_id"])
+        client.cookies.clear()
+        as_student(client, "alice")
+        response = client.post(f"/quiz/{run.code}/join")
+        assert response.status_code == 403 and response.json()["detail"] == "ENTRY_REQUIRED"
+
+    def test_pass_of_another_run_does_not_count(self, client, opened):
+        run = main_module.QUIZ_RUNS.get(opened["run_id"])
+        client.cookies.clear()
+        client.cookies.set("quiz_pass", main_module.signer.sign(b"other-run").decode())
+        as_student(client, "alice")
+        assert client.post(f"/quiz/{run.code}/join").status_code == 403
+
+    def test_variants_quiz_refused(self, client):
+        as_teacher(client)
+        assert upload(client, name="kr1.md", text=BANK3, title="КР1",
+                      **{"variants-per-student": "on"}).status_code == 201
+        response = client.post("/admin/courses/os/quizzes/kr1/runs", json={"in_room": True})
+        assert response.status_code == 400 and response.json()["detail"] == "IN_ROOM_WITH_VARIANTS"
+
+    def test_open_without_body_still_works(self, client):
+        as_teacher(client)
+        upload(client)
+        response = client.post("/admin/courses/os/quizzes/lecture-5/runs")
+        assert response.status_code == 201 and response.json()["in_room"] is False
+        assert "?t=" not in response.json()["link"]

@@ -72,6 +72,8 @@ export const QuizList = () => {
   const [busy, setBusy] = useState(false);
   const [preview, setPreview] = useState(null);
   const [toDelete, setToDelete] = useState(null);
+  const [toRun, setToRun] = useState(null); // quiz summary
+  const [inRoom, setInRoom] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
 
   const load = useCallback(() => {
@@ -140,8 +142,13 @@ export const QuizList = () => {
       .catch((err) => setSnackbar({ severity: "error", message: err.message }));
 
   const run = async (quizId) => {
+    setToRun(null);
     try {
-      const data = await api(`${base}/${encodeURIComponent(quizId)}/runs`, { method: "POST" });
+      const data = await api(`${base}/${encodeURIComponent(quizId)}/runs`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ in_room: inRoom }),
+      });
       navigate(`/admin/quiz-runs/${data.run_id}`);
     } catch (err) {
       if (err.status === 409 && err.data && err.data.run_id) {
@@ -252,7 +259,10 @@ export const QuizList = () => {
                     <TableCell style={{ whiteSpace: "nowrap" }}>
                       {!quiz.error && (
                         <>
-                          <Button size="small" variant="contained" onClick={() => run(quiz.id)}>
+                          <Button size="small" variant="contained" onClick={() => {
+                              setInRoom(false);
+                              setToRun(quiz);
+                            }}>
                             {t("quizAdmin.run")}
                           </Button>{" "}
                           <Button size="small" onClick={() => openPreview(quiz.id)}>
@@ -305,6 +315,31 @@ export const QuizList = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPreview(null)}>{t("quizAdmin.close")}</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!toRun} onClose={() => setToRun(null)}>
+        <DialogTitle>{toRun && (toRun.title || toRun.id)}</DialogTitle>
+        <DialogContent>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={inRoom}
+                disabled={!!(toRun && toRun.variants_per_student)}
+                onChange={(e) => setInRoom(e.target.checked)}
+              />
+            }
+            label={t("quizAdmin.inRoom")}
+          />
+          <div style={{ color: "#666", fontSize: 14, maxWidth: 480 }}>
+            {toRun && toRun.variants_per_student ? t("quizAdmin.inRoomNoVariants") : t("quizAdmin.inRoomHint")}
+          </div>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setToRun(null)}>{t("cancel")}</Button>
+          <Button variant="contained" onClick={() => run(toRun.id)}>
+            {t("quizAdmin.open")}
+          </Button>
         </DialogActions>
       </Dialog>
 

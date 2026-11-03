@@ -26,6 +26,8 @@ const errorKey = (code) => `quiz.errors.${code}`;
 export const QuizStudent = () => {
   const { code } = useParams();
   const [searchParams] = useSearchParams();
+  // In the room only: the short-lived code from the projector's QR (?t=...)
+  const entryToken = searchParams.get("t") || "";
   const { t } = useTranslation();
 
   const [info, setInfo] = useState(null);       // GET /quiz/{code}
@@ -40,7 +42,12 @@ export const QuizStudent = () => {
 
   const load = useCallback(async () => {
     try {
-      const response = await fetch(`${API}/${encodeURIComponent(code)}`, { credentials: "include" });
+      const query = entryToken ? `?t=${encodeURIComponent(entryToken)}` : "";
+      const response = await fetch(`${API}/${encodeURIComponent(code)}${query}`, { credentials: "include" });
+      if (entryToken) {
+        // The server has turned it into a pass; a copied address must not carry it.
+        window.history.replaceState(null, "", window.location.pathname);
+      }
       if (response.status === 404) {
         setError("not_found");
         return null;
@@ -52,7 +59,7 @@ export const QuizStudent = () => {
       setError("network");
       return null;
     }
-  }, [code]);
+  }, [code, entryToken]);
 
   // 1. Who am I, what is the quiz; 2. join if signed in.
   useEffect(() => {
@@ -151,6 +158,17 @@ export const QuizStudent = () => {
     </>
   );
 
+  if (!info.joined && info.in_room && (!info.entry_ok || !info.join_open)) {
+    return (
+      <Page>
+        <Card>
+          {header}
+          <Status>{t(info.join_open ? "quiz.errors.ENTRY_REQUIRED" : "quiz.errors.JOIN_CLOSED")}</Status>
+        </Card>
+      </Page>
+    );
+  }
+
   if (!info.logged_in) {
     return (
       <Page>
@@ -206,9 +224,13 @@ export const QuizStudent = () => {
           <>
             <Hint>{t("quiz.questionOf", { n: s.question + 1, total: s.total })}</Hint>
             {s.state === "question" && <Countdown>{Math.ceil(remaining / 1000)}</Countdown>}
-            <QuestionText>
-              <QuizMarkdown>{s.text}</QuizMarkdown>
-            </QuestionText>
+            {s.text ? (
+              <QuestionText>
+                <QuizMarkdown>{s.text}</QuizMarkdown>
+              </QuestionText>
+            ) : (
+              <Hint>{t("quiz.questionOnScreen")}</Hint>
+            )}
             {s.options.map((option) => {
               const isCorrect = s.state === "reveal" && option.id === s.correct;
               const isMine = answered === option.id;

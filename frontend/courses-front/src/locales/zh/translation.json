@@ -320,8 +320,11 @@
       "QUIZ_FINISHED": "测验已结束",
       "SESSION_REQUIRED": "请重新使用 GitHub 登录",
       "network": "无法连接服务器",
-      "unknown": "出错了"
-    }
+      "unknown": "出错了",
+      "ENTRY_REQUIRED": "请扫描教室屏幕上的二维码",
+      "JOIN_CLOSED": "已停止加入：测验正在进行"
+    },
+    "questionOnScreen": "题目显示在教室屏幕上"
   },
   "quizAdmin": {
     "title": "测验",
@@ -368,9 +371,15 @@
       "missingColumn": "缺少“{{column}}”列",
       "retryWrite": "重新写入",
       "ownVariants": "每位学生的题目变体不同",
-      "correctOf": "正确 {{correct}} / {{answered}}"
+      "correctOf": "正确 {{correct}} / {{answered}}",
+      "answersOnPhones": "选项显示在手机上",
+      "inRoomLobby": "仅限教室内：二维码每 15 秒更换，第一题结束前可加入"
     },
     "variantsPerStudentMark": "考试：每题最多 {{count}} 个变体",
-    "variantsPerStudentNoVariants": "考试，但每题只有一个变体——所有人相同"
+    "variantsPerStudentNoVariants": "考试，但每题只有一个变体——所有人相同",
+    "inRoom": "仅限教室内",
+    "inRoomHint": "题目只显示在屏幕上，选项显示在手机上（每人顺序不同）。二维码每 15 秒更换一次，第一题结束前可加入。",
+    "inRoomNoVariants": "不适用于多变体测验：屏幕上只显示一道共同题目。",
+    "open": "打开"
   }
 }

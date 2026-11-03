@@ -93,6 +93,21 @@ export const QuizProjector = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // In the room only the QR code carries a code that changes every 15 s:
+  // refresh it while joining is open.
+  const joinOpen = snap && (snap.state === "lobby" || (snap.state === "question" && snap.question === 0));
+  const rotating = !!(snap && snap.in_room && joinOpen);
+  useEffect(() => {
+    if (!rotating) return undefined;
+    const timer = setInterval(() => {
+      fetch(base, { credentials: "include" })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data) => data && setLink(data.link))
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [rotating, base]);
+
   const act = async (action) => {
     const response = await fetch(`${base}/${action}`, { method: "POST", credentials: "include" });
     const data = await response.json().catch(() => null);
@@ -145,6 +160,7 @@ export const QuizProjector = () => {
             <p style={styles.big}>{t("quizAdmin.projector.scan")}</p>
             <p style={{ fontSize: 28, fontFamily: "monospace" }}>{link}</p>
             <p style={styles.big}>{t("quizAdmin.projector.joined", { count: snap.joined })}</p>
+            {snap.in_room && <p style={styles.muted}>{t("quizAdmin.projector.inRoomLobby")}</p>}
             <button style={styles.button("#2e7d32")} onClick={() => act("start")}>
               {t("quizAdmin.projector.start")}
             </button>
@@ -152,7 +168,7 @@ export const QuizProjector = () => {
         </div>
       )}
 
-      {(snap.state === "question" || snap.state === "reveal") && !snap.options && (
+      {(snap.state === "question" || snap.state === "reveal") && snap.label !== undefined && (
         // Контрольная: у каждого студента свой вариант - общего текста нет
         <div style={{ marginTop: 24 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -184,7 +200,7 @@ export const QuizProjector = () => {
         </div>
       )}
 
-      {(snap.state === "question" || snap.state === "reveal") && snap.options && (
+      {(snap.state === "question" || snap.state === "reveal") && snap.label === undefined && (
         <div style={{ marginTop: 24 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
             <span style={styles.muted}>
@@ -196,7 +212,10 @@ export const QuizProjector = () => {
           <div style={styles.big}>
             <QuizMarkdown>{snap.text}</QuizMarkdown>
           </div>
-          {snap.options.map((option) => {
+          {snap.in_room && snap.state === "question" && (
+            <p style={styles.muted}>{t("quizAdmin.projector.answersOnPhones")}</p>
+          )}
+          {(snap.options || []).map((option) => {
             const correct = snap.state === "reveal" && option.id === snap.correct;
             const count = snap.distribution ? snap.distribution[option.id] : null;
             return (

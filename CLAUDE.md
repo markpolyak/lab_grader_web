@@ -207,6 +207,12 @@ Live multiple-choice quiz at the end of a lecture, scores written to the course 
 - **Student identity** - `student_session` cookie (signed JSON `{"login"}`, 180 days), issued by
   `/join/callback` for a `state` with `purpose: "student"`. Never from the body or query.
   Rate limits for join/answer are keyed by that login (`student_rate_key`) - a lecture hall is one NAT.
+- **In the room only** (`in_room`, chosen per run at opening; incompatible with
+  `variants-per-student`): the student snapshot has no question text (options still shuffled per
+  student), the projector shows options only at reveal; joining needs a `quiz_pass` cookie, issued
+  by `GET /quiz/{code}?t=` for the entry token currently in the QR (HMAC of a per-run secret and a
+  15 s slot, current or previous slot accepted), and closes after question 1. Already joined
+  students are never re-checked.
 - **Recovery**: every state change is appended to `{LOG_DIR}/quiz/{course}/{run_id}.jsonl` (the
   `open` event carries the quiz text, code and drawn variants); `QuizRunManager.recover` replays
   the logs of the last 24 h at startup (FastAPI lifespan): unfinished runs continue, a finished

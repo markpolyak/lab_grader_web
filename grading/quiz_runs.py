@@ -13,6 +13,9 @@ number; a reconnecting client simply gets the current one.
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -39,6 +42,9 @@ FINISHED_CODE_TTL_SECONDS = 3600
 FIRST_STUDENT_ROW = 3
 HEADER_ROW = 2
 OPTION_LETTERS = "ABCD"
+# "In the room only": the QR code on the projector changes every slot; a code
+# is accepted during its slot and the next one, so a link lives 15-30 s.
+ENTRY_SLOT_SECONDS = 15
 
 LOBBY, QUESTION, REVEAL, FINISHED, CANCELLED = "lobby", "question", "reveal", "finished", "cancelled"
 ENDED = (FINISHED, CANCELLED)
@@ -241,6 +247,32 @@ class QuizRun:
     version: int = 0
     changed: asyncio.Event = field(default_factory=asyncio.Event)
     reveal_task: asyncio.Task | None = None
+    # "In the room only" (chosen when the run is opened): the question text is
+    # shown on the projector only, joining needs the QR code currently on the
+    # projector and closes when the first question ends.
+    in_room: bool = False
+    join_secret: bytes = field(default_factory=lambda: secrets.token_bytes(16))
+
+    # -- in the room only --------------------------------------------------
+
+    def entry_token(self, slot: int) -> str:
+        digest = hmac.new(self.join_secret, str(slot).encode(), hashlib.sha256).digest()
+        return base64.b32encode(digest).decode("ascii")[:8].lower()
+
+    def current_entry_token(self, now: float) -> str:
+        return self.entry_token(int(now // ENTRY_SLOT_SECONDS))
+
+    def check_entry_token(self, token: str | None, now: float) -> bool:
+        if not token:
+            return False
+        slot = int(now // ENTRY_SLOT_SECONDS)
+        return any(hmac.compare_digest(token.lower(), self.entry_token(s)) for s in (slot, slot - 1))
+
+    def join_open(self) -> bool:
+        """New participants: always, or - in the room only - until the first question ends."""
+        if not self.in_room:
+            return self.state not in ENDED
+        return self.state == LOBBY or (self.state == QUESTION and self.question_index == 0)
 
     # -- helpers -----------------------------------------------------------
 
@@ -307,13 +339,16 @@ class QuizRun:
 
     def student_snapshot(self, login: str | None, now: float) -> dict:
         data = self._base(now)
+        data["in_room"] = self.in_room
         participant = self.participants.get(login.casefold()) if login else None
         data["joined"] = participant is not None
         if self.state in (QUESTION, REVEAL):
             i = self.question_index
             variant = self.variant(i, login or "-")
             order = self.option_order(login or "", i)
-            data["text"] = variant.text
+            if not self.in_room:
+                # In the room only, the question is on the projector, not on the phone.
+                data["text"] = variant.text
             data["options"] = [{"id": o, "text": variant.options[o]} for o in order]
             answer = participant.answers.get(i) if participant else None
             data["answer"] = answer
@@ -337,6 +372,7 @@ class QuizRun:
             "warnings": self.warnings(),
         })
         data["variants_per_student"] = self.per_student
+        data["in_room"] = self.in_room
         if self.state in (QUESTION, REVEAL) and self.per_student and len(self.quiz.questions[self.question_index].variants) > 1:
             # No common text to show: everyone has their own variant. The
             # projector shows progress, then how each variant went.
@@ -359,9 +395,12 @@ class QuizRun:
             i = self.question_index
             variant = self.variant(i, "-")
             data["text"] = variant.text
-            data["options"] = [
-                {"id": o, "letter": OPTION_LETTERS[o], "text": text} for o, text in enumerate(variant.options)
-            ]
+            if not self.in_room or self.state == REVEAL:
+                # In the room only the answers are on the phones (each in its own
+                # order); the projector shows them with the correct one at reveal.
+                data["options"] = [
+                    {"id": o, "letter": OPTION_LETTERS[o], "text": text} for o, text in enumerate(variant.options)
+                ]
             data["answered"] = sum(1 for p in self.participants.values() if i in p.answers)
             if self.state == REVEAL:
                 data["correct"] = variant.correct
@@ -470,8 +509,13 @@ class QuizRunManager:
 
     # -- opening -----------------------------------------------------------
 
-    async def open(self, course_id: str, course_info: dict, quiz_id: str, quiz: Quiz) -> QuizRun:
+    async def open(self, course_id: str, course_info: dict, quiz_id: str, quiz: Quiz, in_room: bool = False) -> QuizRun:
         """lobby: read the roster, pick the variants, issue the code. 409 if the course has a run going."""
+        if in_room and quiz.settings.variants_per_student:
+            raise QuizRunError(
+                "IN_ROOM_WITH_VARIANTS", 400,
+                "Режим «только в аудитории» несовместим с разными вариантами: на экране один общий вопрос",
+            )
         existing = self.active_for_course(course_id)
         if existing:
             raise QuizRunError("RUN_IN_PROGRESS", 409, "У курса уже идёт квиз", run_id=existing.run_id)
@@ -495,6 +539,7 @@ class QuizRunManager:
                 roster=roster,
                 log=RunLog(self.log_dir, course_id, run_id, self.clock),
                 created_at=self.clock(),
+                in_room=in_room,
             )
             self.runs[run_id] = run
             self.by_code[run.code] = run_id
@@ -505,6 +550,7 @@ class QuizRunManager:
                 "open", run_id=run_id, code=run.code, course_id=course_id, course_name=run.course_name,
                 created_at=run.created_at, quiz_text=build_quiz_file(quiz.settings, quiz.body),
                 variant_choice=run.variant_choice,
+                in_room=in_room, join_secret=run.join_secret.hex(),
                 quiz_id=quiz_id, settings=quiz.settings.to_front_matter(),
                 variants="per-student" if quiz.settings.variants_per_student
                 else [q.variants[v].label for q, v in zip(quiz.questions, run.variant_choice)],
@@ -644,9 +690,18 @@ class QuizRunManager:
 
     # -- students ----------------------------------------------------------
 
-    async def join(self, run: QuizRun, login: str) -> Participant:
+    async def join(self, run: QuizRun, login: str, entry_ok: bool = True) -> Participant:
+        """
+        Args:
+            entry_ok: the student came through the QR code currently on the
+                projector (checked by the caller); needed only in the room only.
+        """
         if run.state in ENDED:
             raise QuizRunError("QUIZ_FINISHED", 410, "Квиз уже завершён")
+        existing = run.participants.get(login.casefold())
+        if existing is not None:
+            return existing
+        self._check_join_allowed(run, entry_ok)
         entry = run.roster.find(login)
         if entry is None and self.clock() - run.roster.read_at > ROSTER_REREAD_SECONDS:
             # Maybe registered a minute ago - read the sheets again (in a thread).
@@ -664,11 +719,21 @@ class QuizRunManager:
             key = login.casefold()
             participant = run.participants.get(key)
             if participant is None:
+                self._check_join_allowed(run, entry_ok)
                 participant = Participant(entry=entry, joined_at=self.clock())
                 run.participants[key] = participant
                 run.log.write("join", login=entry.login, group=entry.group, row=entry.row, name=entry.name)
                 run.bump()
             return participant
+
+    @staticmethod
+    def _check_join_allowed(run: QuizRun, entry_ok: bool) -> None:
+        if not run.in_room:
+            return
+        if not run.join_open():
+            raise QuizRunError("JOIN_CLOSED", 403, "Подключение закрыто: квиз уже идёт")
+        if not entry_ok:
+            raise QuizRunError("ENTRY_REQUIRED", 403, "Отсканируйте QR-код с экрана в аудитории ещё раз")
 
     async def answer(self, run: QuizRun, login: str, question: int, option: int) -> bool:
         """Record an answer. Returns whether it is correct (not shown before reveal)."""
@@ -792,7 +857,10 @@ class QuizRunManager:
                               read_at=0.0),
                 log=RunLog(self.log_dir, opened["course_id"], opened["run_id"], self.clock),
                 created_at=opened.get("created_at", opened["ts"]),
+                in_room=bool(opened.get("in_room")),
             )
+            if opened.get("join_secret"):
+                run.join_secret = bytes.fromhex(opened["join_secret"])
             report = None
             for e in events[1:]:
                 kind = e.get("event")

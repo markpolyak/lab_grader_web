@@ -3236,10 +3236,28 @@ async def admin_delete_quiz(
 # -- admin: runs ---------------------------------------------------------------
 
 
+class OpenRunRequest(BaseModel):
+    # "In the room only": question on the projector only, a changing QR code,
+    # joining until the first question ends.
+    in_room: bool = False
+
+
+def _run_link(request: Request, run) -> str:
+    """The QR link; in the room only it carries the current, short-lived entry token."""
+    link = f"{_public_base_url(request)}/q/{run.code}"
+    if run.in_room and run.join_open():
+        link += f"?t={run.current_entry_token(QUIZ_RUNS.clock())}"
+    return link
+
+
 @app.post("/admin/courses/{course_id}/quizzes/{quiz_id}/runs", status_code=201)
 @limiter.limit("20/minute")
 async def admin_open_quiz_run(
-    request: Request, course_id: str, quiz_id: str, admin: AdminIdentity = Depends(require_course_access)
+    request: Request,
+    course_id: str,
+    quiz_id: str,
+    body: OpenRunRequest | None = None,
+    admin: AdminIdentity = Depends(require_course_access),
 ):
     """Open a run (lobby): roster, variants, code. 409 with `run_id` if one is going."""
     stored = await asyncio.to_thread(_load_quiz, course_id, quiz_id)
@@ -3249,14 +3267,14 @@ async def admin_open_quiz_run(
         return _quiz_format_error(e)
     course_info = await asyncio.to_thread(get_course_by_id, course_id)
     try:
-        run = await QUIZ_RUNS.open(course_id, course_info, quiz_id, quiz)
+        run = await QUIZ_RUNS.open(course_id, course_info, quiz_id, quiz, in_room=bool(body and body.in_room))
     except QuizRunError as e:
         return _quiz_error(e)
     except Exception:
         logger.exception(f"Quiz run for {course_id}/{quiz_id}: reading the roster failed")
         raise HTTPException(status_code=502, detail="Не удалось прочитать состав курса из Google-таблицы")
     logger.info(f"Quiz run {run.run_id} ({course_id}/{quiz_id}) opened by '{admin.login}', code {run.code}")
-    return {**run.summary(), "link": f"{_public_base_url(request)}/q/{run.code}"}
+    return {**run.summary(), "in_room": run.in_room, "link": _run_link(request, run)}
 
 
 def _require_run(run_id: str, admin: AdminIdentity):
@@ -3272,7 +3290,7 @@ def _require_run(run_id: str, admin: AdminIdentity):
 async def admin_quiz_run(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
     run = await asyncio.to_thread(_require_run, run_id, admin)
     await QUIZ_RUNS.reveal_if_due(run)
-    return {**run.projector_snapshot(QUIZ_RUNS.clock()), "link": f"{_public_base_url(request)}/q/{run.code}"}
+    return {**run.projector_snapshot(QUIZ_RUNS.clock()), "link": _run_link(request, run)}
 
 
 @app.get("/admin/quiz-runs/{run_id}/events")
@@ -3331,13 +3349,51 @@ def _student_run(code: str):
     return run
 
 
+QUIZ_PASS_COOKIE = "quiz_pass"
+QUIZ_PASS_MAX_AGE = 600
+
+
+def _has_quiz_pass(request: Request, run_id: str) -> bool:
+    """
+    The student opened the QR code currently on the projector. The pass outlives
+    the 15-30 s token, so the GitHub sign-in round trip does not lose it.
+    """
+    cookie = request.cookies.get(QUIZ_PASS_COOKIE)
+    if not cookie:
+        return False
+    try:
+        return signer.unsign(cookie, max_age=QUIZ_PASS_MAX_AGE).decode("ascii") == run_id
+    except (BadSignature, UnicodeDecodeError):
+        return False
+
+
 @app.get("/quiz/{code}")
 @limiter.limit("1000/minute")
-async def quiz_info(request: Request, code: str):
+async def quiz_info(request: Request, code: str, t: str = ""):
     run = _student_run(code)
     await QUIZ_RUNS.reveal_if_due(run)
     login = student_login(request)
-    return {**run.student_snapshot(login, QUIZ_RUNS.clock()), "logged_in": login is not None, "login": login}
+    now = QUIZ_RUNS.clock()
+    granted = run.in_room and run.check_entry_token(t, now)
+    entry_ok = not run.in_room or granted or _has_quiz_pass(request, run.run_id)
+    response = JSONResponse({
+        **run.student_snapshot(login, now),
+        "logged_in": login is not None,
+        "login": login,
+        "entry_ok": entry_ok,
+        "join_open": run.join_open(),
+    })
+    if granted:
+        response.set_cookie(
+            key=QUIZ_PASS_COOKIE,
+            value=signer.sign(run.run_id.encode("ascii")).decode("ascii"),
+            httponly=True,
+            samesite="lax",
+            max_age=QUIZ_PASS_MAX_AGE,
+            path="/",
+            secure=False,
+        )
+    return response
 
 
 @app.post("/quiz/{code}/join")
@@ -3348,7 +3404,7 @@ async def quiz_join(request: Request, code: str):
     if login is None:
         raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
     try:
-        participant = await QUIZ_RUNS.join(run, login)
+        participant = await QUIZ_RUNS.join(run, login, entry_ok=_has_quiz_pass(request, run.run_id))
     except QuizRunError as e:
         return _quiz_error(e)
     return {"joined": True, "group": participant.entry.group, "name": participant.entry.name}
