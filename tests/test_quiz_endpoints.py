@@ -542,9 +542,11 @@ class TestQuizFiles:
         as_teacher(client)
         response = upload(client, **{"seconds-per-question": "30"})
         assert response.status_code == 201
-        assert response.json() == {"id": "lecture-5", "title": "Квиз 5", "short_name": "К5", "questions": 2,
-                                   "max_points": "2", "seconds_per_question": 30,
-                                   "variants_per_student": False, "max_variants": 2}
+        data = response.json()
+        assert data.pop("version")
+        assert data == {"id": "lecture-5", "title": "Квиз 5", "short_name": "К5", "questions": 2,
+                        "max_points": "2", "seconds_per_question": 30, "reveal_seconds": 10,
+                        "variants_per_student": False, "max_variants": 2}
         stored = (env / "quizzes" / "os" / "lecture-5.md").read_text(encoding="utf-8")
         assert stored.startswith("---\ntitle: Квиз 5\nshort-name: К5\n")
 
@@ -1157,3 +1159,156 @@ class TestDateColumns:
         assert parse_date_label("3.11") == (3, 11, None)
         assert parse_date_label("ЛР1") is None
         assert parse_date_label("31.13") is None
+
+
+# ---------------------------------------------------------------------------
+# Auto-advance after reveal, ending a question early, pause; editing a quiz
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+class TestPacing:
+    async def test_reveal_seconds_setting(self):
+        assert make_quiz().settings.reveal_seconds == 10
+        quiz = parse_quiz(BANK, {"short-name": "К5", "max-points": 1, "reveal-seconds": 0})
+        assert quiz.settings.reveal_seconds == 0
+        text = build_quiz_file(quiz.settings, quiz.body)
+        assert "reveal-seconds: 0" in text
+        assert "reveal-seconds" not in build_quiz_file(make_quiz().settings, BANK)   # default not written
+        with pytest.raises(Exception):
+            parse_quiz(BANK, {"short-name": "К5", "max-points": 1, "reveal-seconds": 500})
+
+    async def test_auto_advance_after_reveal(self, manager, clock):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.start(run)
+        await manager.reveal_if_due(run, 0, force=True)
+        assert run.next_at == clock.now + 10
+        assert run.projector_snapshot(clock.now)["next_in_ms"] == 10000
+        task = run.advance_task
+        task.cancel()                                  # don't wait 10 real seconds
+        await manager._advance_later(run, 0, 0)
+        assert (run.state, run.question_index) == ("question", 1)
+        assert run.projector_snapshot(clock.now)["next_in_ms"] is None
+
+    async def test_auto_advance_after_last_question_finishes(self, manager):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.start(run)
+        await manager.reveal_if_due(run, 0, force=True)
+        await manager.next(run)
+        await manager.reveal_if_due(run, 1, force=True)
+        run.advance_task.cancel()
+        await manager._advance_later(run, 1, 0)
+        assert run.state == "finished"
+
+    async def test_stale_advance_does_nothing(self, manager):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.start(run)
+        await manager.reveal_if_due(run, 0, force=True)
+        await manager.next(run)                        # teacher pressed "Дальше" first
+        await manager._advance_later(run, 0, 0)        # the old timer fires
+        assert (run.state, run.question_index) == ("question", 1)
+
+    async def test_zero_means_manual(self, manager):
+        quiz = parse_quiz(BANK, {"short-name": "К5", "max-points": 1, "reveal-seconds": 0})
+        run = await manager.open("os", {}, "k5", quiz)
+        await manager.start(run)
+        await manager.reveal_if_due(run, 0, force=True)
+        assert run.next_at is None and run.advance_task is None
+
+    async def test_end_question_early(self, manager, clock):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.join(run, "alice")
+        await manager.join(run, "Bob")
+        await manager.start(run)
+        await manager.answer(run, "alice", 0, run.variant(0).correct)
+        clock.now += 5                                  # well before the 20 s deadline
+        await manager.end_question(run)
+        assert run.state == "reveal"
+        with pytest.raises(QuizRunError) as e:
+            await manager.answer(run, "Bob", 0, 0)
+        assert e.value.code == "TOO_LATE"
+        with pytest.raises(QuizRunError):
+            await manager.end_question(run)             # not in a question any more
+
+    async def test_hold(self, manager):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.start(run)
+        with pytest.raises(QuizRunError):
+            await manager.hold(run)                     # nothing to hold during a question
+        await manager.reveal_if_due(run, 0, force=True)
+        await manager.hold(run)
+        assert run.next_at is None
+        await manager._advance_later(run, 0, 0)         # a timer that slipped through does nothing
+        assert run.state == "reveal"
+        await manager.next(run)
+        assert run.question_index == 1
+
+    async def test_recovered_reveal_advances(self, manager, recorder, clock, tmp_path):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.start(run)
+        await manager.reveal_if_due(run, 0, force=True)
+        run.advance_task.cancel()
+        clock.now += 60                                 # restarted long after next_at
+        new = QuizRunManager(recorder.read, recorder.write, log_dir=str(tmp_path / "logs"), clock=clock)
+        (recovered,) = await new.recover(lambda c: {})
+        await asyncio.sleep(0.01)
+        assert (recovered.state, recovered.question_index) == ("question", 1)
+
+    async def test_recovered_hold_stays(self, manager, recorder, clock, tmp_path):
+        run = await manager.open("os", {}, "k5", make_quiz())
+        await manager.start(run)
+        await manager.reveal_if_due(run, 0, force=True)
+        await manager.hold(run)
+        clock.now += 60
+        new = QuizRunManager(recorder.read, recorder.write, log_dir=str(tmp_path / "logs"), clock=clock)
+        (recovered,) = await new.recover(lambda c: {})
+        await asyncio.sleep(0.01)
+        assert recovered.state == "reveal" and recovered.next_at is None
+
+
+class TestPacingHttp:
+    def test_end_question_and_hold(self, client):
+        as_teacher(client)
+        upload(client)
+        run_id = client.post("/admin/courses/os/quizzes/lecture-5/runs").json()["run_id"]
+        client.post(f"/admin/quiz-runs/{run_id}/start")
+        snap = client.post(f"/admin/quiz-runs/{run_id}/end-question").json()
+        assert snap["state"] == "reveal" and snap["next_in_ms"] == 10000
+        snap = client.post(f"/admin/quiz-runs/{run_id}/hold").json()
+        assert snap["next_in_ms"] is None
+        assert client.post(f"/admin/quiz-runs/{run_id}/hold").status_code == 200   # idempotent in reveal
+
+
+class TestEditQuiz:
+    def form(self, version, **changes):
+        return {"title": "Квиз 5", "short-name": "К5", "max-points": "2", "seconds-per-question": 20,
+                "reveal-seconds": 10, "variants-per-student": False, "version": version, **changes}
+
+    def test_change_column_keeps_questions(self, client, env):
+        as_teacher(client)
+        version = upload(client).json()["version"]
+        response = client.put("/admin/courses/os/quizzes/lecture-5", json=self.form(version, **{"short-name": "03.11"}))
+        assert response.status_code == 200
+        assert response.json()["short_name"] == "03.11" and response.json()["version"] != version
+        stored = (env / "quizzes" / "os" / "lecture-5.md").read_text(encoding="utf-8")
+        assert "short-name: '03.11'" in stored
+        assert "### Вопрос 1, 50%" in stored and stored.count("---\n") == 2
+        assert client.get("/admin/courses/os/quizzes").json()[0]["short_name"] == "03.11"
+
+    def test_stale_version_is_409(self, client):
+        as_teacher(client)
+        version = upload(client).json()["version"]
+        assert client.put("/admin/courses/os/quizzes/lecture-5", json=self.form(version, title="A")).status_code == 200
+        response = client.put("/admin/courses/os/quizzes/lecture-5", json=self.form(version, title="B"))
+        assert response.status_code == 409
+
+    def test_invalid_values(self, client):
+        as_teacher(client)
+        version = upload(client).json()["version"]
+        response = client.put("/admin/courses/os/quizzes/lecture-5", json=self.form(version, **{"max-points": "0"}))
+        assert response.status_code == 400 and response.json()["errors"]
+
+    def test_foreign_course(self, client):
+        as_teacher(client)
+        response = client.put("/admin/courses/ml/quizzes/x", json=self.form("v"))
+        assert response.status_code == 404

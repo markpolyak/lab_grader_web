@@ -56,8 +56,19 @@ const EMPTY_FORM = {
   "short-name": "",
   "max-points": "",
   "seconds-per-question": "20",
+  "reveal-seconds": "10",
   "variants-per-student": false,
 };
+
+// The edit form from a quiz summary (GET .../quizzes).
+const formOf = (quiz) => ({
+  title: quiz.title,
+  "short-name": quiz.short_name,
+  "max-points": quiz.max_points,
+  "seconds-per-question": String(quiz.seconds_per_question),
+  "reveal-seconds": String(quiz.reveal_seconds),
+  "variants-per-student": !!quiz.variants_per_student,
+});
 
 export const QuizList = () => {
   const { courseId } = useParams();
@@ -73,6 +84,9 @@ export const QuizList = () => {
   const [preview, setPreview] = useState(null);
   const [toDelete, setToDelete] = useState(null);
   const [toRun, setToRun] = useState(null); // quiz summary
+  const [editing, setEditing] = useState(null); // quiz summary
+  const [editForm, setEditForm] = useState(EMPTY_FORM);
+  const [editErrors, setEditErrors] = useState([]);
   const [inRoom, setInRoom] = useState(false);
   const [snackbar, setSnackbar] = useState(null);
 
@@ -159,15 +173,67 @@ export const QuizList = () => {
     }
   };
 
-  const field = (name, label, props = {}) => (
-    <TextField
-      size="small"
-      label={label}
-      value={form[name]}
-      onChange={(e) => setForm((prev) => ({ ...prev, [name]: e.target.value }))}
-      {...props}
-    />
-  );
+  // The parameter fields, shared by the upload form and the edit dialog.
+  const settingsFields = (values, setValues) => {
+    const f = (name, label, props = {}) => (
+      <TextField
+        size="small"
+        label={label}
+        value={values[name]}
+        onChange={(e) => setValues((prev) => ({ ...prev, [name]: e.target.value }))}
+        {...props}
+      />
+    );
+    return (
+      <>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
+          {f("title", t("quizAdmin.fields.title"), { style: { minWidth: 240, flex: "2 1 240px" } })}
+          {f("short-name", t("quizAdmin.fields.shortName"), {
+            helperText: t("quizAdmin.fields.shortNameHint"),
+            style: { flex: "1 1 160px" },
+          })}
+          {f("max-points", t("quizAdmin.fields.maxPoints"), { style: { flex: "1 1 120px" } })}
+          {f("seconds-per-question", t("quizAdmin.fields.seconds"), { type: "number", style: { flex: "1 1 120px" } })}
+          {f("reveal-seconds", t("quizAdmin.fields.revealSeconds"), {
+            type: "number",
+            helperText: t("quizAdmin.fields.revealSecondsHint"),
+            style: { flex: "1 1 160px" },
+          })}
+        </div>
+        <FormControlLabel
+          control={
+            <Checkbox
+              checked={!!values["variants-per-student"]}
+              onChange={(e) => setValues((prev) => ({ ...prev, "variants-per-student": e.target.checked }))}
+            />
+          }
+          label={t("quizAdmin.fields.variantsPerStudent")}
+        />
+      </>
+    );
+  };
+
+  const saveEdit = async () => {
+    setEditErrors([]);
+    try {
+      await api(`${base}/${encodeURIComponent(editing.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...editForm, version: editing.version }),
+      });
+      setEditing(null);
+      setSnackbar({ severity: "success", message: t("quizAdmin.saved") });
+      load();
+    } catch (err) {
+      setEditErrors(
+        err.status === 409
+          ? [t("courseStore.conflict")]
+          : err.data && err.data.errors
+            ? err.data.errors
+            : [err.message]
+      );
+    }
+  };
 
   return (
     <Container>
@@ -187,27 +253,7 @@ export const QuizList = () => {
           </div>
           {file && (
             <>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 12 }}>
-                {field("title", t("quizAdmin.fields.title"), { style: { minWidth: 240, flex: "2 1 240px" } })}
-                {field("short-name", t("quizAdmin.fields.shortName"), {
-                  helperText: t("quizAdmin.fields.shortNameHint"),
-                  style: { flex: "1 1 160px" },
-                })}
-                {field("max-points", t("quizAdmin.fields.maxPoints"), { style: { flex: "1 1 120px" } })}
-                {field("seconds-per-question", t("quizAdmin.fields.seconds"), {
-                  type: "number",
-                  style: { flex: "1 1 120px" },
-                })}
-              </div>
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={form["variants-per-student"]}
-                    onChange={(e) => setForm((prev) => ({ ...prev, "variants-per-student": e.target.checked }))}
-                  />
-                }
-                label={t("quizAdmin.fields.variantsPerStudent")}
-              />
+              {settingsFields(form, setForm)}
               {uploadErrors.length > 0 && (
                 <Alert severity="error">
                   {uploadErrors.map((e) => (
@@ -270,6 +316,20 @@ export const QuizList = () => {
                           </Button>{" "}
                         </>
                       )}
+                      {!quiz.error && (
+                        <>
+                          <Button
+                            size="small"
+                            onClick={() => {
+                              setEditForm(formOf(quiz));
+                              setEditErrors([]);
+                              setEditing(quiz);
+                            }}
+                          >
+                            {t("quizAdmin.edit")}
+                          </Button>{" "}
+                        </>
+                      )}
                       <Button size="small" color="error" onClick={() => setToDelete(quiz.id)}>
                         {t("quizAdmin.delete")}
                       </Button>
@@ -315,6 +375,29 @@ export const QuizList = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setPreview(null)}>{t("quizAdmin.close")}</Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={!!editing} onClose={() => setEditing(null)} maxWidth="md" fullWidth>
+        <DialogTitle>{editing && t("quizAdmin.editTitle", { id: editing.id })}</DialogTitle>
+        <DialogContent>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12, paddingTop: 8 }}>
+            {settingsFields(editForm, setEditForm)}
+            <div style={{ color: "#666", fontSize: 14 }}>{t("quizAdmin.editHint")}</div>
+            {editErrors.length > 0 && (
+              <Alert severity="error">
+                {editErrors.map((e) => (
+                  <div key={e}>{e}</div>
+                ))}
+              </Alert>
+            )}
+          </div>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditing(null)}>{t("cancel")}</Button>
+          <Button variant="contained" onClick={saveEdit}>
+            {t("save")}
+          </Button>
         </DialogActions>
       </Dialog>
 

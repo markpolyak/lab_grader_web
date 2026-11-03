@@ -321,7 +321,8 @@
       "ENTRY_REQUIRED": "Scan the QR code on the screen in the room",
       "JOIN_CLOSED": "Joining is closed: the quiz is under way"
     },
-    "questionOnScreen": "The question is on the screen in the room"
+    "questionOnScreen": "The question is on the screen in the room",
+    "nextIn": "Next question in {{seconds}} s"
   },
   "quizAdmin": {
     "title": "Quizzes",
@@ -343,7 +344,9 @@
       "shortNameHint": "as in the second row of the group sheet",
       "maxPoints": "Points for the quiz",
       "seconds": "Seconds per question",
-      "variantsPerStudent": "Different question variants for different students (test)"
+      "variantsPerStudent": "Different question variants for different students (test)",
+      "revealSeconds": "Seconds to show the answer",
+      "revealSecondsHint": "then the next question starts; 0 - by button only"
     },
     "columns": {
       "title": "Quiz",
@@ -370,13 +373,21 @@
       "ownVariants": "Every student has their own variant of the question",
       "correctOf": "correct {{correct}} of {{answered}}",
       "answersOnPhones": "The answers are on your phones",
-      "inRoomLobby": "In the room only: the QR code changes every 15 seconds, joining until the first question ends"
+      "inRoomLobby": "In the room only: the QR code changes every 15 seconds, joining until the first question ends",
+      "endQuestion": "End question",
+      "hold": "Pause",
+      "nextIn": "next question in {{seconds}} s",
+      "resultsIn": "results in {{seconds}} s"
     },
     "variantsPerStudentMark": "test: up to {{count}} variants per question",
     "variantsPerStudentNoVariants": "test, but every question has one variant - all the same",
     "inRoom": "In the room only",
     "inRoomHint": "The question is shown on the screen only, the answers on the phones (each in its own order). The QR code changes every 15 seconds; joining is open until the first question ends.",
     "inRoomNoVariants": "Not available for a quiz with different variants: the screen shows one common question.",
-    "open": "Open"
+    "open": "Open",
+    "edit": "Edit",
+    "editTitle": "Quiz «{{id}}» settings",
+    "editHint": "Questions stay the same. A run already open keeps its old settings.",
+    "saved": "Quiz settings saved"
   }
 }

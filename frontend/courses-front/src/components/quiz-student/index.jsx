@@ -98,8 +98,9 @@ export const QuizStudent = () => {
       if (data.version < version) return;
       version = data.version;
       setSnapshot(data);
-      deadlineRef.current = data.state === "question" ? Date.now() + data.remaining_ms : null;
-      setRemaining(data.remaining_ms);
+      const left = data.state === "question" ? data.remaining_ms : data.state === "reveal" ? data.next_in_ms : null;
+      deadlineRef.current = left !== null && left !== undefined ? Date.now() + left : null;
+      setRemaining(left || 0);
       if (data.state === "finished" || data.state === "cancelled") source.close();
     };
     source.onerror = () => setOffline(true);
@@ -256,6 +257,9 @@ export const QuizStudent = () => {
                     ? t("quiz.correct")
                     : t("quiz.wrong")}
               </Status>
+            )}
+            {s.state === "reveal" && s.next_in_ms !== null && s.next_in_ms !== undefined && s.question + 1 < s.total && (
+              <Hint>{t("quiz.nextIn", { seconds: Math.ceil(remaining / 1000) })}</Hint>
             )}
           </>
         )}

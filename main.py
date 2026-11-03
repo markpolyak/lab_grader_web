@@ -3126,9 +3126,11 @@ def _load_quiz(course_id: str, quiz_id: str):
     return stored
 
 
-def _quiz_summary(quiz_id: str, quiz) -> dict:
+def _quiz_summary(quiz_id: str, quiz, version: str | None = None) -> dict:
     s = quiz.settings
     return {
+        "version": version,
+        "reveal_seconds": s.reveal_seconds,
         "id": quiz_id,
         "title": s.title,
         "short_name": s.short_name,
@@ -3153,7 +3155,7 @@ async def admin_list_quizzes(request: Request, course_id: str, admin: AdminIdent
         quiz_id = path[len(prefix):-3]
         stored = await asyncio.to_thread(store.read, path)
         try:
-            result.append(_quiz_summary(quiz_id, parse_quiz(stored.text)))
+            result.append(_quiz_summary(quiz_id, parse_quiz(stored.text), stored.version))
         except QuizFormatError as e:
             result.append({"id": quiz_id, "error": "; ".join(e.errors)})
     return result
@@ -3169,6 +3171,7 @@ async def admin_upload_quiz(
     short_name: str = Form("", alias="short-name"),
     max_points: str = Form("", alias="max-points"),
     seconds_per_question: str = Form("", alias="seconds-per-question"),
+    reveal_seconds: str = Form("", alias="reveal-seconds"),
     variants_per_student: str = Form("", alias="variants-per-student"),
     admin: AdminIdentity = Depends(require_course_access),
 ):
@@ -3183,6 +3186,7 @@ async def admin_upload_quiz(
             key: value for key, value in {
                 "title": title, "short-name": short_name, "max-points": max_points,
                 "seconds-per-question": seconds_per_question,
+                "reveal-seconds": reveal_seconds,
                 "variants-per-student": variants_per_student,
             }.items() if str(value).strip()
         }
@@ -3199,7 +3203,8 @@ async def admin_upload_quiz(
     await asyncio.to_thread(
         _store_write, {path: content}, {path: None}, f"{course_id}: квиз {quiz_id}", admin
     )
-    return _quiz_summary(quiz_id, quiz)
+    stored = await asyncio.to_thread(store.read, path)
+    return _quiz_summary(quiz_id, quiz, stored.version if stored else None)
 
 
 @app.get("/admin/courses/{course_id}/quizzes/{quiz_id}")
@@ -3218,6 +3223,47 @@ async def admin_get_quiz(
         **_quiz_summary(quiz_id, quiz),
         "items": [{**q.to_dict(), "points": format_points(p)} for q, p in zip(quiz.questions, points)],
     }
+
+
+class QuizSettingsUpdate(BaseModel):
+    """Quiz parameters from the admin edit form; the questions stay as they are."""
+    model_config = {"populate_by_name": True}
+
+    title: str
+    short_name: str = Field(alias="short-name")
+    max_points: str | float = Field(alias="max-points")
+    seconds_per_question: int | str = Field(alias="seconds-per-question")
+    reveal_seconds: int | str = Field(10, alias="reveal-seconds")
+    variants_per_student: bool = Field(False, alias="variants-per-student")
+    # Version of the file the form was filled from - a concurrent change is a 409
+    version: str
+
+
+@app.put("/admin/courses/{course_id}/quizzes/{quiz_id}")
+@limiter.limit("20/minute")
+async def admin_update_quiz(
+    request: Request,
+    course_id: str,
+    quiz_id: str,
+    body: QuizSettingsUpdate,
+    admin: AdminIdentity = Depends(require_course_access),
+):
+    """
+    Change a quiz's parameters (title, spreadsheet column, points, timings,
+    variants). A run already open keeps the parameters it was opened with.
+    """
+    stored = await asyncio.to_thread(_load_quiz, course_id, quiz_id)
+    try:
+        quiz = parse_quiz(stored.text, body.model_dump(by_alias=True, exclude={"version"}))
+    except QuizFormatError as e:
+        return _quiz_format_error(e)
+    path = _quiz_path(course_id, quiz_id)
+    content = build_quiz_file(quiz.settings, quiz.body).encode("utf-8")
+    await asyncio.to_thread(
+        _store_write, {path: content}, {path: body.version}, f"{course_id}: квиз {quiz_id} - параметры", admin
+    )
+    updated = await asyncio.to_thread(_load_quiz, course_id, quiz_id)
+    return _quiz_summary(quiz_id, quiz, updated.version)
 
 
 @app.delete("/admin/courses/{course_id}/quizzes/{quiz_id}")
@@ -3319,6 +3365,20 @@ async def admin_quiz_start(request: Request, run_id: str, admin: AdminIdentity =
 @limiter.limit("120/minute")
 async def admin_quiz_next(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
     return await _run_action(run_id, admin, "next")
+
+
+@app.post("/admin/quiz-runs/{run_id}/end-question")
+@limiter.limit("120/minute")
+async def admin_quiz_end_question(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    """End the current question before its time is up and show the answer."""
+    return await _run_action(run_id, admin, "end_question")
+
+
+@app.post("/admin/quiz-runs/{run_id}/hold")
+@limiter.limit("120/minute")
+async def admin_quiz_hold(request: Request, run_id: str, admin: AdminIdentity = Depends(require_admin)):
+    """Stay on the answer: no auto-advance to the next question."""
+    return await _run_action(run_id, admin, "hold")
 
 
 @app.post("/admin/quiz-runs/{run_id}/finish")

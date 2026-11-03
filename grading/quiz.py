@@ -28,6 +28,9 @@ import yaml
 CORRECT_MARK = "✓"
 OPTIONS_PER_QUESTION = 4
 SECONDS_MIN, SECONDS_MAX, SECONDS_DEFAULT = 5, 300, 20
+# How long the correct answer stays on screen before the next question starts
+# by itself; 0 - only by the teacher's button.
+REVEAL_MIN, REVEAL_MAX, REVEAL_DEFAULT = 0, 120, 10
 
 _FENCE_RE = re.compile(r"^\s*(```|~~~)")
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
@@ -82,6 +85,7 @@ class QuizSettings:
     short_name: str
     max_points: float
     seconds_per_question: int = SECONDS_DEFAULT
+    reveal_seconds: int = REVEAL_DEFAULT
     # A test: each student gets their own variant (А/Б/...) of every question,
     # so a neighbour's screen does not give the answer away. Off - one variant
     # for everybody, picked when the run is opened.
@@ -94,6 +98,8 @@ class QuizSettings:
             "max-points": self.max_points,
             "seconds-per-question": self.seconds_per_question,
         }
+        if self.reveal_seconds != REVEAL_DEFAULT:
+            data["reveal-seconds"] = self.reveal_seconds
         if self.variants_per_student:
             data["variants-per-student"] = True
         return data
@@ -177,13 +183,26 @@ def settings_from(values: dict, default_title: str | None = None) -> QuizSetting
     except (TypeError, ValueError):
         errors.append(f"Время на вопрос должно быть целым числом от {SECONDS_MIN} до {SECONDS_MAX} секунд")
 
+    reveal = values.get("reveal-seconds")
+    if reveal in (None, ""):
+        reveal = REVEAL_DEFAULT
+    try:
+        reveal = int(reveal)
+        if not REVEAL_MIN <= reveal <= REVEAL_MAX:
+            raise ValueError
+    except (TypeError, ValueError):
+        errors.append(
+            f"Время показа ответа должно быть целым числом от {REVEAL_MIN} до {REVEAL_MAX} секунд "
+            "(0 - следующий вопрос только по кнопке)"
+        )
+
     if errors:
         raise QuizFormatError(errors)
     if max_points == int(max_points):
         max_points = int(max_points)
     return QuizSettings(
         title=title, short_name=short_name, max_points=max_points, seconds_per_question=seconds,
-        variants_per_student=_as_bool(values.get("variants-per-student")),
+        reveal_seconds=reveal, variants_per_student=_as_bool(values.get("variants-per-student")),
     )
 
 

@@ -284,6 +284,10 @@ class QuizRun:
     version: int = 0
     changed: asyncio.Event = field(default_factory=asyncio.Event)
     reveal_task: asyncio.Task | None = None
+    # Auto-advance from reveal to the next question (reveal-seconds); None -
+    # by the teacher's button only (setting 0, or "Пауза" pressed).
+    next_at: float | None = None
+    advance_task: asyncio.Task | None = None
     # "In the room only" (chosen when the run is opened): the question text is
     # shown on the projector only, joining needs the QR code currently on the
     # projector and closes when the first question ends.
@@ -372,6 +376,10 @@ class QuizRun:
             "total": self.total,
             "seconds": self.quiz.settings.seconds_per_question,
             "remaining_ms": self.remaining_ms(now),
+            "next_in_ms": (
+                max(0, int((self.next_at - now) * 1000))
+                if self.state == REVEAL and self.next_at is not None else None
+            ),
         }
 
     def student_snapshot(self, login: str | None, now: float) -> dict:
@@ -608,10 +616,31 @@ class QuizRunManager:
             self._expire_locked(run)
             if run.state != REVEAL:
                 raise QuizRunError("BAD_STATE", 409, "Следующий вопрос доступен после показа ответа")
-            if run.question_index + 1 < run.total:
-                self._ask(run, run.question_index + 1)
-            else:
-                self._finish_locked(run)
+            self._next_locked(run)
+
+    def _next_locked(self, run: QuizRun) -> None:
+        if run.question_index + 1 < run.total:
+            self._ask(run, run.question_index + 1)
+        else:
+            self._finish_locked(run)
+
+    async def end_question(self, run: QuizRun) -> None:
+        """The teacher ends the question early: the answer is shown now, later answers are too late."""
+        async with self.lock:
+            if run.state != QUESTION:
+                raise QuizRunError("BAD_STATE", 409, "Сейчас не идёт вопрос")
+            self._cancel_timer(run)
+            self._expire_locked(run, force=True, early=True)
+
+    async def hold(self, run: QuizRun) -> None:
+        """Stay on the answer (e.g. to discuss it): no auto-advance, "Дальше" moves on."""
+        async with self.lock:
+            if run.state != REVEAL:
+                raise QuizRunError("BAD_STATE", 409, "Пауза возможна только при показе ответа")
+            self._cancel_advance(run)
+            run.next_at = None
+            run.log.write("hold", question=run.question_index)
+            run.bump()
 
     async def finish(self, run: QuizRun) -> None:
         async with self.lock:
@@ -641,6 +670,8 @@ class QuizRunManager:
         run.question_index = i
         run.asked = i + 1
         run.deadline = now + run.quiz.settings.seconds_per_question
+        run.next_at = None
+        self._cancel_advance(run)
         run.log.write("question", question=i, deadline=run.deadline)
         run.bump()
         self._cancel_timer(run)
@@ -655,6 +686,29 @@ class QuizRunManager:
         if run.reveal_task and not run.reveal_task.done():
             run.reveal_task.cancel()
         run.reveal_task = None
+        self._cancel_advance(run)
+
+    def _cancel_advance(self, run: QuizRun) -> None:
+        if run.advance_task and not run.advance_task.done() and run.advance_task is not asyncio.current_task():
+            run.advance_task.cancel()
+        run.advance_task = None
+
+    def _schedule_advance(self, run: QuizRun) -> None:
+        if run.next_at is None:
+            return
+        try:
+            run.advance_task = asyncio.get_running_loop().create_task(
+                self._advance_later(run, run.question_index, max(0.0, run.next_at - self.clock()))
+            )
+        except RuntimeError:
+            run.advance_task = None
+
+    async def _advance_later(self, run: QuizRun, i: int, delay: float) -> None:
+        await asyncio.sleep(delay)
+        async with self.lock:
+            if run.state == REVEAL and run.question_index == i and run.next_at is not None:
+                run.log.write("auto_next", question=i)
+                self._next_locked(run)
 
     async def _reveal_later(self, run: QuizRun, i: int, delay: float) -> None:
         await asyncio.sleep(max(0.0, delay))
@@ -667,12 +721,15 @@ class QuizRunManager:
                 return
             self._expire_locked(run, force=force)
 
-    def _expire_locked(self, run: QuizRun, force: bool = False) -> None:
+    def _expire_locked(self, run: QuizRun, force: bool = False, early: bool = False) -> None:
         if run.state != QUESTION or run.deadline is None:
             return
         if force or self.clock() > run.deadline + ANSWER_GRACE_SECONDS:
             run.state = REVEAL
-            run.log.write("reveal", question=run.question_index)
+            reveal_seconds = run.quiz.settings.reveal_seconds
+            run.next_at = self.clock() + reveal_seconds if reveal_seconds > 0 else None
+            run.log.write("reveal", question=run.question_index, next_at=run.next_at, early=early)
+            self._schedule_advance(run)
             run.bump()
 
     def _finish_locked(self, run: QuizRun) -> None:
@@ -911,6 +968,9 @@ class QuizRunManager:
                     run.deadline = e["deadline"]
                 elif kind == "reveal":
                     run.state = REVEAL
+                    run.next_at = e.get("next_at")
+                elif kind == "hold":
+                    run.next_at = None
                 elif kind == "answer" and e.get("accepted"):
                     participant = run.participants.get(e["login"].casefold())
                     if participant is not None:
@@ -943,6 +1003,8 @@ class QuizRunManager:
                     run.reveal_task = asyncio.get_running_loop().create_task(
                         self._reveal_later(run, i, run.deadline + ANSWER_GRACE_SECONDS - self.clock())
                     )
+            if run.state == REVEAL:
+                self._schedule_advance(run)   # overdue - advances right away
             if run.state == FINISHED and not written and course_info:
                 self._start_write(run)
             run.bump()
@@ -969,7 +1031,7 @@ class QuizRunManager:
                 # Another student's answer changes the version but not this
                 # student's view: 200 phones x 200 answers would otherwise be
                 # 40 000 identical events. `remaining_ms` alone does not count.
-                content = {k: v for k, v in snapshot.items() if k not in ("version", "remaining_ms")}
+                content = {k: v for k, v in snapshot.items() if k not in ("version", "remaining_ms", "next_in_ms")}
                 if content != last_content:
                     last_content = content
                     yield snapshot

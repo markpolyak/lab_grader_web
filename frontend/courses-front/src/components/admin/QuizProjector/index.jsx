@@ -60,8 +60,10 @@ export const QuizProjector = () => {
     if (!data || data.version < versionRef.current) return;
     versionRef.current = data.version;
     setSnap((prev) => ({ ...data, link: data.link ?? prev?.link }));
-    deadlineRef.current = data.state === "question" ? Date.now() + data.remaining_ms : null;
-    setRemaining(data.remaining_ms);
+    // One countdown: to the end of the question, then to the next question.
+    const left = data.state === "question" ? data.remaining_ms : data.state === "reveal" ? data.next_in_ms : null;
+    deadlineRef.current = left !== null && left !== undefined ? Date.now() + left : null;
+    setRemaining(left || 0);
   };
 
   useEffect(() => {
@@ -114,6 +116,37 @@ export const QuizProjector = () => {
     if (response.ok) apply(data);
     else setError((data && (data.message || data.detail)) || `HTTP ${response.status}`);
   };
+
+  // Under the question: end it early; at the answer: the auto-advance countdown,
+  // "Дальше" right now, "Пауза" to stay on the answer.
+  const questionControls = snap && (
+    <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap", marginTop: 16 }}>
+      {snap.state === "question" && (
+        <button style={styles.button("#555")} onClick={() => act("end-question")}>
+          {t("quizAdmin.projector.endQuestion")}
+        </button>
+      )}
+      {snap.state === "reveal" && (
+        <>
+          <button style={styles.button("#1976d2")} onClick={() => act("next")}>
+            {snap.question + 1 < snap.total ? t("quizAdmin.projector.next") : t("quizAdmin.projector.toResults")}
+          </button>
+          {snap.next_in_ms !== null && snap.next_in_ms !== undefined && (
+            <>
+              <button style={styles.button("#777")} onClick={() => act("hold")}>
+                {t("quizAdmin.projector.hold")}
+              </button>
+              <span style={styles.muted}>
+                {t(snap.question + 1 < snap.total ? "quizAdmin.projector.nextIn" : "quizAdmin.projector.resultsIn", {
+                  seconds: Math.ceil(remaining / 1000),
+                })}
+              </span>
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
 
   if (error && !snap) return <div style={styles.page}><p style={styles.big}>{error}</p></div>;
   if (!snap) return <div style={styles.page}>{t("quiz.loading")}</div>;
@@ -192,11 +225,7 @@ export const QuizProjector = () => {
               </tbody>
             </table>
           )}
-          {snap.state === "reveal" && (
-            <button style={{ ...styles.button("#1976d2"), marginTop: 16 }} onClick={() => act("next")}>
-              {snap.question + 1 < snap.total ? t("quizAdmin.projector.next") : t("quizAdmin.projector.toResults")}
-            </button>
-          )}
+          {questionControls}
         </div>
       )}
 
@@ -240,11 +269,7 @@ export const QuizProjector = () => {
               </div>
             );
           })}
-          {snap.state === "reveal" && (
-            <button style={{ ...styles.button("#1976d2"), marginTop: 16 }} onClick={() => act("next")}>
-              {snap.question + 1 < snap.total ? t("quizAdmin.projector.next") : t("quizAdmin.projector.toResults")}
-            </button>
-          )}
+          {questionControls}
         </div>
       )}
 

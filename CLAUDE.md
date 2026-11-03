@@ -213,6 +213,10 @@ Live multiple-choice quiz at the end of a lecture, scores written to the course 
   by `GET /quiz/{code}?t=` for the entry token currently in the QR (HMAC of a per-run secret and a
   15 s slot, current or previous slot accepted), and closes after question 1. Already joined
   students are never re-checked.
+- **Pacing**: `reveal-seconds` (default 10, 0 = manual) - after reveal an `advance_task` moves to
+  the next question / finish at `next_at` (`next_in_ms` in snapshots); `end_question` reveals
+  early, `hold` cancels the auto-advance. Both timers are cancelled on any state change and re-armed
+  from the log on recovery. Quiz parameters are editable (`PUT .../quizzes/{q}` with `version`).
 - **Recovery**: every state change is appended to `{LOG_DIR}/quiz/{course}/{run_id}.jsonl` (the
   `open` event carries the quiz text, code and drawn variants); `QuizRunManager.recover` replays
   the logs of the last 24 h at startup (FastAPI lifespan): unfinished runs continue, a finished
