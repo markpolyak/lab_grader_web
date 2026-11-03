@@ -1123,3 +1123,37 @@ class TestInRoomHttp:
         response = client.post("/admin/courses/os/quizzes/lecture-5/runs")
         assert response.status_code == 201 and response.json()["in_room"] is False
         assert "?t=" not in response.json()["link"]
+
+
+class TestDateColumns:
+    """The API returns a date header as displayed: `03.11` when the format hides the year."""
+
+    VALUES = [
+        ["", "", "", "Посещаемость лекций", "", "", "GitHub"],
+        ["", "Ф.И.О.", "ЛР0", "03.11", "10.11", "1.12", ""],
+    ]
+
+    @pytest.mark.parametrize("name,col", [
+        ("03.11.2026", 4), ("03.11", 4), ("3.11.2026", 4), ("2026-11-03", 4), ("03/11/26", 4),
+        ("01.12.2026", 6), ("10.11", 5),
+        ("04.11.2026", None), ("ЛР0", 3),
+    ])
+    def test_match(self, name, col):
+        from grading.quiz_runs import quiz_column
+        assert quiz_column(self.VALUES, name) == col
+
+    def test_exact_text_wins(self):
+        from grading.quiz_runs import quiz_column
+        values = [[], ["03.11", "03.11.2026"]]
+        assert quiz_column(values, "03.11.2026") == 2
+
+    def test_years_must_agree_when_both_given(self):
+        from grading.quiz_runs import quiz_column
+        assert quiz_column([[], ["03.11.2025"]], "03.11.2026") is None
+
+    def test_parse(self):
+        from grading.quiz_runs import parse_date_label
+        assert parse_date_label("03.11.2026") == (3, 11, 2026)
+        assert parse_date_label("3.11") == (3, 11, None)
+        assert parse_date_label("ЛР1") is None
+        assert parse_date_label("31.13") is None

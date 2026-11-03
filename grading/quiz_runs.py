@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import random
+import re
 import secrets
 import time
 import uuid
@@ -61,19 +62,55 @@ class QuizRunError(Exception):
         super().__init__(self.detail)
 
 
+_DATE_RE = re.compile(r"^(\d{1,2})[./-](\d{1,2})(?:[./-](\d{4}|\d{2}))?$")
+_ISO_DATE_RE = re.compile(r"^(\d{4})-(\d{1,2})-(\d{1,2})$")
+
+
+def parse_date_label(text: str) -> tuple[int, int, int | None] | None:
+    """`03.11.2026`, `3.11`, `03/11/26`, `2026-11-03` -> (day, month, year or None)."""
+    text = (text or "").strip()
+    match = _ISO_DATE_RE.match(text)
+    if match:
+        year, month, day = (int(g) for g in match.groups())
+        return (day, month, year) if 1 <= day <= 31 and 1 <= month <= 12 else None
+    match = _DATE_RE.match(text)
+    if not match:
+        return None
+    day, month = int(match.group(1)), int(match.group(2))
+    year = match.group(3)
+    year = None if year is None else (int(year) + 2000 if len(year) == 2 else int(year))
+    return (day, month, year) if 1 <= day <= 31 and 1 <= month <= 12 else None
+
+
+def _same_date(a, b) -> bool:
+    return a[:2] == b[:2] and (a[2] is None or b[2] is None or a[2] == b[2])
+
+
 def quiz_column(values: list[list[str]], short_name: str) -> int | None:
     """
     1-based column whose header in the SECOND row is `short_name` (§2 of the plan).
 
     Only that row: the first one holds lab deadlines - dates - and a quiz used
     for attendance is named by the lecture's date, so a whole-sheet search
-    could land in a lab's column. The header is compared as displayed.
+    could land in a lab's column.
+
+    The header is compared as displayed, and for dates by value: the API gives
+    the cell as formatted (`03.11` when the format hides the year), while the
+    teacher sees `03.11.2026` in the formula bar. An exact match wins.
     """
     if not short_name or len(values) < HEADER_ROW:
         return None
     wanted = short_name.strip()
-    for idx, value in enumerate(values[HEADER_ROW - 1]):
-        if (value or "").strip() == wanted:
+    header = [(value or "").strip() for value in values[HEADER_ROW - 1]]
+    for idx, value in enumerate(header):
+        if value == wanted:
+            return idx + 1
+    wanted_date = parse_date_label(wanted)
+    if wanted_date is None:
+        return None
+    for idx, value in enumerate(header):
+        cell_date = parse_date_label(value)
+        if cell_date is not None and _same_date(wanted_date, cell_date):
             return idx + 1
     return None
 
