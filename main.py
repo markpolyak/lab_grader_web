@@ -78,6 +78,7 @@ from grading.course_index import (
     load_course_index as _load_course_index,
 )
 import tempfile
+from event_queue.handler.websocket import router as websocket_router
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -123,6 +124,7 @@ logger.info(f"Logging initialized. Log file: {log_file}")
 
 load_dotenv()
 app = FastAPI()
+app.include_router(websocket_router)
 COURSES_DIR = "courses"
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 
