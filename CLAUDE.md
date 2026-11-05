@@ -217,6 +217,11 @@ Live multiple-choice quiz at the end of a lecture, scores written to the course 
   the next question / finish at `next_at` (`next_in_ms` in snapshots); `end_question` reveals
   early, `hold` cancels the auto-advance. Both timers are cancelled on any state change and re-armed
   from the log on recovery. Quiz parameters are editable (`PUT .../quizzes/{q}` with `version`).
+- **Leaderboard** (`leaderboard`, per run, default on): `QuizRun.ranking()` - points (as written to
+  the sheet) desc, then total seconds on correct answers asc (`Participant.answer_seconds`, from
+  the question start), cached per version. The projector gets logins only (`display_name`; never
+  the sheet's names), `hidden` students as `None`; phones get their own `place`. The same rule after
+  each question and at the end - the final board is the last one, speed never changes the grade.
 - **Recovery**: every state change is appended to `{LOG_DIR}/quiz/{course}/{run_id}.jsonl` (the
   `open` event carries the quiz text, code and drawn variants); `QuizRunManager.recover` replays
   the logs of the last 24 h at startup (FastAPI lifespan): unfinished runs continue, a finished

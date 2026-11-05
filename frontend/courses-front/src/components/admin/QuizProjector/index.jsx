@@ -39,6 +39,30 @@ const styles = {
   countdown: { fontSize: 64, fontWeight: 700, fontVariantNumeric: "tabular-nums" },
 };
 
+// Standings: points first, then less time on correct answers. Logins only -
+// never names from the spreadsheet; a student may hide even the login.
+const MEDALS = ["🥇", "🥈", "🥉"];
+
+const Leaderboard = ({ rows, title, t, big = false }) => (
+  <div>
+    <div style={{ fontSize: big ? 26 : 20, fontWeight: 600, margin: "8px 0" }}>{title}</div>
+    <table style={{ borderCollapse: "collapse", fontSize: big ? 24 : 20 }}>
+      <tbody>
+        {rows.map((r, i) => (
+          <tr key={i}>
+            <td style={{ padding: "2px 12px 2px 0", textAlign: "right" }}>{MEDALS[r.place - 1] || `${r.place}.`}</td>
+            <td style={{ padding: "2px 24px 2px 0", fontFamily: r.name ? "monospace" : "inherit", color: r.name ? "#222" : "#888" }}>
+              {r.name || t("quizAdmin.projector.hiddenName")}
+            </td>
+            <td style={{ padding: "2px 16px 2px 0" }}>{t("quizAdmin.points", { points: r.points })}</td>
+            <td style={{ color: "#777" }}>{t("quizAdmin.projector.seconds", { seconds: r.seconds })}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  </div>
+);
+
 export const QuizProjector = () => {
   const { runId } = useParams();
   const navigate = useNavigate();
@@ -117,6 +141,20 @@ export const QuizProjector = () => {
     else setError((data && (data.message || data.detail)) || `HTTP ${response.status}`);
   };
 
+  const leaderboardPanel = snap && snap.state === "reveal" && snap.leaderboard && (
+    <div style={{ marginTop: 16 }}>
+      <Leaderboard rows={snap.leaderboard} title={t("quizAdmin.projector.top")} t={t} />
+      {snap.fastest && (
+        <p style={{ fontSize: 20, margin: "4px 0" }}>
+          {t("quizAdmin.projector.fastest", {
+            name: snap.fastest.name || t("quizAdmin.projector.hiddenName"),
+            seconds: snap.fastest.seconds,
+          })}
+        </p>
+      )}
+    </div>
+  );
+
   // Under the question: end it early; at the answer: the auto-advance countdown,
   // "Дальше" right now, "Пауза" to stay on the answer.
   const questionControls = snap && (
@@ -194,6 +232,24 @@ export const QuizProjector = () => {
             <p style={{ fontSize: 28, fontFamily: "monospace" }}>{link}</p>
             <p style={styles.big}>{t("quizAdmin.projector.joined", { count: snap.joined })}</p>
             {snap.in_room && <p style={styles.muted}>{t("quizAdmin.projector.inRoomLobby")}</p>}
+            {snap.joined_names && snap.joined_names.length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, maxWidth: 640, margin: "8px 0 16px" }}>
+                {snap.joined_names.map((name, i) => (
+                  <span
+                    key={`${name}-${i}`}
+                    style={{ background: "#eef3fb", borderRadius: 14, padding: "4px 12px", fontSize: 18,
+                      color: name ? "#222" : "#888", fontFamily: name ? "monospace" : "inherit" }}
+                  >
+                    {name || t("quizAdmin.projector.hiddenName")}
+                  </span>
+                ))}
+                {snap.joined > snap.joined_names.length && (
+                  <span style={{ padding: "4px 12px", fontSize: 18, color: "#888" }}>
+                    {t("quizAdmin.projector.andMore", { count: snap.joined - snap.joined_names.length })}
+                  </span>
+                )}
+              </div>
+            )}
             <button style={styles.button("#2e7d32")} onClick={() => act("start")}>
               {t("quizAdmin.projector.start")}
             </button>
@@ -225,6 +281,7 @@ export const QuizProjector = () => {
               </tbody>
             </table>
           )}
+          {leaderboardPanel}
           {questionControls}
         </div>
       )}
@@ -269,6 +326,7 @@ export const QuizProjector = () => {
               </div>
             );
           })}
+          {leaderboardPanel}
           {questionControls}
         </div>
       )}
@@ -282,6 +340,9 @@ export const QuizProjector = () => {
               max: snap.summary.max_points,
             })}
           </p>
+          {snap.leaderboard && (
+            <Leaderboard rows={snap.leaderboard} title={t("quizAdmin.projector.finalTop")} t={t} big />
+          )}
           {snap.writing && <p>{t("quizAdmin.projector.writing")}</p>}
           {snap.write_report && (
             <table style={{ borderCollapse: "collapse", fontSize: 18 }}>

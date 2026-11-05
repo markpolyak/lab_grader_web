@@ -325,7 +325,9 @@
       "JOIN_CLOSED": "已停止加入：测验正在进行"
     },
     "questionOnScreen": "题目显示在教室屏幕上",
-    "nextIn": "{{seconds}} 秒后下一题"
+    "nextIn": "{{seconds}} 秒后下一题",
+    "place": "你排名第 {{place}}，共 {{of}} 人",
+    "hideMe": "不在屏幕排行榜上显示我的用户名"
   },
   "quizAdmin": {
     "title": "测验",
@@ -380,7 +382,13 @@
       "endQuestion": "结束本题",
       "hold": "暂停",
       "nextIn": "{{seconds}} 秒后下一题",
-      "resultsIn": "{{seconds}} 秒后显示结果"
+      "resultsIn": "{{seconds}} 秒后显示结果",
+      "hiddenName": "匿名参与者",
+      "andMore": "还有 {{count}} 人",
+      "top": "排行榜",
+      "finalTop": "最终排行榜",
+      "fastest": "最快答对：{{name}} - {{seconds}} 秒",
+      "seconds": "{{seconds}} 秒"
     },
     "variantsPerStudentMark": "考试：每题最多 {{count}} 个变体",
     "variantsPerStudentNoVariants": "考试，但每题只有一个变体——所有人相同",
@@ -391,6 +399,8 @@
     "edit": "编辑",
     "editTitle": "测验“{{id}}”参数",
     "editHint": "题目不变。已打开的场次继续使用旧参数。",
-    "saved": "测验参数已保存"
+    "saved": "测验参数已保存",
+    "leaderboardOn": "显示排行榜",
+    "leaderboardHint": "每题后显示前 5 名，结束时显示前 10 名——按得分排序，同分按答对速度。屏幕显示 GitHub 用户名，学生可隐藏。每人可在手机上看到自己的名次。"
   }
 }

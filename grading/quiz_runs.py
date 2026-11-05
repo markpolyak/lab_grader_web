@@ -43,6 +43,9 @@ FINISHED_CODE_TTL_SECONDS = 3600
 FIRST_STUDENT_ROW = 3
 HEADER_ROW = 2
 OPTION_LETTERS = "ABCD"
+LEADERBOARD_AFTER_QUESTION = 5
+LEADERBOARD_FINAL = 10
+LOBBY_NAMES = 30
 # "In the room only": the QR code on the projector changes every slot; a code
 # is accepted during its slot and the next one, so a link lives 15-30 s.
 ENTRY_SLOT_SECONDS = 15
@@ -258,6 +261,15 @@ class Participant:
     # question index -> option id (its position in the file)
     answers: dict[int, int] = field(default_factory=dict)
     correct: set[int] = field(default_factory=set)
+    # question index -> seconds from the question's start to the answer (server time)
+    answer_seconds: dict[int, float] = field(default_factory=dict)
+    # The student asked not to be named on the projector (their place stays)
+    hidden: bool = False
+
+    @property
+    def display_name(self) -> str | None:
+        """What the projector shows: the GitHub login the student chose, never the name from the sheet."""
+        return None if self.hidden else self.entry.login
 
 
 @dataclass
@@ -293,6 +305,62 @@ class QuizRun:
     # projector and closes when the first question ends.
     in_room: bool = False
     join_secret: bytes = field(default_factory=lambda: secrets.token_bytes(16))
+    # Leaderboard on the projector and places on the phones (chosen at opening)
+    leaderboard: bool = True
+    _ranking_cache: tuple | None = field(default=None, repr=False)
+
+    # -- leaderboard -------------------------------------------------------
+
+    def ranking(self) -> list[tuple[int, "Participant", float, float]]:
+        """
+        Standings: points first (the same as in the spreadsheet), then less total
+        time on the correctly answered questions. The same rule after every
+        question and at the end, so the final board is simply the last one.
+
+        Returns:
+            [(place, participant, points, seconds)], equal points and time share a place
+        """
+        if self._ranking_cache is not None and self._ranking_cache[0] == self.version:
+            return self._ranking_cache[1]
+        points = self.points()
+        rows = []
+        for p in self.participants.values():
+            score = round(sum(points[q] for q in p.correct if q < len(points)), 6)
+            seconds = round(sum(p.answer_seconds.get(q, 0.0) for q in p.correct), 3)
+            rows.append((score, seconds, p))
+        rows.sort(key=lambda r: (-r[0], r[1], r[2].joined_at))
+        ranking, place = [], 0
+        for n, (score, seconds, p) in enumerate(rows):
+            if n == 0 or (score, seconds) != (rows[n - 1][0], rows[n - 1][1]):
+                place = n + 1
+            ranking.append((place, p, score, seconds))
+        self._ranking_cache = (self.version, ranking)
+        return ranking
+
+    def leaderboard_rows(self, limit: int) -> list[dict]:
+        """The top of the standings - only those with points: no medal for zero."""
+        return [
+            {"place": place, "name": p.display_name, "points": format_points(score), "seconds": round(seconds, 1)}
+            for place, p, score, seconds in self.ranking()[:limit]
+            if score > 0
+        ]
+
+    def place_of(self, participant: "Participant") -> int | None:
+        for place, p, _score, _seconds in self.ranking():
+            if p is participant:
+                return place
+        return None
+
+    def fastest_correct(self, i: int) -> dict | None:
+        """Who answered question i correctly first - a chance to shine outside the top."""
+        best = None
+        for p in self.participants.values():
+            if i in p.correct and i in p.answer_seconds:
+                if best is None or p.answer_seconds[i] < best.answer_seconds[i]:
+                    best = p
+        if best is None:
+            return None
+        return {"name": best.display_name, "seconds": round(best.answer_seconds[i], 1)}
 
     # -- in the room only --------------------------------------------------
 
@@ -404,6 +472,11 @@ class QuizRun:
         if self.state == FINISHED and participant:
             data["score"] = format_points(self.score_of(participant))
             data["max_points"] = format_points(self.quiz.settings.max_points)
+        if participant is not None:
+            data["hidden"] = participant.hidden
+            if self.leaderboard and self.state in (REVEAL, FINISHED):
+                data["place"] = self.place_of(participant)
+                data["of"] = len(self.participants)
         return data
 
     def projector_snapshot(self, now: float) -> dict:
@@ -418,6 +491,16 @@ class QuizRun:
         })
         data["variants_per_student"] = self.per_student
         data["in_room"] = self.in_room
+        data["leaderboard_on"] = self.leaderboard
+        if self.state == LOBBY:
+            # Participants are kept in joining order (also when replayed from the log)
+            newest = list(reversed(self.participants.values()))[:LOBBY_NAMES]
+            data["joined_names"] = [p.display_name for p in newest]
+        if self.leaderboard and self.state == REVEAL:
+            data["leaderboard"] = self.leaderboard_rows(LEADERBOARD_AFTER_QUESTION)
+            data["fastest"] = self.fastest_correct(self.question_index)
+        if self.leaderboard and self.state == FINISHED:
+            data["leaderboard"] = self.leaderboard_rows(LEADERBOARD_FINAL)
         if self.state in (QUESTION, REVEAL) and self.per_student and len(self.quiz.questions[self.question_index].variants) > 1:
             # No common text to show: everyone has their own variant. The
             # projector shows progress, then how each variant went.
@@ -554,7 +637,8 @@ class QuizRunManager:
 
     # -- opening -----------------------------------------------------------
 
-    async def open(self, course_id: str, course_info: dict, quiz_id: str, quiz: Quiz, in_room: bool = False) -> QuizRun:
+    async def open(self, course_id: str, course_info: dict, quiz_id: str, quiz: Quiz, in_room: bool = False,
+                   leaderboard: bool = True) -> QuizRun:
         """lobby: read the roster, pick the variants, issue the code. 409 if the course has a run going."""
         if in_room and quiz.settings.variants_per_student:
             raise QuizRunError(
@@ -585,6 +669,7 @@ class QuizRunManager:
                 log=RunLog(self.log_dir, course_id, run_id, self.clock),
                 created_at=self.clock(),
                 in_room=in_room,
+                leaderboard=leaderboard,
             )
             self.runs[run_id] = run
             self.by_code[run.code] = run_id
@@ -595,7 +680,7 @@ class QuizRunManager:
                 "open", run_id=run_id, code=run.code, course_id=course_id, course_name=run.course_name,
                 created_at=run.created_at, quiz_text=build_quiz_file(quiz.settings, quiz.body),
                 variant_choice=run.variant_choice,
-                in_room=in_room, join_secret=run.join_secret.hex(),
+                in_room=in_room, join_secret=run.join_secret.hex(), leaderboard=leaderboard,
                 quiz_id=quiz_id, settings=quiz.settings.to_front_matter(),
                 variants="per-student" if quiz.settings.variants_per_student
                 else [q.variants[v].label for q, v in zip(quiz.questions, run.variant_choice)],
@@ -784,7 +869,7 @@ class QuizRunManager:
 
     # -- students ----------------------------------------------------------
 
-    async def join(self, run: QuizRun, login: str, entry_ok: bool = True) -> Participant:
+    async def join(self, run: QuizRun, login: str, entry_ok: bool = True, hidden: bool = False) -> Participant:
         """
         Args:
             entry_ok: the student came through the QR code currently on the
@@ -794,6 +879,8 @@ class QuizRunManager:
             raise QuizRunError("QUIZ_FINISHED", 410, "Квиз уже завершён")
         existing = run.participants.get(login.casefold())
         if existing is not None:
+            if existing.hidden != hidden:
+                await self.set_hidden(run, login, hidden)
             return existing
         self._check_join_allowed(run, entry_ok)
         entry = run.roster.find(login)
@@ -814,11 +901,23 @@ class QuizRunManager:
             participant = run.participants.get(key)
             if participant is None:
                 self._check_join_allowed(run, entry_ok)
-                participant = Participant(entry=entry, joined_at=self.clock())
+                participant = Participant(entry=entry, joined_at=self.clock(), hidden=hidden)
                 run.participants[key] = participant
-                run.log.write("join", login=entry.login, group=entry.group, row=entry.row, name=entry.name)
+                run.log.write("join", login=entry.login, group=entry.group, row=entry.row, name=entry.name,
+                              hidden=hidden)
                 run.bump()
             return participant
+
+    async def set_hidden(self, run: QuizRun, login: str, hidden: bool) -> None:
+        """"Не показывать меня в рейтинге" - the place stays, the login is not shown."""
+        async with self.lock:
+            participant = run.participants.get(login.casefold())
+            if participant is None:
+                raise QuizRunError("NOT_JOINED", 409, "Сначала подключитесь к квизу")
+            if participant.hidden != hidden:
+                participant.hidden = hidden
+                run.log.write("visibility", login=participant.entry.login, hidden=hidden)
+                run.bump()
 
     @staticmethod
     def _check_join_allowed(run: QuizRun, entry_ok: bool) -> None:
@@ -849,6 +948,8 @@ class QuizRunManager:
             if question in participant.answers:
                 raise QuizRunError("ALREADY_ANSWERED", 409, "Ответ на этот вопрос уже принят")
             participant.answers[question] = option
+            started = run.deadline - run.quiz.settings.seconds_per_question
+            participant.answer_seconds[question] = max(0.0, received - started)
             correct = option == variant.correct
             if correct:
                 participant.correct.add(question)
@@ -952,6 +1053,7 @@ class QuizRunManager:
                 log=RunLog(self.log_dir, opened["course_id"], opened["run_id"], self.clock),
                 created_at=opened.get("created_at", opened["ts"]),
                 in_room=bool(opened.get("in_room")),
+                leaderboard=bool(opened.get("leaderboard", True)),
             )
             if opened.get("join_secret"):
                 run.join_secret = bytes.fromhex(opened["join_secret"])
@@ -961,7 +1063,14 @@ class QuizRunManager:
                 if kind == "join":
                     entry = RosterEntry(login=e["login"], group=e["group"], row=e.get("row", 0), name=e.get("name", ""))
                     run.roster.entries[entry.login.casefold()] = entry
-                    run.participants.setdefault(entry.login.casefold(), Participant(entry=entry, joined_at=e["ts"]))
+                    run.participants.setdefault(
+                        entry.login.casefold(),
+                        Participant(entry=entry, joined_at=e["ts"], hidden=bool(e.get("hidden"))),
+                    )
+                elif kind == "visibility":
+                    participant = run.participants.get(e["login"].casefold())
+                    if participant is not None:
+                        participant.hidden = bool(e.get("hidden"))
                 elif kind == "question":
                     run.state, run.question_index = QUESTION, e["question"]
                     run.asked = e["question"] + 1
@@ -975,6 +1084,8 @@ class QuizRunManager:
                     participant = run.participants.get(e["login"].casefold())
                     if participant is not None:
                         participant.answers[e["question"]] = e["option"]
+                        started = run.deadline - run.quiz.settings.seconds_per_question
+                        participant.answer_seconds[e["question"]] = max(0.0, e["received"] - started)
                         if e.get("correct"):
                             participant.correct.add(e["question"])
                 elif kind == "finish":

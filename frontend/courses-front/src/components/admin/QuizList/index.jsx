@@ -88,6 +88,7 @@ export const QuizList = () => {
   const [editForm, setEditForm] = useState(EMPTY_FORM);
   const [editErrors, setEditErrors] = useState([]);
   const [inRoom, setInRoom] = useState(false);
+  const [leaderboard, setLeaderboard] = useState(true);
   const [snackbar, setSnackbar] = useState(null);
 
   const load = useCallback(() => {
@@ -161,7 +162,7 @@ export const QuizList = () => {
       const data = await api(`${base}/${encodeURIComponent(quizId)}/runs`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ in_room: inRoom }),
+        body: JSON.stringify({ in_room: inRoom, leaderboard }),
       });
       navigate(`/admin/quiz-runs/${data.run_id}`);
     } catch (err) {
@@ -307,6 +308,7 @@ export const QuizList = () => {
                         <>
                           <Button size="small" variant="contained" onClick={() => {
                               setInRoom(false);
+                              setLeaderboard(true);
                               setToRun(quiz);
                             }}>
                             {t("quizAdmin.run")}
@@ -417,6 +419,12 @@ export const QuizList = () => {
           <div style={{ color: "#666", fontSize: 14, maxWidth: 480 }}>
             {toRun && toRun.variants_per_student ? t("quizAdmin.inRoomNoVariants") : t("quizAdmin.inRoomHint")}
           </div>
+          <FormControlLabel
+            style={{ marginTop: 12 }}
+            control={<Checkbox checked={leaderboard} onChange={(e) => setLeaderboard(e.target.checked)} />}
+            label={t("quizAdmin.leaderboardOn")}
+          />
+          <div style={{ color: "#666", fontSize: 14, maxWidth: 480 }}>{t("quizAdmin.leaderboardHint")}</div>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setToRun(null)}>{t("cancel")}</Button>

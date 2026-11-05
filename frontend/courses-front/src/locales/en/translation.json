@@ -322,7 +322,9 @@
       "JOIN_CLOSED": "Joining is closed: the quiz is under way"
     },
     "questionOnScreen": "The question is on the screen in the room",
-    "nextIn": "Next question in {{seconds}} s"
+    "nextIn": "Next question in {{seconds}} s",
+    "place": "You are #{{place}} of {{of}}",
+    "hideMe": "Don't show my login on the screen leaderboard"
   },
   "quizAdmin": {
     "title": "Quizzes",
@@ -377,7 +379,13 @@
       "endQuestion": "End question",
       "hold": "Pause",
       "nextIn": "next question in {{seconds}} s",
-      "resultsIn": "results in {{seconds}} s"
+      "resultsIn": "results in {{seconds}} s",
+      "hiddenName": "hidden participant",
+      "andMore": "and {{count}} more",
+      "top": "Leaderboard",
+      "finalTop": "Final leaderboard",
+      "fastest": "Fastest correct answer: {{name}} - {{seconds}} s",
+      "seconds": "{{seconds}} s"
     },
     "variantsPerStudentMark": "test: up to {{count}} variants per question",
     "variantsPerStudentNoVariants": "test, but every question has one variant - all the same",
@@ -388,6 +396,8 @@
     "edit": "Edit",
     "editTitle": "Quiz «{{id}}» settings",
     "editHint": "Questions stay the same. A run already open keeps its old settings.",
-    "saved": "Quiz settings saved"
+    "saved": "Quiz settings saved",
+    "leaderboardOn": "Show leaderboard",
+    "leaderboardHint": "Top 5 after each question, top 10 at the end - by points, ties by the speed of correct answers. GitHub logins on screen; a student can hide theirs. Everyone sees their place on the phone."
   }
 }

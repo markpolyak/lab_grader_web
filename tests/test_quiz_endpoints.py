@@ -1312,3 +1312,117 @@ class TestEditQuiz:
         as_teacher(client)
         response = client.put("/admin/courses/ml/quizzes/x", json=self.form("v"))
         assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Leaderboard: points first, then less time on correct answers; logins only
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.anyio
+class TestLeaderboard:
+    @pytest.fixture
+    async def run(self, manager, recorder):
+        recorder.roster = roster_of("alice", "bob", "carol", "dave", read_at=0)
+        run = await manager.open("os", {"name": "ОС"}, "k5", make_quiz())
+        for login in ("alice", "bob", "carol", "dave"):
+            await manager.join(run, login)
+        return run
+
+    async def answer_at(self, manager, run, clock, login, q, correct, after):
+        start = run.deadline - run.quiz.settings.seconds_per_question
+        clock.now = start + after
+        option = run.variant(q, login).correct if correct else (run.variant(q, login).correct + 1) % 4
+        await manager.answer(run, login, q, option)
+
+    async def test_points_first_then_speed(self, manager, run, clock):
+        await manager.start(run)
+        await self.answer_at(manager, run, clock, "alice", 0, True, 8)
+        await self.answer_at(manager, run, clock, "bob", 0, True, 3)      # faster than alice
+        await self.answer_at(manager, run, clock, "carol", 0, False, 1)   # fastest but wrong
+        await manager.reveal_if_due(run, 0, force=True)
+        board = run.projector_snapshot(clock.now)["leaderboard"]
+        # carol and dave have no points - not on the board (their places on the phone stay)
+        assert [(r["place"], r["name"]) for r in board] == [(1, "bob"), (2, "alice")]
+        assert board[0]["points"] == "1" and board[0]["seconds"] == 3.0
+        assert run.projector_snapshot(clock.now)["fastest"] == {"name": "bob", "seconds": 3.0}
+
+        await manager.next(run)
+        await self.answer_at(manager, run, clock, "alice", 1, True, 2)
+        await manager.finish(run)
+        final = run.projector_snapshot(clock.now)["leaderboard"]
+        # alice: 2 correct beats bob's 1 correct however fast he was
+        assert [r["name"] for r in final[:2]] == ["alice", "bob"]
+        assert final[0]["points"] == "2" and final[0]["seconds"] == 10.0
+
+    async def test_places_on_phones(self, manager, run, clock):
+        await manager.start(run)
+        await self.answer_at(manager, run, clock, "bob", 0, True, 3)
+        snap = run.student_snapshot("bob", clock.now)
+        assert "place" not in snap                     # not during the question
+        await manager.reveal_if_due(run, 0, force=True)
+        assert (run.student_snapshot("bob", clock.now)["place"], run.student_snapshot("bob", clock.now)["of"]) == (1, 4)
+        assert run.student_snapshot("dave", clock.now)["place"] == 2
+
+    async def test_hidden_keeps_place_without_login(self, manager, run, clock):
+        await manager.set_hidden(run, "bob", True)
+        await manager.start(run)
+        await self.answer_at(manager, run, clock, "bob", 0, True, 3)
+        await manager.reveal_if_due(run, 0, force=True)
+        snap = run.projector_snapshot(clock.now)
+        assert snap["leaderboard"][0] == {"place": 1, "name": None, "points": "1", "seconds": 3.0}
+        assert snap["fastest"]["name"] is None
+        assert "bob" not in json.dumps(snap)
+        assert run.student_snapshot("bob", clock.now)["hidden"] is True
+
+    async def test_never_names_from_the_sheet(self, manager, run, clock):
+        await manager.start(run)
+        await self.answer_at(manager, run, clock, "alice", 0, True, 3)
+        await manager.reveal_if_due(run, 0, force=True)
+        assert "Студент" not in json.dumps(run.projector_snapshot(clock.now), ensure_ascii=False)
+
+    async def test_lobby_names_newest_first(self, manager, run):
+        assert run.projector_snapshot(0)["joined_names"][:2] == ["dave", "carol"]
+
+    async def test_leaderboard_off(self, manager, recorder, clock):
+        run = await manager.open("ml", {}, "k5", make_quiz(), leaderboard=False)
+        await manager.join(run, "alice")
+        await manager.start(run)
+        await manager.reveal_if_due(run, 0, force=True)
+        assert "leaderboard" not in run.projector_snapshot(clock.now)
+        assert "place" not in run.student_snapshot("alice", clock.now)
+
+    async def test_hidden_on_join_and_recovery(self, manager, recorder, clock, tmp_path):
+        recorder.roster = roster_of("alice", "eve", read_at=0)
+        run = await manager.open("ml", {}, "k5", make_quiz())
+        await manager.join(run, "eve", hidden=True)
+        await manager.join(run, "alice")
+        await manager.start(run)
+        clock.now += 4
+        await manager.answer(run, "alice", 0, run.variant(0).correct)
+        new = QuizRunManager(recorder.read, recorder.write, log_dir=str(tmp_path / "logs"), clock=clock)
+        recovered = {r.course_id: r for r in await new.recover(lambda c: {})}["ml"]
+        assert recovered.participants["eve"].hidden is True
+        assert recovered.participants["alice"].answer_seconds[0] == pytest.approx(4.0)
+        assert recovered.leaderboard is True
+
+
+class TestLeaderboardHttp:
+    def test_join_hidden_and_toggle(self, client):
+        as_teacher(client)
+        upload(client)
+        info = client.post("/admin/courses/os/quizzes/lecture-5/runs", json={"leaderboard": True}).json()
+        run = main_module.QUIZ_RUNS.get(info["run_id"])
+        client.cookies.clear()
+        as_student(client, "alice")
+        assert client.post(f"/quiz/{run.code}/join", json={"hidden": True}).status_code == 200
+        assert run.participants["alice"].hidden is True
+        assert client.post(f"/quiz/{run.code}/visibility", json={"hidden": False}).json() == {"hidden": False}
+        assert run.participants["alice"].hidden is False
+        assert client.post(f"/quiz/{run.code}/join").status_code == 200         # no body is fine too
+
+    def test_open_without_leaderboard(self, client):
+        as_teacher(client)
+        upload(client)
+        info = client.post("/admin/courses/os/quizzes/lecture-5/runs", json={"leaderboard": False}).json()
+        assert main_module.QUIZ_RUNS.get(info["run_id"]).leaderboard is False

@@ -3286,6 +3286,8 @@ class OpenRunRequest(BaseModel):
     # "In the room only": question on the projector only, a changing QR code,
     # joining until the first question ends.
     in_room: bool = False
+    # Leaderboard after each question and at the end, places on the phones
+    leaderboard: bool = True
 
 
 def _run_link(request: Request, run) -> str:
@@ -3313,7 +3315,10 @@ async def admin_open_quiz_run(
         return _quiz_format_error(e)
     course_info = await asyncio.to_thread(get_course_by_id, course_id)
     try:
-        run = await QUIZ_RUNS.open(course_id, course_info, quiz_id, quiz, in_room=bool(body and body.in_room))
+        run = await QUIZ_RUNS.open(
+            course_id, course_info, quiz_id, quiz,
+            in_room=bool(body and body.in_room), leaderboard=body.leaderboard if body else True,
+        )
     except QuizRunError as e:
         return _quiz_error(e)
     except Exception:
@@ -3456,15 +3461,22 @@ async def quiz_info(request: Request, code: str, t: str = ""):
     return response
 
 
+class QuizJoinRequest(BaseModel):
+    # "Не показывать меня в рейтинге" - remembered on the phone, sent on joining
+    hidden: bool = False
+
+
 @app.post("/quiz/{code}/join")
 @limiter.limit("30/minute", key_func=student_rate_key)
-async def quiz_join(request: Request, code: str):
+async def quiz_join(request: Request, code: str, body: QuizJoinRequest | None = None):
     run = _student_run(code)
     login = student_login(request)
     if login is None:
         raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
     try:
-        participant = await QUIZ_RUNS.join(run, login, entry_ok=_has_quiz_pass(request, run.run_id))
+        participant = await QUIZ_RUNS.join(
+            run, login, entry_ok=_has_quiz_pass(request, run.run_id), hidden=bool(body and body.hidden)
+        )
     except QuizRunError as e:
         return _quiz_error(e)
     return {"joined": True, "group": participant.entry.group, "name": participant.entry.name}
@@ -3475,6 +3487,21 @@ async def quiz_events(request: Request, code: str):
     run = _student_run(code)
     login = student_login(request)
     return _sse_response(run, lambda now: run.student_snapshot(login, now))
+
+
+@app.post("/quiz/{code}/visibility")
+@limiter.limit("30/minute", key_func=student_rate_key)
+async def quiz_visibility(request: Request, code: str, body: QuizJoinRequest):
+    """Show or hide the student's login on the projector's leaderboard."""
+    run = _student_run(code)
+    login = student_login(request)
+    if login is None:
+        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
+    try:
+        await QUIZ_RUNS.set_hidden(run, login, body.hidden)
+    except QuizRunError as e:
+        return _quiz_error(e)
+    return {"hidden": body.hidden}
 
 
 class QuizAnswer(BaseModel):

@@ -36,6 +36,14 @@ export const QuizStudent = () => {
   const [notInCourse, setNotInCourse] = useState(false);
   const [offline, setOffline] = useState(false);
   const [pending, setPending] = useState(false);
+  // "Не показывать меня в рейтинге": remembered on this phone for later quizzes
+  const [hidden, setHidden] = useState(() => {
+    try {
+      return window.localStorage.getItem("quizHidden") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [localAnswer, setLocalAnswer] = useState(null); // {question, option}
   const [remaining, setRemaining] = useState(0);
   const deadlineRef = useRef(null);
@@ -71,6 +79,8 @@ export const QuizStudent = () => {
       const response = await fetch(`${API}/${encodeURIComponent(code)}/join`, {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hidden }),
       });
       if (cancelled) return;
       if (response.ok) {
@@ -84,6 +94,8 @@ export const QuizStudent = () => {
     return () => {
       cancelled = true;
     };
+    // Joins once; a later change of `hidden` goes through /visibility instead.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [code, load]);
 
   // 3. Live state over SSE once joined; EventSource reconnects by itself.
@@ -114,6 +126,21 @@ export const QuizStudent = () => {
     }, 200);
     return () => clearInterval(timer);
   }, []);
+
+  const toggleHidden = async (value) => {
+    setHidden(value);
+    try {
+      window.localStorage.setItem("quizHidden", value ? "1" : "0");
+    } catch {
+      // private mode - the choice still applies to this quiz
+    }
+    await fetch(`${API}/${encodeURIComponent(code)}/visibility`, {
+      method: "POST",
+      credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hidden: value }),
+    }).catch(() => {});
+  };
 
   const answer = async (option) => {
     if (!snapshot || pending) return;
@@ -258,6 +285,7 @@ export const QuizStudent = () => {
                     : t("quiz.wrong")}
               </Status>
             )}
+            {s.state === "reveal" && s.place && <Hint>{t("quiz.place", { place: s.place, of: s.of })}</Hint>}
             {s.state === "reveal" && s.next_in_ms !== null && s.next_in_ms !== undefined && s.question + 1 < s.total && (
               <Hint>{t("quiz.nextIn", { seconds: Math.ceil(remaining / 1000) })}</Hint>
             )}
@@ -270,9 +298,16 @@ export const QuizStudent = () => {
             {s.score !== undefined && (
               <Title>{t("quiz.score", { score: s.score, max: s.max_points })}</Title>
             )}
+            {s.place && <Status>{t("quiz.place", { place: s.place, of: s.of })}</Status>}
           </>
         )}
         {s.state === "cancelled" && <Status>{t("quiz.cancelled")}</Status>}
+        {s.state !== "finished" && s.state !== "cancelled" && (
+          <label style={{ fontSize: 13, color: "#777", display: "flex", gap: 6, justifyContent: "center", marginTop: 8 }}>
+            <input type="checkbox" checked={hidden} onChange={(e) => toggleHidden(e.target.checked)} />
+            {t("quiz.hideMe")}
+          </label>
+        )}
       </Card>
     </Page>
   );
