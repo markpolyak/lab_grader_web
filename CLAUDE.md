@@ -8,6 +8,7 @@ for local setup (own Google Sheet, service account, GitHub org, OAuth App).
 - **Backend**: `main.py` (FastAPI app, all HTTP endpoints, ~2500 LOC) + `grading/` (grading,
   Sheets/GitHub clients, repo provisioning, teams, bulk jobs)
 - **Frontend**: `frontend/courses-front/` (React 19 + Vite)
+- **Defense queue**: `queue/` (domain models, use-case scaffolding, WebSocket transport)
 - **Courses**: `courses/index.yaml` + individual YAML files (see `docs/COURSE_CONFIG.md` for all options)
 - **Tests**: `tests/` (pytest)
 
@@ -52,7 +53,16 @@ FORWARDED_ALLOW_IPS=
 
 ## Key Conventions
 
-- All HTTP endpoints live in `main.py`; reusable logic goes to `grading/` (see Common Tasks)
+- All HTTP endpoints live in `main.py`; reusable grading logic goes to `grading/`,
+  defense queue logic to `queue/` (see Common Tasks)
+- Queue models live in `queue/domain/`, use cases in `queue/usecase/`,
+  and transport handlers in `queue/handler/`. Domain models must not depend
+  on FastAPI, cookies, Google Sheets, or WebSocket delivery.
+- Python modules and methods use `snake_case`; classes use `PascalCase`.
+- The `queue` package preserves Python's standard queue API in `queue/__init__.py`
+  for dependencies. Import the defense queue from `queue.domain.queue`, not `queue.Queue`.
+  If Uvicorn has already imported the standard module, `main.py` adds the local
+  submodule search path while preserving that module's standard API.
 - Course operations use `course_id` from `index.yaml`, not filename
 - Error messages and UI text are in Russian
 - Frontend components: `componentName/index.jsx` + `styled.js`
@@ -66,6 +76,7 @@ FORWARDED_ALLOW_IPS=
 | Add API endpoint | `main.py` |
 | Change grading logic | `grading/bulk.py` (`evaluate_student`, shared by single and bulk grading) |
 | Team lab operations | `grading/teams.py` (`TeamRegistry`) |
+| Defense queue models and use cases | `queue/domain/`, `queue/usecase/` |
 | Add React component | `frontend/courses-front/src/components/` |
 | Add/edit course | `courses/` directory + `index.yaml` |
 | Secret link / availability window | `grading/join_links.py` |

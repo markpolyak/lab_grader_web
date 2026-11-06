@@ -78,7 +78,14 @@ from grading.course_index import (
     load_course_index as _load_course_index,
 )
 import tempfile
-from event_queue.handler.websocket import router as websocket_router
+# Uvicorn может загрузить стандартный queue до добавления каталога приложения
+# в sys.path. Сохраняем его API и разрешаем импорт наших подмодулей.
+import queue as _queue_module
+
+if not hasattr(_queue_module, "__path__"):
+    _queue_module.__path__ = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "queue")]
+
+from queue.handler.websocket import router as websocket_router
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
