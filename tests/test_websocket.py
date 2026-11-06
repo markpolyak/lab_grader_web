@@ -8,7 +8,7 @@ import uvicorn
 from websockets.asyncio.client import connect
 
 from main import app
-from event_queue.usecase.websocket import websocketService
+from event_queue.event.websocket import websocketService
 
 
 def test_websocket_exchange():
