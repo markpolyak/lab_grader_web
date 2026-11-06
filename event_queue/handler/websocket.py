@@ -4,7 +4,7 @@ import uuid
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from ..usecase.websocket import websocketService
+from ..event.websocket import websocketService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
