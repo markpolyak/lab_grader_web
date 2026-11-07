@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from .queue_entry import QueueEntry
 from .student import Student
 
@@ -8,8 +10,19 @@ class Queue:
         self.entries: list[QueueEntry] = []
 
     def add_entry(
-        self, student: Student, lab_id: str, lab_name: str | None = None
+        self,
+        student: Student,
+        lab_id: str,
+        lab_name: str | None = None,
+        *,
+        active_entry_ids: set[UUID] | None = None,
     ) -> QueueEntry:
+        """Добавить запись в очередь.
+
+        ``active_entry_ids`` ограничивает проверку дубликата активными
+        записями: завершённые и вышедшие не мешают записаться снова.
+        По умолчанию (None) проверяются все записи — прежнее поведение.
+        """
         if self.closed:
             raise ValueError("Очередь закрыта для записи")
         if not lab_id.strip():
@@ -17,7 +30,12 @@ class Queue:
         github = student.github.strip().casefold()
         if not github:
             raise ValueError("Укажите GitHub-логин студента")
-        if any(entry.student.github.strip().casefold() == github for entry in self.entries):
+        checked = (
+            self.entries
+            if active_entry_ids is None
+            else [entry for entry in self.entries if entry.id in active_entry_ids]
+        )
+        if any(entry.student.github.strip().casefold() == github for entry in checked):
             raise ValueError("Студент уже стоит в очереди")
 
         entry = QueueEntry(student=student, lab_id=lab_id.strip(), lab_name=lab_name)

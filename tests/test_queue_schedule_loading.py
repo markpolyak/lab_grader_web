@@ -18,6 +18,7 @@ def test_lifespan_loads_seed_and_reloads_after_parser_job(tmp_path, monkeypatch)
     target = directory / "teacher.yaml"
     target.write_text(yaml.safe_dump(document))
     monkeypatch.setenv("SCHEDULE_DIR", str(tmp_path))
+    monkeypatch.setenv("QUEUE_STATE_DIR", str(tmp_path / "queue_state"))
     monkeypatch.setenv("QUEUE_WEEK_START", "2026-11-09")
     monkeypatch.setattr(main, "iter_course_configs", lambda: iter([
         ("os", {"name": "Операционные системы", "university": "ГУАП"}),
@@ -60,6 +61,7 @@ def test_independent_sync_rolls_week_and_retries_bad_yaml(tmp_path, monkeypatch)
     }}
     target.write_text(yaml.safe_dump(document))
     monkeypatch.setenv("SCHEDULE_DIR", str(tmp_path))
+    monkeypatch.setenv("QUEUE_STATE_DIR", str(tmp_path / "queue_state"))
     monkeypatch.delenv("QUEUE_WEEK_START", raising=False)
     clock = Mock(wraps=datetime)
     clock.now.return_value = datetime(2026, 11, 9, tzinfo=ZoneInfo("Europe/Moscow"))
@@ -105,6 +107,7 @@ def test_empty_parser_config_still_starts_local_scheduler(tmp_path, monkeypatch)
     index = tmp_path / "index.yaml"
     index.write_text("schedules: []")
     monkeypatch.setenv("SCHEDULE_DIR", str(tmp_path))
+    monkeypatch.setenv("QUEUE_STATE_DIR", str(tmp_path / "queue_state"))
     monkeypatch.setenv("SCHEDULE_CONFIG", str(index))
     monkeypatch.setattr(main, "iter_course_configs", lambda: iter([]))
     parser = ScheduleParser(tmp_path)

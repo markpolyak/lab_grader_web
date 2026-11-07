@@ -5,6 +5,43 @@ class QueueError(Exception):
     pass
 
 
+class QueueClosedError(QueueError):
+    def __init__(self) -> None:
+        super().__init__("Запись в очередь закрыта")
+
+
+class QueueEmptyError(QueueError):
+    def __init__(self) -> None:
+        super().__init__("В очереди нет ожидающих")
+
+
+class EntryNotFoundError(QueueError):
+    def __init__(self, entry_id: UUID | None = None) -> None:
+        self.entry_id = entry_id
+        super().__init__("Запись в очереди не найдена")
+
+
+class EntryNotOwnedError(QueueError):
+    def __init__(self) -> None:
+        super().__init__("Запись принадлежит другому студенту")
+
+
+class InvalidStateError(QueueError):
+    def __init__(self, message: str = "Недопустимое состояние записи") -> None:
+        super().__init__(message)
+
+
+class AlreadyQueuedError(QueueError):
+    def __init__(self, entry_id: UUID | None = None) -> None:
+        self.entry_id = entry_id
+        super().__init__("Студент уже стоит в очереди")
+
+
+class GroupNotAllowedError(QueueError):
+    def __init__(self) -> None:
+        super().__init__("Группа студента не записана на это занятие")
+
+
 class QueueAlreadyExistsError(QueueError):
     def __init__(self, queue_id: UUID) -> None:
         self.queue_id = queue_id
