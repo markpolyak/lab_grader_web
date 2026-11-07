@@ -85,7 +85,7 @@ import queue as _queue_module
 if not hasattr(_queue_module, "__path__"):
     _queue_module.__path__ = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "queue")]
 
-from queue.handler.websocket import router as websocket_router
+from student_queue.handler.websocket import router as websocket_router
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
