@@ -144,21 +144,34 @@ async def lifespan(app: FastAPI):
             week_start=date.fromisoformat(week_start) if week_start else None,
         )
 
-    load_queue_schedules()
+    def sync_queue_schedules():
+        try:
+            load_queue_schedules()
+        except Exception:
+            logger.exception("Не удалось обновить занятия и очереди; прежнее состояние сохранено")
+
+    sync_queue_schedules()
     app.state.queue_service = queue_service
     parser = ScheduleParser(schedule_dir)
 
     def after_schedule_refresh(event):
         if event.job_id == "schedule-refresh":
-            try:
-                load_queue_schedules()
-            except Exception:
-                logger.exception("Не удалось обновить занятия и очереди; прежнее состояние сохранено")
+            sync_queue_schedules()
 
     parser.scheduler.add_listener(after_schedule_refresh, EVENT_JOB_EXECUTED)
+    # Local synchronization is independent of network parsing and user requests.
+    # Monday 00:00 Moscow is included, and failed reads retry the next minute.
+    parser.scheduler.add_job(
+        sync_queue_schedules, "cron", minute="*", timezone="Europe/Moscow",
+        id="queue-schedule-sync", max_instances=1, coalesce=True,
+        misfire_grace_time=60,
+    )
     configs = parser.load_configs(os.getenv("SCHEDULE_CONFIG", "schedule/index.yaml"))
-    parser.start(configs)
     try:
+        parser.start(configs)
+        if not parser.scheduler.running:
+            # Even an empty parsing configuration must advance local weeks.
+            parser.scheduler.start()
         yield
     finally:
         await asyncio.to_thread(parser.shutdown)
