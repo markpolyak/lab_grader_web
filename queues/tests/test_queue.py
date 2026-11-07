@@ -2,8 +2,8 @@ import unittest
 from datetime import datetime, timezone
 from uuid import UUID
 
-from student_queue.domain.queue import Queue
-from student_queue.domain.student import Student
+from queues.domain.queue import Queue
+from queues.domain.student import Student
 
 
 class QueueTests(unittest.TestCase):

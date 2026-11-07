@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException, Depends
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
 import json
+import uuid
 import base64
 import logging
 import threading
@@ -78,14 +79,7 @@ from grading.course_index import (
     load_course_index as _load_course_index,
 )
 import tempfile
-# Uvicorn может загрузить стандартный queue до добавления каталога приложения
-# в sys.path. Сохраняем его API и разрешаем импорт наших подмодулей.
-import queue as _queue_module
-
-if not hasattr(_queue_module, "__path__"):
-    _queue_module.__path__ = [os.path.join(os.path.dirname(os.path.abspath(__file__)), "queue")]
-
-from student_queue.handler.websocket import router as websocket_router
+from queues.event.websocket import websocketService
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -131,7 +125,6 @@ logger.info(f"Logging initialized. Log file: {log_file}")
 
 load_dotenv()
 app = FastAPI()
-app.include_router(websocket_router)
 COURSES_DIR = "courses"
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 
@@ -2480,3 +2473,62 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
         "course_id": course_id,
         "filename": file.filename
     }
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket) -> None:
+    connection_id = await websocketService.connect(ws)
+    try:
+        await _read_ws(ws, connection_id)
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected: connection_id=%s", connection_id)
+    finally:
+        websocketService.disconnect(connection_id)
+
+
+async def _read_ws(ws: WebSocket, connection_id: uuid.UUID) -> None:
+    while True:
+        message = await ws.receive()
+        if message["type"] == "websocket.disconnect":
+            raise WebSocketDisconnect(
+                code=message.get("code", 1000),
+                reason=message.get("reason", ""),
+            )
+
+        text = message.get("text")
+        if text is None:
+            await ws.send_json({"type": "error", "message": "Expected text JSON object"})
+            continue
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            await ws.send_json({"type": "error", "message": "Invalid JSON"})
+            continue
+
+        if not isinstance(data, dict):
+            await ws.send_json({"type": "error", "message": "Expected an object"})
+            continue
+
+        action = data.get("action")
+        if action in ("subscribe", "unsubscribe"):
+            event_id = await _get_event_ws(ws, data)
+            if event_id is None:
+                continue
+            if action == "subscribe":
+                websocketService.subscribe(connection_id, event_id)
+            else:
+                websocketService.unsubscribe(connection_id, event_id)
+        elif action == "ping":
+            await ws.send_json({"type": "pong"})
+        else:
+            logger.warning("Unknown WS action: %s from conn=%s", action, connection_id)
+            await ws.send_json({"type": "error", "message": "Unknown action"})
+
+
+async def _get_event_ws(ws: WebSocket, data: dict) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(data.get("event_id")))
+    except ValueError:
+        await ws.send_json({"type": "error", "message": "Invalid event UUID"})
+        return None

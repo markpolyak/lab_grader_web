@@ -132,11 +132,10 @@ lab_grader_web/
 │   ├── teams.py                 # Командные лабораторные
 │   ├── join_links.py            # Секретные ссылки и окна доступности
 │   └── course_index.py          # Чтение courses/index.yaml
-├── queue/                 # Очередь на защиту (начальный каркас)
+├── queues/                      # Очередь на защиту (начальный каркас)
 │   ├── domain/                  # Student, QueueEntry, Queue, Lesson, Schedule
 │   ├── usecase/                 # Заготовка QueueService
-│   ├── event/                   # WebSocketService: подписки и рассылка
-│   └── handler/                 # WebSocket-эндпоинт /ws
+│   └── event/                   # WebSocketService: подписки и рассылка; эндпоинт /ws в main.py
 ├── courses/                     # Конфигурации курсов (index.yaml + YAML курсов, logos/)
 ├── tests/                       # pytest
 ├── scripts/                     # join-link.py, switch-branch.sh
