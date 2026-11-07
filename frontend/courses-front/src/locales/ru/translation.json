@@ -1,4 +1,13 @@
 {
+  "courseActions": {
+    "selectCourse": "Выбор курса",
+    "selectAction": "Выберите действие",
+    "forTeachers": "Для преподавателей",
+    "back": "← Назад к курсам",
+    "grading": "Проверка лабораторной работы",
+    "queue": "Запись в очередь",
+    "comingSoon": "Скоро"
+  },
   "course": "Курс",
   "semester": "Семестр",
   "email": "Email",
