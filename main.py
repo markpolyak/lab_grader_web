@@ -2716,3 +2716,97 @@ def schedule_refresh_all(
     )
     status_code = 200 if not result["errors"] and not warnings else 207
     return JSONResponse(status_code=status_code, content=result)
+
+
+class EditScheduleRequest(BaseModel):
+    content: str
+
+
+@app.get("/admin/courses/{course_id}/schedule/edit")
+@limiter.limit("30/minute")
+def edit_schedule_get(request: Request, course_id: str, admin: str = Depends(require_admin)):
+    """Get YAML content of the schedule file for editing."""
+    try:
+        file_path = schedule_path_for_course(course_id, SCHEDULES_DIR)
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
+
+    if not file_path.exists():
+        default_content = f"course-id: {course_id}\nsource: guap\ntimezone: UTC+3\nauto_open_minutes_before: 15\nauto_close_minutes_after: 10\ngroups: {{}}\nmanual-groups: []\n"
+        return {"filename": file_path.name, "content": default_content}
+
+    try:
+        with open(file_path, "r", encoding="utf-8") as file:
+            content = file.read()
+    except OSError as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось прочитать файл расписания: {e}")
+
+    return {"filename": file_path.name, "content": content}
+
+
+def _validate_schedule_yaml(new_data: dict, course_id: str, old_data: dict | None) -> None:
+    """Validate schedule YAML before saving."""
+    if not isinstance(new_data, dict):
+        raise HTTPException(status_code=400, detail="Верхний уровень файла расписания должен быть YAML-объектом")
+
+    file_course_id = new_data.get("course-id")
+    if file_course_id is None or not str(file_course_id).strip():
+        raise HTTPException(status_code=400, detail="Обязательное поле `course-id` отсутствует")
+    if str(file_course_id) != str(course_id):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Поле `course-id` должно быть {course_id!r}, получено {file_course_id!r}",
+        )
+
+    groups = new_data.get("groups")
+    if groups is not None and not isinstance(groups, dict):
+        raise HTTPException(status_code=400, detail="Поле `groups` должно быть объектом")
+
+    if isinstance(groups, dict):
+        for configured_id, group_config in groups.items():
+            if not str(configured_id).isdigit():
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Идентификатор группы {configured_id!r} должен содержать только цифры",
+                )
+            if not isinstance(group_config, dict):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Группа {configured_id!r} должна быть объектом",
+                )
+            if str(group_config.get("group_id", "")).strip() != str(configured_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Группа {configured_id!r} требует совпадающий `group_id`",
+                )
+
+    manual_groups = new_data.get("manual-groups")
+    if manual_groups is not None and not isinstance(manual_groups, list):
+        raise HTTPException(status_code=400, detail="Поле `manual-groups` должно быть списком")
+
+
+@app.put("/admin/courses/{course_id}/schedule/edit")
+@limiter.limit("20/minute")
+def edit_schedule_put(
+    request: Request, course_id: str, data: EditScheduleRequest, admin: str = Depends(require_admin)
+):
+    """Save changes to the schedule YAML file."""
+    file_path = schedule_path_for_course(course_id, SCHEDULES_DIR)
+
+    try:
+        new_data = yaml.safe_load(data.content)
+    except yaml.YAMLError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка в YAML формате: {str(e)}")
+
+    old_data = None
+    if file_path.exists():
+        try:
+            with open(file_path, "r", encoding="utf-8") as file:
+                old_data = yaml.safe_load(file.read())
+        except (OSError, yaml.YAMLError):
+            old_data = None
+
+    _validate_schedule_yaml(new_data, course_id, old_data)
+    _write_file_atomically(file_path, data.content)
+
+    return {"message": "Изменения успешно сохранены"}

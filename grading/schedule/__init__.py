@@ -278,6 +278,12 @@ def refresh_all_groups(
         if configured_group_id is None or str(configured_group_id).strip() != group_id:
             errors[group_id] = f"group {group_id!r} requires matching `group_id`"
             continue
+        
+        # Skip refresh for manual groups - they manage slots themselves
+        if group_config.get("source") == "manual":
+            refreshed[group_id] = 0
+            continue
+        
         try:
             source = GuapScheduleSource(
                 group_code=guap_group_id,
