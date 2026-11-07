@@ -229,21 +229,15 @@ def refresh_all_groups(
     """Refresh numeric groups into `schedules/<course_id>.yaml`, creating it if needed."""
     from .guap import GuapScheduleSource
 
-    from io import StringIO
     import os
     import tempfile
-    from ruamel.yaml import YAML
-    from ruamel.yaml.comments import CommentedMap
-    from ruamel.yaml.scalarstring import DoubleQuotedScalarString
-    from ruamel.yaml.scalarstring import SingleQuotedScalarString
 
     config_path = Path(schedule_file_path)
-    roundtrip_yaml = YAML()
     if config_path.exists():
         try:
             with config_path.open("r", encoding="utf-8") as f:
-                config_data = roundtrip_yaml.load(f)
-        except Exception as e:
+                config_data = yaml.safe_load(f)
+        except (OSError, yaml.YAMLError) as e:
             raise ScheduleConfigError(f"Failed to read schedule file {config_path}: {e}")
         if not isinstance(config_data, dict):
             raise ScheduleConfigError(f"Schedule file {config_path}: top-level must be a mapping")
@@ -252,8 +246,7 @@ def refresh_all_groups(
                 f"Schedule file {config_path}: required `course-id` must match {course_id!r}"
             )
     else:
-        config_data = CommentedMap()
-        config_data["course-id"] = course_id
+        config_data = {"course-id": course_id}
 
     config_data.setdefault("source", "guap")
     config_data.setdefault("timezone", "UTC+3")
@@ -266,24 +259,6 @@ def refresh_all_groups(
     if not isinstance(manual_groups, list):
         raise ScheduleConfigError("`manual-groups` must be a list in the schedule file")
 
-    def quote_slot_times(group_config: dict) -> None:
-        for slot in group_config.get("slots", []):
-            if isinstance(slot, dict):
-                for key in ("start", "end"):
-                    if key in slot:
-                        slot[key] = DoubleQuotedScalarString(str(slot[key]))
-        for correction in group_config.get("corrections", []):
-            if isinstance(correction, dict):
-                for slot in correction.get("add_slots", []):
-                    if isinstance(slot, dict):
-                        for key in ("start", "end"):
-                            if key in slot:
-                                slot[key] = DoubleQuotedScalarString(str(slot[key]))
-
-    for existing_group in schedule_groups.values():
-        if isinstance(existing_group, dict):
-            quote_slot_times(existing_group)
-
     refreshed: dict[str, int] = {}
     errors: dict[str, str] = {}
     for group in groups:
@@ -294,9 +269,7 @@ def refresh_all_groups(
             continue
         group_config = schedule_groups.get(group_id)
         if group_config is None:
-            group_config = CommentedMap()
-            group_config["group_id"] = SingleQuotedScalarString(group_id)
-            group_config["slots"] = []
+            group_config = {"group_id": group_id, "slots": []}
             schedule_groups[group_id] = group_config
         if not isinstance(group_config, dict):
             errors[group_id] = f"group {group_id!r} must be a mapping"
@@ -316,15 +289,17 @@ def refresh_all_groups(
 
             group_config["slots"] = slots
             group_config["guap_group_id"] = guap_group_id
-            quote_slot_times(group_config)
             schedule_groups[group_id] = group_config
             refreshed[group_id] = len(slots)
         except Exception as e:
             errors[group_id] = f"{type(e).__name__}: {e}"
 
-    stream = StringIO()
-    roundtrip_yaml.dump(config_data, stream)
-    new_yaml = stream.getvalue()
+    new_yaml = yaml.safe_dump(
+        config_data,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
     directory = os.path.dirname(os.path.abspath(config_path))
     os.makedirs(directory, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(

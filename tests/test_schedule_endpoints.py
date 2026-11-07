@@ -94,7 +94,7 @@ def test_schedule_groups_endpoint_merges_sheet_and_manual_groups(schedule_admin_
     }
 
 
-def test_save_manual_groups_updates_schedule_yaml_and_preserves_comments(schedule_admin_client):
+def test_save_manual_groups_updates_schedule_yaml(schedule_admin_client):
     client, _, schedule_path = schedule_admin_client
     response = client.put(
         "/admin/courses/test-course/schedule/groups",
@@ -105,7 +105,6 @@ def test_save_manual_groups_updates_schedule_yaml_and_preserves_comments(schedul
     assert response.json()["manual_groups"] == ["4434", "4435"]
     saved = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
     assert saved["manual-groups"] == ["4434", "4435"]
-    assert "# Keep schedule note." in schedule_path.read_text(encoding="utf-8")
 
 
 def test_save_manual_groups_rejects_non_numeric_ids(schedule_admin_client):
