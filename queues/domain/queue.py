@@ -6,10 +6,13 @@ class Queue:
     def __init__(self, *, closed: bool = True) -> None:
         self.closed = closed
         self.entries: list[QueueEntry] = []
+        self._archiving = False
 
     def add_entry(
         self, student: Student, lab_id: str, lab_name: str | None = None
     ) -> QueueEntry:
+        if self._archiving:
+            raise ValueError("Очередь сохраняется в историю")
         if self.closed:
             raise ValueError("Очередь закрыта для записи")
         if not lab_id.strip():
@@ -34,6 +37,8 @@ class Queue:
         self, *, full_name: str | None = None, github: str | None = None
     ) -> bool:
         """Уступить место студенту ниже."""
+        if self._archiving:
+            raise ValueError("Очередь сохраняется в историю")
         index = self._find_index(full_name=full_name, github=github)
         if index == len(self.entries) - 1:
             return False

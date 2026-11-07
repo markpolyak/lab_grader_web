@@ -1,4 +1,6 @@
 from copy import deepcopy
+import asyncio
+from unittest.mock import AsyncMock
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -10,6 +12,7 @@ from queues.domain.queue import Queue
 from queues.domain.schedule import Schedule
 from queues.domain.student import Student
 from queues.usecase.queue_service import QueueService
+from queues.usecase.queue_history_service import QueueHistoryService
 
 
 MONDAY = date(2026, 11, 9)
@@ -196,3 +199,51 @@ def test_corrupt_yaml_preserves_loaded_queues(tmp_path):
     with pytest.raises(yaml.YAMLError):
         service.load_saved_week(courses(), tmp_path, week_start=MONDAY)
     assert service.schedules["os"] is original
+
+
+def test_archived_lesson_is_not_recreated_from_yaml(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 9, 17, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr("queues.usecase.queue_service.datetime", Clock)
+    service = QueueService()
+    history_service = QueueHistoryService(service, AsyncMock())
+    doc = document()
+    lesson = generate(service, doc)["os"].lessons[0]
+    asyncio.run(history_service.save_history(service.schedules["os"].id, lesson.id))
+    assert lesson.id not in service._lessons
+    assert service.schedules["os"].lessons == []
+    assert generate(service, doc)["os"].lessons == []
+    assert lesson.id not in service._lessons
+    asyncio.run(history_service.save_history(service.schedules["os"].id, lesson.id))
+    # Changing the room must not bring back the archived queue either.
+    doc["days"]["2026-11-09"][0]["room"] = "new room"
+    assert generate(service, doc)["os"].lessons == []
+
+
+def test_week_change_clears_markers_but_keeps_unarchived_queues():
+    service = QueueService()
+    history_service = QueueHistoryService(service, AsyncMock())
+    doc = document({"2026-11-09": [item(), item(groups=["4432"])],
+                    "2026-11-16": [item()]})
+    first, retained = generate(service, doc)["os"].lessons
+    old_schedule_id = service.schedules["os"].id
+    asyncio.run(history_service.save_history(old_schedule_id, first.id))
+    assert service._archived_lesson_ids == {first.id}
+    next_week = MONDAY + timedelta(days=7)
+    # An invalid new week must not clear existing protection.
+    broken = document({"2026-11-16": [item(**{"ends-at": "14:00"})]})
+    with pytest.raises(ValueError):
+        service.generate_week(courses(), [broken], week_start=next_week)
+    assert service._archived_lesson_ids == {first.id}
+    current = service.generate_week(courses(), [doc], week_start=next_week)["os"].lessons[0]
+    assert not service._archived_lesson_ids
+    assert service._lessons[retained.id] is retained
+    # Archiving an old queue does not accumulate old IDs in the new week's set.
+    asyncio.run(history_service.save_history(old_schedule_id, retained.id))
+    assert not service._archived_lesson_ids
+    asyncio.run(history_service.save_history(service.schedules["os"].id, current.id))
+    assert service._archived_lesson_ids == {current.id}
+    assert service.generate_week(courses(), [doc], week_start=next_week)["os"].lessons == []

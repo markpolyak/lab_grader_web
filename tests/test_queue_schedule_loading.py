@@ -3,11 +3,18 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
+from unittest.mock import AsyncMock
 
 import yaml
+import pytest
 
 import main
 from queues.parser.parser import ScheduleParser
+
+
+@pytest.fixture(autouse=True)
+def disable_real_history(monkeypatch):
+    monkeypatch.setenv("QUEUE_HISTORY_SPREADSHEET_ID", "")
 
 
 def test_lifespan_loads_seed_and_reloads_after_parser_job(tmp_path, monkeypatch):
@@ -117,5 +124,39 @@ def test_empty_parser_config_still_starts_local_scheduler(tmp_path, monkeypatch)
             assert parser.scheduler.get_job("queue-schedule-sync") is not None
             assert parser.scheduler.get_job("schedule-refresh") is None
         assert not parser.scheduler.running
+
+    asyncio.run(check())
+
+
+def test_history_jobs_are_wired_to_async_service(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    from queues.domain.lesson import Lesson
+    from queues.domain.schedule import Schedule
+
+    monkeypatch.setenv("QUEUE_HISTORY_SPREADSHEET_ID", "test-history")
+    monkeypatch.setenv("SCHEDULE_DIR", str(tmp_path))
+    monkeypatch.setattr(main, "iter_course_configs", lambda: iter([]))
+    parser, history = Mock(), AsyncMock()
+    monkeypatch.setattr(main, "ScheduleParser", Mock(return_value=parser))
+    monkeypatch.setattr(main, "GoogleRepo", Mock(return_value=history))
+
+    async def check():
+        app = SimpleNamespace(state=SimpleNamespace())
+        async with main.lifespan(app):
+            jobs = {call.kwargs["id"]: call for call in parser.scheduler.add_job.call_args_list}
+            daily = jobs["queue-history-daily"]
+            assert daily.kwargs["hour"] == 23 and daily.kwargs["minute"] == 59
+            assert jobs["queue-history-retry"].kwargs["kwargs"] == {"retry_only": True}
+            end = datetime.now(timezone.utc) - timedelta(days=1)
+            item = Lesson(starts_at=end - timedelta(hours=1), ends_at=end,
+                          groups=("4431",), kind="ЛР")
+            service = app.state.queue_service
+            service._lessons[item.id] = item
+            schedule = Schedule(course_id="os", course_name="ОС",
+                                week_start=end.date(), lessons=[item])
+            service._schedules[schedule.id] = schedule
+            await asyncio.to_thread(daily.args[0])
+            history.save.assert_awaited_once()
+            assert item.id not in service._lessons
 
     asyncio.run(check())
