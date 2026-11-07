@@ -1,4 +1,18 @@
 {
+  "queueLessons": {
+    "title": "Course lessons",
+    "back": "← Back to actions",
+    "week": "Week: {{dates}} · Moscow time",
+    "selectionUnavailable": "Choosing a lesson and joining its queue are not available yet.",
+    "loading": "Loading lessons…",
+    "empty": "There are no lessons this week.",
+    "notConfigured": "The lesson schedule is not available for this course yet.",
+    "loadFailed": "Could not load lessons. Please try again.",
+    "rateLimit": "Too many requests. Please wait a moment and try again.",
+    "retry": "Try again",
+    "groups": "Groups",
+    "room": "Room"
+  },
   "courseActions": {
     "selectCourse": "Choose a course",
     "selectAction": "Choose an action",
