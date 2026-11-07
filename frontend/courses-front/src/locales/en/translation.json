@@ -247,6 +247,9 @@
   },
   "schedule": {
     "title": "Schedule",
+    "groupSourcesDescription": "Only Google Sheets tabs with numeric group names are used for schedules. Add a numeric group ID manually if needed; the list is saved in the course config.",
+    "manualGroupInput": "Group ID",
+    "addManualGroup": "Add group",
     "refreshButton": "Fetch schedule",
     "refreshing": "Refreshing…",
     "refreshedOk": "Groups refreshed: {{ok}}, errors: {{err}}",
@@ -262,7 +265,8 @@
     },
     "errors": {
       "loadGroupsFailed": "Failed to load groups",
-      "refreshFailed": "Failed to fetch schedule"
+      "refreshFailed": "Failed to fetch schedule",
+      "saveGroupsFailed": "Failed to save the group list"
     }
   }
 }

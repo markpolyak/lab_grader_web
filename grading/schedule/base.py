@@ -28,7 +28,7 @@ class ScheduleError(Exception):
 
 
 class ScheduleConfigError(ScheduleError):
-    """A `schedules/<course_id>.yaml` file is invalid.
+    """A linked `schedules/*.yaml` file is invalid.
 
     Raised on startup (logged via warn_about_schedule, see main.py) and on
     any per-request call that needs the schedule. Same pattern as

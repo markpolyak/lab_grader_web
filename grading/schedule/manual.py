@@ -1,63 +1,8 @@
-"""Manual schedule source: reads `schedules/<course_id>.yaml` and serves
-sessions for any group in the file.
+"""Manual schedule source for a group's schedule-file `groups` mapping.
 
-The "manual" name is a misnomer — it's actually the universal YAML reader
-used by *every* source after a refresh. After `source: guap` fetches raw
-lessons and writes them back into the YAML, the file is read by this same
-module on every subsequent request. There is no in-memory distinction
-between "freshly parsed from GUAP" and "typed by hand": both end up as rows
-in `groups.<id>.slots` and are served identically.
-
-YAML structure — one file per course, all groups of the course inside:
-
-    course-id: os-2026                 # sanity check; must match course id
-
-    groups:
-      "4432":
-        timezone: "UTC+3"
-        source: guap                    # who originally produced these slots
-        guap_group_id: "4432"           # code on guap.ru/rasp (for refresh button)
-
-        auto_open_minutes_before: 15
-        auto_close_minutes_after: 10
-
-        slots:
-          - id: "mon-1"
-            recurrence: {day: monday, week: all}
-            start: "13:00"
-            end: "14:30"
-            labs: ["1", "2"]           # null/missing = all, [] = closed
-            room: "301"
-            subject: "Операционные системы"
-          - id: "extra-lab3"
-            date: "2026-11-20"          # one-off slot
-            start: "17:00"
-            end: "18:30"
-            labs: ["3"]
-            note: "Доп. консультация"
-
-        corrections:
-          - id: "corr-lab2-move"
-            description: "Перенос ЛР2 на 17:00"
-            date: "2026-11-09"
-            remove_slots:
-              - slot_id: "mon-1"
-                labs: ["2"]            # remove only lab "2" from slot "mon-1"
-            add_slots:
-              - id: "mon-1-lab2-moved"
-                start: "17:00"
-                end: "18:30"
-                labs: ["2"]
-                room: "301"
-
-        queue_settings:
-          max_students_per_slot: 30
-          allow_multiple_labs: true
-          auto_requeue_on_no_show: false
-          all_lab_ids: ["1", "2", "3", "quiz"]
-
-      "4433":
-        ...                             # second group, same structure
+This is the common reader for both manually entered slots and slots fetched
+from a source such as GUAP. Per-group `slots`, `corrections`, and
+`queue_settings` are stored beside the group ID in the course YAML.
 """
 from __future__ import annotations
 
@@ -86,6 +31,18 @@ WEEKDAYS = {
 def _parse_time(value, where: str) -> time:
     if value is None:
         raise ScheduleConfigError(f"{where}: `start` and `end` are required")
+    if isinstance(value, int) and not isinstance(value, bool):
+        # PyYAML's YAML 1.1 loader parses unquoted HH:MM[:SS] values as
+        # sexagesimal integers; accept those when reading existing configs.
+        total_seconds = value * 60 if value <= 24 * 60 else value
+        try:
+            return time(
+                total_seconds // 3600,
+                (total_seconds % 3600) // 60,
+                total_seconds % 60,
+            )
+        except ValueError:
+            raise ScheduleConfigError(f"{where}: time must be HH:MM, got {value!r}")
     try:
         return time.fromisoformat(str(value))
     except (TypeError, ValueError):

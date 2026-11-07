@@ -10,3 +10,4 @@ itsdangerous
 slowapi
 beautifulsoup4
 lxml
+ruamel.yaml>=0.18,<0.19

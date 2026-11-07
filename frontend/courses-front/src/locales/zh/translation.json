@@ -250,6 +250,9 @@
   },
   "schedule": {
     "title": "课程表",
+    "groupSourcesDescription": "课程表仅使用名称为数字的 Google Sheets 工作表。如有需要，可手动添加数字小组编号；列表会保存在课程配置中。",
+    "manualGroupInput": "小组编号",
+    "addManualGroup": "添加小组",
     "refreshButton": "获取课程表",
     "refreshing": "刷新中…",
     "refreshedOk": "已更新小组：{{ok}}，错误：{{err}}",
@@ -265,7 +268,8 @@
     },
     "errors": {
       "loadGroupsFailed": "无法加载小组列表",
-      "refreshFailed": "获取课程表失败"
+      "refreshFailed": "获取课程表失败",
+      "saveGroupsFailed": "无法保存小组列表"
     }
   }
 }

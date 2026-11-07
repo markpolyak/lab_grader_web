@@ -75,6 +75,40 @@ email: teacher@university.edu
 timezone: UTC+3
 ```
 
+### `schedule-file`
+**Тип:** `string`
+**Описание:** Имя отдельного YAML-файла расписания в каталоге `schedules/`. В schedule-файле обязательны `course-id` и `group_id` для каждой группы. На странице `/admin/courses` группы автоматически загружаются только из числовых вкладок Google Sheets; дополнительные числовые группы задаются через `manual-groups` в schedule-файле.
+
+```yaml
+# В конфиге курса:
+course:
+  schedule-file: dev-course.yaml
+
+# schedules/dev-course.yaml:
+course-id: dev-course
+source: guap
+timezone: UTC+3
+auto_open_minutes_before: 15
+auto_close_minutes_after: 10
+manual-groups:
+  - "4432"
+groups:
+  "4432":
+    group_id: "4432"
+    guap_group_id: "4432"
+    slots:
+      - id: guap-mon-2
+        recurrence:
+          day: monday
+          week: all
+        start: "10:40"
+        end: "12:10"
+        subject: Проектирование баз данных
+        room: "23-10"
+```
+
+Глобальные настройки расписания являются значениями по умолчанию для групп. `slots`, `corrections` и `queue_settings` находятся внутри соответствующей группы. Обновление заменяет только `slots`, сохраняя ручные поправки и настройки. Ошибка одной группы не мешает обновить остальные.
+
 ---
 
 ## Секция `course.github`

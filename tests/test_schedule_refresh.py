@@ -1,79 +1,58 @@
 import yaml
 
-from grading.schedule import ScheduleConfigError, load_course_groups, refresh_all_groups
+from grading.schedule import (
+    ScheduleConfigError,
+    parse_schedule_file,
+    parse_course_schedule,
+    refresh_all_groups,
+)
 from grading.schedule import guap as guap_module
 
 
-def _write_course_config(path, groups):
+def _write_schedule_config(path):
     path.write_text(
-        yaml.safe_dump({"course": {"groups": groups}}, allow_unicode=True),
+        """# Keep this teacher note.
+course-id: test-course
+source: guap
+timezone: UTC+3
+auto_open_minutes_before: 15
+auto_close_minutes_after: 10
+manual-groups: []
+groups:
+  '4432':
+    group_id: '4432'
+    guap_group_id: ok
+    corrections:
+      - id: teacher-correction
+        date: '2026-11-09'
+    queue_settings:
+      max_students_per_slot: 17
+    slots:
+      - id: old-slot
+        recurrence:
+          day: monday
+          week: all
+        start: '10:00'
+        end: '11:00'
+  '4433':
+    group_id: '4433'
+    guap_group_id: missing
+    slots:
+      - id: old-4433
+        recurrence:
+          day: tuesday
+        start: '10:00'
+        end: '11:00'
+""",
         encoding="utf-8",
     )
-
-
-def test_load_course_groups_normalizes_ids_and_defaults_guap_id(tmp_path):
-    courses_dir = tmp_path / "courses"
-    courses_dir.mkdir()
-    _write_course_config(
-        courses_dir / "test-course.yaml",
-        [{"id": 4432}, {"id": "4433", "guap_group_id": 9001}],
-    )
-
-    assert load_course_groups("test-course", courses_dir) == [
-        {"id": "4432", "guap_group_id": "4432"},
-        {"id": "4433", "guap_group_id": "9001"},
-    ]
-
-
-def test_load_course_groups_rejects_malformed_group(tmp_path):
-    courses_dir = tmp_path / "courses"
-    courses_dir.mkdir()
-    _write_course_config(courses_dir / "test-course.yaml", [{"guap_group_id": "4432"}])
-
-    try:
-        load_course_groups("test-course", courses_dir)
-    except ScheduleConfigError as error:
-        assert "course.groups[0].id" in str(error)
-    else:
-        raise AssertionError("Invalid group config should fail")
 
 
 def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
     tmp_path, monkeypatch
 ):
-    courses_dir = tmp_path / "courses"
-    schedules_dir = tmp_path / "schedules"
-    courses_dir.mkdir()
-    schedules_dir.mkdir()
-    _write_course_config(
-        courses_dir / "test-course.yaml",
-        [
-            {"id": "4432", "guap_group_id": "ok"},
-            {"id": "4433", "guap_group_id": "missing"},
-        ],
-    )
-    schedule_path = schedules_dir / "test-course.yaml"
-    schedule_path.write_text(
-        yaml.safe_dump(
-            {
-                "course-id": "test-course",
-                "groups": {
-                    "4432": {
-                        "source": "guap",
-                        "timezone": "Europe/Moscow",
-                        "auto_open_minutes_before": 22,
-                        "auto_close_minutes_after": 33,
-                        "corrections": [{"id": "teacher-correction"}],
-                        "queue_settings": {"max_students_per_slot": 17},
-                        "slots": [{"id": "old-4432"}],
-                    },
-                    "4433": {"slots": [{"id": "old-4433"}]},
-                },
-            },
-            allow_unicode=True,
-        ),
-        encoding="utf-8",
-    )
+    schedule_path = tmp_path / "test-course.yaml"
+    _write_schedule_config(schedule_path)
 
     class FakeGuapScheduleSource:
         def __init__(self, group_code, **_kwargs):
@@ -86,14 +65,25 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
 
         def to_yaml_sessions(self, raw_lessons):
             assert raw_lessons == ["raw lesson"]
-            return [{"id": "fresh-slot"}]
+            return [
+                {
+                    "id": "fresh-slot",
+                    "recurrence": {"day": "monday", "week": "all"},
+                    "start": "12:00",
+                    "end": "13:00",
+                }
+            ]
 
     monkeypatch.setattr(guap_module, "GuapScheduleSource", FakeGuapScheduleSource)
+    groups = [
+        {"id": "4432", "guap_group_id": "ok"},
+        {"id": "4433", "guap_group_id": "missing"},
+    ]
 
     result = refresh_all_groups(
         "test-course",
-        courses_dir=courses_dir,
-        schedules_dir=schedules_dir,
+        schedule_file_path=schedule_path,
+        groups=groups,
         snapshot_path="unused.json",
     )
 
@@ -102,11 +92,53 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
         "4433": "RuntimeError: group missing from snapshot"
     }
     data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
-    assert data["groups"]["4432"]["slots"] == [{"id": "fresh-slot"}]
-    assert data["groups"]["4432"]["corrections"] == [{"id": "teacher-correction"}]
+    assert data["groups"]["4432"]["slots"][0]["id"] == "fresh-slot"
+    assert data["groups"]["4432"]["corrections"] == [
+        {"id": "teacher-correction", "date": "2026-11-09"}
+    ]
     assert data["groups"]["4432"]["queue_settings"] == {"max_students_per_slot": 17}
-    assert data["groups"]["4432"]["timezone"] == "Europe/Moscow"
-    assert data["groups"]["4432"]["auto_open_minutes_before"] == 22
-    assert data["groups"]["4432"]["auto_close_minutes_after"] == 33
-    assert data["groups"]["4433"]["slots"] == [{"id": "old-4433"}]
-    assert list(schedules_dir.glob(".schedule-*.yaml.tmp")) == []
+    assert data["groups"]["4432"]["group_id"] == "4432"
+    assert data["groups"]["4432"]["guap_group_id"] == "ok"
+    assert data["groups"]["4433"]["slots"][0]["id"] == "old-4433"
+    assert "# Keep this teacher note." in schedule_path.read_text(encoding="utf-8")
+    assert not list(tmp_path.glob(".course-*.yaml.tmp"))
+    assert parse_course_schedule(
+        {"schedule-file": schedule_path.name}, "test-course", tmp_path
+    ).keys() == {"4432", "4433"}
+
+
+def test_refresh_requires_at_least_one_group(tmp_path):
+    schedule_path = tmp_path / "test-course.yaml"
+    _write_schedule_config(schedule_path)
+
+    try:
+        refresh_all_groups("test-course", schedule_path, [])
+    except ScheduleConfigError as error:
+        assert "no groups" in str(error).lower()
+    else:
+        raise AssertionError("Refreshing without groups should fail")
+
+
+def test_schedule_yaml_requires_course_and_group_identifiers(tmp_path):
+    schedule_path = tmp_path / "test-course.yaml"
+    schedule_path.write_text(
+        "groups:\n  '4432':\n    slots: []\n",
+        encoding="utf-8",
+    )
+    try:
+        parse_schedule_file(schedule_path, "test-course")
+    except ScheduleConfigError as error:
+        assert "`course-id` is required" in str(error)
+    else:
+        raise AssertionError("Schedule without course-id should be rejected")
+
+    schedule_path.write_text(
+        "course-id: test-course\ngroups:\n  '4432':\n    slots: []\n",
+        encoding="utf-8",
+    )
+    try:
+        parse_schedule_file(schedule_path, "test-course")
+    except ScheduleConfigError as error:
+        assert "`group_id` is required" in str(error)
+    else:
+        raise AssertionError("Schedule group without group_id should be rejected")

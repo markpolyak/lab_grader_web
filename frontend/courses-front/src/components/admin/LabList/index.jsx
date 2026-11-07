@@ -20,7 +20,6 @@ import {
   IconButton,
 } from "@mui/material";
 import { BulkGradeDialog } from "./BulkGradeDialog";
-import { SchedulePanel } from "../SchedulePanel";
 
 // Иконка копирования (два листа) - та же, что на GitHub: Octicons copy-16,
 // встроенная, чтобы не тащить @mui/icons-material ради одного значка.
@@ -324,8 +323,6 @@ export const LabList = ({ courseId, onBack }) => {
             ? t("adminLabs.titleWithCourse", { course: courseName })
             : t("adminLabs.title")}
         </PageTitle>
-
-        <SchedulePanel courseId={courseId} />
 
         {loading ? (
           <HintText>{t("adminLabs.loading")}</HintText>
