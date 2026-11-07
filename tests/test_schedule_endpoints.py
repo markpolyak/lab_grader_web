@@ -3,6 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import main as main_module
+from grading.schedule import guap as guap_module
 
 
 @pytest.fixture
@@ -16,7 +17,6 @@ def schedule_admin_client(tmp_path, monkeypatch):
         """# Preserve this comment.
 course:
   name: Test Course
-  schedule-file: test-course.yaml
   google:
     spreadsheet: test-sheet
     info-sheet: Info
@@ -94,7 +94,7 @@ def test_schedule_groups_endpoint_merges_sheet_and_manual_groups(schedule_admin_
     }
 
 
-def test_save_manual_groups_updates_course_yaml_and_preserves_comments(schedule_admin_client):
+def test_save_manual_groups_updates_schedule_yaml_and_preserves_comments(schedule_admin_client):
     client, _, schedule_path = schedule_admin_client
     response = client.put(
         "/admin/courses/test-course/schedule/groups",
@@ -156,6 +156,40 @@ def test_refresh_all_returns_partial_results(schedule_admin_client, monkeypatch)
         {"id": "4433", "guap_group_id": "4433"},
     ]
     assert captured["schedule_file_path"] == schedule_path
+
+
+def test_refresh_all_creates_schedule_file_on_first_request(
+    schedule_admin_client, monkeypatch
+):
+    client, _, schedule_path = schedule_admin_client
+    schedule_path.unlink()
+
+    class FakeGuapScheduleSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fetch_raw(self, _group_code):
+            return ["lesson"]
+
+        def to_yaml_sessions(self, _raw_lessons):
+            return [
+                {
+                    "id": "first-slot",
+                    "recurrence": {"day": "monday", "week": "all"},
+                    "start": "10:00",
+                    "end": "11:00",
+                }
+            ]
+
+    monkeypatch.setattr(guap_module, "GuapScheduleSource", FakeGuapScheduleSource)
+    response = client.post("/admin/courses/test-course/schedule/refresh-all")
+
+    assert response.status_code == 200
+    assert response.json()["refreshed"] == {"4433": 1}
+    saved = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
+    assert saved["course-id"] == "test-course"
+    assert saved["groups"]["4433"]["group_id"] == "4433"
+    assert saved["groups"]["4433"]["slots"][0]["id"] == "first-slot"
 
 
 def test_schedule_groups_endpoint_requires_admin():

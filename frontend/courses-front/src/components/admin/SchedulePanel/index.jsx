@@ -170,7 +170,6 @@ export const SchedulePanel = ({ courseId, open, onClose, autoRefresh = false }) 
           <TextField
             size="small"
             label={t("schedule.manualGroupInput")}
-            inputProps={{ inputMode: "numeric", pattern: "[0-9]*" }}
             value={newGroup}
             onChange={(event) => setNewGroup(event.target.value)}
             onKeyDown={(event) => {
@@ -256,7 +255,7 @@ export const SchedulePanel = ({ courseId, open, onClose, autoRefresh = false }) 
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>{t("cancel")}</Button>
+        <Button onClick={onClose}>{t("schedule.status.ok")}</Button>
       </DialogActions>
     </Dialog>
   );

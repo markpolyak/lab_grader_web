@@ -3,7 +3,6 @@ source: guap
 timezone: UTC+3
 auto_open_minutes_before: 15
 auto_close_minutes_after: 10
-manual-groups: []
 groups:
   '4431':
     group_id: '4431'
@@ -140,3 +139,4 @@ groups:
       room: 23-09 (Б. Морская 67)
       teacher: ''
     guap_group_id: '4432'
+manual-groups: []

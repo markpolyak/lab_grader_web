@@ -774,27 +774,6 @@ def _validate_join_sections(new_data, old_data) -> None:
             )
 
 
-def _validate_schedule_section(course_id: str, course_data) -> None:
-    course = course_data.get("course") if isinstance(course_data, dict) else None
-    if not isinstance(course, dict):
-        return
-    if course.get("schedule") is not None and course.get("schedule-file") is None:
-        raise HTTPException(
-            status_code=400,
-            detail="Расписание должно храниться в отдельном YAML; укажите `course.schedule-file`.",
-        )
-    if course.get("schedule-file") is None:
-        return
-    try:
-        _, schedule_data = load_schedule_data(course, course_id, SCHEDULES_DIR)
-        parse_schedule_file(schedule_path_for_course(course, course_id, SCHEDULES_DIR), course_id)
-        manual_groups = manual_course_groups(schedule_data)
-        if any(not group["id"].isdigit() for group in manual_groups):
-            raise ScheduleConfigError("`manual-groups` must contain numeric group IDs only")
-    except ScheduleConfigError as e:
-        raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
-
-
 def _write_file_atomically(file_path: str, content: str) -> None:
     """
     Записать файл целиком или не записать вовсе.
@@ -805,6 +784,7 @@ def _write_file_atomically(file_path: str, content: str) -> None:
     атомарным переименованием в пределах одной файловой системы.
     """
     directory = os.path.dirname(os.path.abspath(file_path))
+    os.makedirs(directory, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".course-", suffix=".yaml.tmp")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_file:
@@ -839,8 +819,6 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
         old_data = None
 
     _validate_join_sections(new_data, old_data)
-    _validate_schedule_section(course_id, new_data)
-
     _write_file_atomically(file_path, data.content)
 
     return {"message": "Изменения успешно сохранены"}
@@ -2486,8 +2464,6 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
             counter += 1
         course_id = f"{course_id}-{counter}"
 
-    _validate_schedule_section(course_id, course_data)
-
     # Save course file after structural and schedule validation.
     with open(file_location, "wb") as f:
         f.write(content)
@@ -2524,7 +2500,7 @@ def schedule_sessions(
     """Return upcoming sessions from the course's linked schedule file."""
     try:
         course_info = get_course_by_id(course_id)
-        sources = parse_course_schedule(course_info, course_id, SCHEDULES_DIR)
+        sources = parse_course_schedule(course_id, SCHEDULES_DIR)
     except ScheduleConfigError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
     source = sources.get(group_id)
@@ -2579,12 +2555,12 @@ class ScheduleManualGroupsRequest(BaseModel):
 
 
 def _schedule_group_sources(course_id: str, course_info: dict) -> tuple[list[dict[str, str]], list[str]]:
-    _, schedule_data = load_schedule_data(course_info, course_id, SCHEDULES_DIR)
-    parse_schedule_file(
-        schedule_path_for_course(course_info, course_id, SCHEDULES_DIR),
-        course_id,
-    )
-    manual = manual_course_groups(schedule_data)
+    _, schedule_data = load_schedule_data(course_id, SCHEDULES_DIR)
+    if schedule_data is None:
+        manual = []
+    else:
+        parse_schedule_file(schedule_path_for_course(course_id, SCHEDULES_DIR), course_id)
+        manual = manual_course_groups(schedule_data)
     invalid_manual_groups = [
         group["id"] for group in manual if not re.fullmatch(r"\d+", group["id"])
     ]
@@ -2621,8 +2597,12 @@ def schedule_groups(
     try:
         course_info = get_course_by_id(course_id)
         groups, warnings = _schedule_group_sources(course_id, course_info)
-        _, schedule_data = load_schedule_data(course_info, course_id, SCHEDULES_DIR)
-        manual_groups = [group["id"] for group in manual_course_groups(schedule_data)]
+        _, schedule_data = load_schedule_data(course_id, SCHEDULES_DIR)
+        manual_groups = (
+            [group["id"] for group in manual_course_groups(schedule_data)]
+            if schedule_data is not None
+            else []
+        )
     except ScheduleConfigError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
     return {
@@ -2653,10 +2633,13 @@ def save_schedule_manual_groups(
             ),
         )
     try:
-        file_path = schedule_path_for_course(course_info, course_id, SCHEDULES_DIR)
+        file_path = schedule_path_for_course(course_id, SCHEDULES_DIR)
         yaml_rt = RoundTripYAML()
-        with open(file_path, "r", encoding="utf-8") as file:
-            schedule_data = yaml_rt.load(file)
+        if file_path.exists():
+            with open(file_path, "r", encoding="utf-8") as file:
+                schedule_data = yaml_rt.load(file)
+        else:
+            schedule_data = {"course-id": course_id, "groups": {}}
         if not isinstance(schedule_data, dict):
             raise ScheduleConfigError("верхний уровень файла расписания должен быть YAML-объектом")
         if str(schedule_data.get("course-id", "")).strip() != course_id:
@@ -2664,7 +2647,15 @@ def save_schedule_manual_groups(
                 f"обязательный course-id в файле расписания должен быть {course_id!r}"
             )
         schedule_data["manual-groups"] = group_ids
-        parse_schedule_file(file_path, course_id)
+        for configured_id, group_config in schedule_data.get("groups", {}).items():
+            if not str(configured_id).isdigit():
+                raise ScheduleConfigError(
+                    f"идентификатор группы {configured_id!r} должен содержать только цифры"
+                )
+            if not isinstance(group_config, dict) or str(group_config.get("group_id", "")) != str(configured_id):
+                raise ScheduleConfigError(
+                    f"группа {configured_id!r} требует совпадающий `group_id`"
+                )
         from io import StringIO
         output = StringIO()
         yaml_rt.dump(schedule_data, output)
@@ -2688,9 +2679,7 @@ def schedule_refresh_all(
     try:
         course_info = get_course_by_id(course_id)
         groups, warnings = _schedule_group_sources(course_id, course_info)
-        schedule_file_path = schedule_path_for_course(
-            course_info, course_id, SCHEDULES_DIR
-        )
+        schedule_file_path = schedule_path_for_course(course_id, SCHEDULES_DIR)
         result = refresh_all_groups(
             course_id=course_id,
             schedule_file_path=schedule_file_path,

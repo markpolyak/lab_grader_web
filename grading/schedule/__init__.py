@@ -1,8 +1,8 @@
 """Schedule sources and parsing for per-course YAML files in `schedules/`.
 
-The course config points to its schedule file with `course.schedule-file`.
-The schedule YAML carries mandatory course and group IDs alongside defaults,
-slots, corrections, and queue settings.
+The schedule filename is derived from the course ID. The schedule YAML carries
+mandatory course and group IDs alongside defaults, slots, corrections, and
+queue settings.
 """
 from __future__ import annotations
 
@@ -147,45 +147,34 @@ def load_schedule_for_group(
 
 
 def parse_course_schedule(
-    course_info: dict,
     course_id: str,
     schedules_dir: str | Path = "schedules",
 ) -> dict[str, ManualScheduleSource]:
-    """Load the schedule YAML referenced by `course.schedule-file`."""
-    schedule_path = schedule_path_for_course(course_info, course_id, schedules_dir)
+    """Load `schedules/<course_id>.yaml`."""
+    schedule_path = schedule_path_for_course(course_id, schedules_dir)
     if not schedule_path.exists():
         raise ScheduleConfigError(f"Schedule file not found: {schedule_path}")
     return parse_schedule_file(schedule_path, course_id=course_id)
 
 
 def schedule_path_for_course(
-    course_info: dict,
     course_id: str,
     schedules_dir: str | Path = "schedules",
 ) -> Path:
-    """Resolve and validate the schedule file linked by the course config."""
-    filename = course_info.get("schedule-file")
-    if not isinstance(filename, str) or not filename.strip():
-        raise ScheduleConfigError("`course.schedule-file` is required")
-    relative_path = Path(filename)
-    if (
-        relative_path.is_absolute()
-        or relative_path.name != filename
-        or relative_path.suffix.lower() not in {".yaml", ".yml"}
-    ):
-        raise ScheduleConfigError(
-            "`course.schedule-file` must be a YAML filename inside the schedules directory"
-        )
-    return Path(schedules_dir) / relative_path
+    """Resolve the schedule filename from the stable course ID."""
+    if not course_id or Path(course_id).name != course_id or course_id in {".", ".."}:
+        raise ScheduleConfigError(f"Invalid course ID for schedule path: {course_id!r}")
+    return Path(schedules_dir) / f"{course_id}.yaml"
 
 
 def load_schedule_data(
-    course_info: dict,
     course_id: str,
     schedules_dir: str | Path = "schedules",
-) -> tuple[Path, dict]:
-    """Load the linked schedule YAML and verify its required identifiers."""
-    path = schedule_path_for_course(course_info, course_id, schedules_dir)
+) -> tuple[Path, dict | None]:
+    """Load the schedule YAML if it exists and verify its required course ID."""
+    path = schedule_path_for_course(course_id, schedules_dir)
+    if not path.exists():
+        return path, None
     try:
         with path.open("r", encoding="utf-8") as file:
             data = yaml.safe_load(file)
@@ -237,38 +226,34 @@ def refresh_all_groups(
     groups: list[dict[str, str]],
     snapshot_path: str = "data/schedule.json",
 ) -> dict[str, object]:
-    """Refresh each group into the linked schedule file, retaining teacher edits."""
+    """Refresh numeric groups into `schedules/<course_id>.yaml`, creating it if needed."""
     from .guap import GuapScheduleSource
-
-    if not groups:
-        raise ScheduleConfigError(
-            f"Course {course_id!r} has no groups. Add a spreadsheet tab or "
-            "a manual group in the schedule settings."
-        )
 
     from io import StringIO
     import os
     import tempfile
     from ruamel.yaml import YAML
+    from ruamel.yaml.comments import CommentedMap
     from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+    from ruamel.yaml.scalarstring import SingleQuotedScalarString
 
     config_path = Path(schedule_file_path)
-    if not config_path.exists():
-        raise ScheduleConfigError(f"Schedule file not found: {config_path}")
-
     roundtrip_yaml = YAML()
-    try:
-        with config_path.open("r", encoding="utf-8") as f:
-            config_data = roundtrip_yaml.load(f)
-    except Exception as e:
-        raise ScheduleConfigError(f"Failed to read course config: {e}")
-
-    if not isinstance(config_data, dict):
-        raise ScheduleConfigError(f"Schedule file {config_path}: top-level must be a mapping")
-    if str(config_data.get("course-id", "")).strip() != str(course_id):
-        raise ScheduleConfigError(
-            f"Schedule file {config_path}: required `course-id` must match {course_id!r}"
-        )
+    if config_path.exists():
+        try:
+            with config_path.open("r", encoding="utf-8") as f:
+                config_data = roundtrip_yaml.load(f)
+        except Exception as e:
+            raise ScheduleConfigError(f"Failed to read schedule file {config_path}: {e}")
+        if not isinstance(config_data, dict):
+            raise ScheduleConfigError(f"Schedule file {config_path}: top-level must be a mapping")
+        if str(config_data.get("course-id", "")).strip() != str(course_id):
+            raise ScheduleConfigError(
+                f"Schedule file {config_path}: required `course-id` must match {course_id!r}"
+            )
+    else:
+        config_data = CommentedMap()
+        config_data["course-id"] = course_id
 
     config_data.setdefault("source", "guap")
     config_data.setdefault("timezone", "UTC+3")
@@ -277,6 +262,9 @@ def refresh_all_groups(
     schedule_groups = config_data.setdefault("groups", {})
     if not isinstance(schedule_groups, dict):
         raise ScheduleConfigError("`groups` must be a mapping in the schedule file")
+    manual_groups = config_data.setdefault("manual-groups", [])
+    if not isinstance(manual_groups, list):
+        raise ScheduleConfigError("`manual-groups` must be a list in the schedule file")
 
     def quote_slot_times(group_config: dict) -> None:
         for slot in group_config.get("slots", []):
@@ -304,6 +292,19 @@ def refresh_all_groups(
         if not str(group_id).isdigit():
             errors[group_id] = "group_id must contain only digits"
             continue
+        group_config = schedule_groups.get(group_id)
+        if group_config is None:
+            group_config = CommentedMap()
+            group_config["group_id"] = SingleQuotedScalarString(group_id)
+            group_config["slots"] = []
+            schedule_groups[group_id] = group_config
+        if not isinstance(group_config, dict):
+            errors[group_id] = f"group {group_id!r} must be a mapping"
+            continue
+        configured_group_id = group_config.get("group_id")
+        if configured_group_id is None or str(configured_group_id).strip() != group_id:
+            errors[group_id] = f"group {group_id!r} requires matching `group_id`"
+            continue
         try:
             source = GuapScheduleSource(
                 group_code=guap_group_id,
@@ -313,15 +314,6 @@ def refresh_all_groups(
             raw_lessons = source.fetch_raw(guap_group_id)
             slots = source.to_yaml_sessions(raw_lessons)
 
-            group_config = schedule_groups.get(group_id) or {}
-            if not isinstance(group_config, dict):
-                group_config = {}
-            configured_group_id = group_config.get("group_id")
-            if configured_group_id is not None and str(configured_group_id) != group_id:
-                raise ScheduleConfigError(
-                    f"group {group_id!r}: `group_id` must match its groups key"
-                )
-            group_config["group_id"] = group_id
             group_config["slots"] = slots
             group_config["guap_group_id"] = guap_group_id
             quote_slot_times(group_config)
@@ -334,6 +326,7 @@ def refresh_all_groups(
     roundtrip_yaml.dump(config_data, stream)
     new_yaml = stream.getvalue()
     directory = os.path.dirname(os.path.abspath(config_path))
+    os.makedirs(directory, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(
         dir=directory,
         prefix=".course-",

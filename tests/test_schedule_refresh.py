@@ -103,20 +103,42 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
     assert "# Keep this teacher note." in schedule_path.read_text(encoding="utf-8")
     assert not list(tmp_path.glob(".course-*.yaml.tmp"))
     assert parse_course_schedule(
-        {"schedule-file": schedule_path.name}, "test-course", tmp_path
+        "test-course", tmp_path
     ).keys() == {"4432", "4433"}
 
 
-def test_refresh_requires_at_least_one_group(tmp_path):
-    schedule_path = tmp_path / "test-course.yaml"
-    _write_schedule_config(schedule_path)
+def test_refresh_creates_initial_schedule_yaml(tmp_path, monkeypatch):
+    schedule_dir = tmp_path / "schedules"
+    schedule_path = schedule_dir / "test-course.yaml"
 
-    try:
-        refresh_all_groups("test-course", schedule_path, [])
-    except ScheduleConfigError as error:
-        assert "no groups" in str(error).lower()
-    else:
-        raise AssertionError("Refreshing without groups should fail")
+    class FakeGuapScheduleSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fetch_raw(self, _group_code):
+            return ["lesson"]
+
+        def to_yaml_sessions(self, _raw_lessons):
+            return [
+                {
+                    "id": "new-slot",
+                    "recurrence": {"day": "monday", "week": "all"},
+                    "start": "10:00",
+                    "end": "11:00",
+                }
+            ]
+
+    monkeypatch.setattr(guap_module, "GuapScheduleSource", FakeGuapScheduleSource)
+    result = refresh_all_groups(
+        "test-course",
+        schedule_path,
+        [{"id": "4432", "guap_group_id": "4432"}],
+    )
+    assert result["refreshed"] == {"4432": 1}
+    data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
+    assert data["course-id"] == "test-course"
+    assert data["groups"]["4432"]["group_id"] == "4432"
+    assert data["groups"]["4432"]["slots"][0]["id"] == "new-slot"
 
 
 def test_schedule_yaml_requires_course_and_group_identifiers(tmp_path):
