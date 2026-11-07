@@ -818,6 +818,7 @@ def get_course_lessons(request: Request, course_id: str):
 
     return {
         "course_id": schedule.course_id,
+        "schedule_id": schedule.id,
         "course_name": schedule.course_name,
         "week_start": schedule.week_start,
         "week_end": schedule.week_start + timedelta(days=6),
@@ -885,25 +886,7 @@ def _get_current_schedule(request: Request, course_id: str):
         if schedule is None:
             raise HTTPException(status_code=404, detail="Расписание очередей для этого курса не настроено")
 
-    return {
-        "course_id": schedule.course_id,
-        "schedule_id": schedule.id,
-        "course_name": schedule.course_name,
-        "week_start": schedule.week_start,
-        "week_end": schedule.week_start + timedelta(days=6),
-        "lessons": [
-            {
-                "id": lesson.id,
-                "starts_at": lesson.starts_at,
-                "ends_at": lesson.ends_at,
-                "groups": lesson.groups,
-                "kind": lesson.kind,
-                "room": lesson.room,
-                "queue": {"closed": lesson.queue.closed, "entries_count": len(lesson.queue.entries)},
-            }
-            for lesson in sorted(schedule.lessons, key=lambda item: (item.starts_at, item.groups, item.kind))
-        ],
-    }
+    return service, schedule
 
 
 @app.get("/admin/courses/{course_id}/queues", response_model=AdminQueuesResponse)

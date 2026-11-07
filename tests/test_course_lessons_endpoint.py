@@ -47,6 +47,7 @@ def test_returns_actual_lessons_and_public_queue_state(endpoint):
     response = client.get("/courses/os-2026/lessons")
     assert response.status_code == 200
     data = response.json()
+    assert data["schedule_id"] == str(service.schedules["os-2026"].id)
     assert data["course_id"] == "os-2026"
     assert data["course_name"] == "Операционные системы"
     assert data["week_start"] == "2026-11-09"

@@ -198,7 +198,7 @@ export const fetchCourses = async (status = "active") => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -213,7 +213,7 @@ export const fetchCourseDetails = async (courseId) => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -228,7 +228,7 @@ export const fetchGroups = async (courseId) => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -258,7 +258,7 @@ export const fetchLabs = async (courseId, groupId) => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -284,7 +284,7 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -336,7 +336,7 @@ export async function gradeLab(courseId, groupId, labId, github) {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
