@@ -1,0 +1,155 @@
+from copy import deepcopy
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+import yaml
+
+from queues.domain.lesson import Lesson
+from queues.domain.queue import Queue
+from queues.domain.schedule import Schedule
+from queues.domain.student import Student
+from queues.usecase.queue_service import QueueService
+
+
+MONDAY = date(2026, 11, 9)
+
+
+def courses():
+    return {
+        "os": {"name": "Операционные системы", "university": "ГУАП"},
+        "networks": {"name": "Сети", "university": "ГУАП"},
+        "ml": {"name": "Машинное обучение", "university": "ИТМО"},
+        "old-os": {"name": "Операционные системы", "university": "ГУАП", "_meta": {"status": "archived"}},
+    }
+
+
+def item(**changes):
+    return {
+        "subject": "Операционные системы", "kind": "Лабораторное занятие",
+        "groups": ["4431"], "room": "23-09", "starts-at": "15:10", "ends-at": "16:40",
+    } | changes
+
+
+def document(days=None):
+    return {
+        "university": "suai", "timezone": "Europe/Moscow",
+        "days": days if days is not None else {"2026-11-09": [item()]},
+        "unscheduled": [item()],
+    }
+
+
+def generate(service, doc):
+    return service.generate_week(courses(), [doc], week_start=MONDAY)
+
+
+def test_course_matching_and_week_boundaries():
+    schedules = generate(QueueService(), document({
+        "2026-11-08": [item()],
+        "2026-11-09": [item(), item(subject="Сети"), item(subject="Машинное обучение")],
+        "2026-11-15": [item()],
+        "2026-11-16": [item()],
+    }))
+    assert set(schedules) == {"os", "networks"}
+    schedule = schedules["os"]
+    assert isinstance(schedule, Schedule)
+    assert schedule.course_name == "Операционные системы"
+    assert schedule.week_start == MONDAY
+    assert [lesson.starts_at.date() for lesson in schedule.lessons] == [MONDAY, MONDAY + timedelta(days=6)]
+    lesson = schedule.lessons[0]
+    assert isinstance(lesson, Lesson)
+    assert lesson.starts_at.isoformat() == "2026-11-09T15:10:00+03:00"
+    assert lesson.ends_at.isoformat() == "2026-11-09T16:40:00+03:00"
+    assert lesson.groups == ("4431",)
+    assert len(schedules["networks"].lessons) == 1
+
+
+def test_each_lesson_owns_one_independent_queue():
+    schedule = generate(QueueService(), document({"2026-11-09": [item(), item(groups=["4434"])]}))["os"]
+    first, second = schedule.lessons
+    assert isinstance(first.queue, Queue)
+    assert first.queue is not second.queue
+    assert first.queue.closed and second.queue.closed
+    first.queue.closed = False
+    first.queue.add_entry(Student("Иван", "Иванов", "", "ivan"), "1")
+    assert len(first.queue.entries) == 1
+    assert second.queue.entries == []
+
+
+def test_refresh_preserves_queue_entries_and_manual_state():
+    service = QueueService()
+    doc = document()
+    original = generate(service, doc)["os"].lessons[0]
+    original.queue.closed = False
+    entry = original.queue.add_entry(Student("Иван", "Иванов", "", "ivan"), "1")
+    original.queue.closed = True
+    doc["days"]["2026-11-09"][0]["room"] = "Другая аудитория"
+    refreshed = generate(service, doc)["os"].lessons[0]
+    assert refreshed is original
+    assert refreshed.queue.entries == [entry]
+    assert refreshed.queue.closed
+    assert refreshed.room == "Другая аудитория"
+    generate(service, document({}))
+    assert generate(service, doc)["os"].lessons[0] is original
+
+
+def test_duplicates_merge_but_distinct_kind_and_time_have_their_own_queue():
+    service = QueueService()
+    doc = document({"2026-11-09": [
+        item(), item(), item(kind="Лекция"), item(**{"starts-at": "17:00", "ends-at": "18:30"}),
+    ]})
+    schedules = service.generate_week(courses(), [doc, deepcopy(doc)], week_start=MONDAY)
+    lessons = schedules["os"].lessons
+    assert len(lessons) == 3
+    assert len({lesson.id for lesson in lessons}) == 3
+    assert len({id(lesson.queue) for lesson in lessons}) == 3
+    assert schedules["networks"].lessons == []
+
+
+def test_invalid_refresh_does_not_replace_existing_schedules():
+    service = QueueService()
+    original = generate(service, document())["os"]
+    with pytest.raises(ValueError, match="Окончание"):
+        generate(service, document({"2026-11-09": [item(**{"ends-at": "14:00"})]}))
+    assert service.schedules["os"] is original
+    with pytest.raises(ValueError, match="время"):
+        generate(service, document({"2026-11-09": [item(**{"starts-at": None})]}))
+    assert service.schedules["os"] is original
+
+
+def test_other_university_exports_are_ignored():
+    doc = document() | {"university": "itmo"}
+    assert generate(QueueService(), doc)["os"].lessons == []
+
+
+def test_default_week_uses_moscow_date_not_utc(monkeypatch):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 11, 8, 22, tzinfo=timezone.utc).astimezone(tz)
+
+    monkeypatch.setattr("queues.usecase.queue_service.datetime", Clock)
+    # In Moscow it is already Monday, November 9.
+    assert QueueService().generate_week(courses(), [document()])["os"].week_start == MONDAY
+    with pytest.raises(ValueError, match="понедельника"):
+        QueueService().generate_week(courses(), [], week_start=date(2026, 11, 10))
+
+
+def test_saved_real_export_can_seed_four_lessons_without_network():
+    root = Path(__file__).resolve().parents[2]
+    service = QueueService()
+    schedule = service.load_saved_week(courses(), root / "schedule", week_start=MONDAY)["os"]
+    assert len(schedule.lessons) == 4
+    assert sum(lesson.kind == "Лабораторное занятие" for lesson in schedule.lessons) == 3
+    assert all(lesson.queue.entries == [] for lesson in schedule.lessons)
+
+
+def test_corrupt_yaml_preserves_loaded_queues(tmp_path):
+    service = QueueService()
+    original = generate(service, document())["os"]
+    directory = tmp_path / "suai" / "2026-autumn"
+    directory.mkdir(parents=True)
+    (directory / "teacher.yaml").write_text("days: [broken")
+    with pytest.raises(yaml.YAMLError):
+        service.load_saved_week(courses(), tmp_path, week_start=MONDAY)
+    assert service.schedules["os"] is original

@@ -236,6 +236,19 @@ export const fetchGroups = async (courseId) => {
   return response.json();
 };
 
+export const fetchCourseLessons = async (courseId, { signal } = {}) => {
+  const response = await fetch(
+    `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/lessons`,
+    { signal }
+  );
+  if (!response.ok) {
+    const error = new Error("Could not load course lessons");
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+};
+
 export const fetchLabs = async (courseId, groupId) => {
   const response = await fetch(
     `${API_BASE_URL}/courses/${courseId}/groups/${groupId}/labs`

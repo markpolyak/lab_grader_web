@@ -11,10 +11,9 @@ import {
   ActionGrid,
   ActionCard,
   ActionTitle,
-  ComingSoon,
 } from "./styled";
 
-export function CourseActions({ courseId, onSelectGrading, onBack }) {
+export function CourseActions({ courseId, onSelectGrading, onSelectQueue, onBack }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
@@ -33,9 +32,8 @@ export function CourseActions({ courseId, onSelectGrading, onBack }) {
         <ActionCard type="button" onClick={onSelectGrading}>
           <ActionTitle>{t("courseActions.grading")}</ActionTitle>
         </ActionCard>
-        <ActionCard type="button" disabled>
+        <ActionCard type="button" onClick={onSelectQueue}>
           <ActionTitle>{t("courseActions.queue")}</ActionTitle>
-          <ComingSoon>{t("courseActions.comingSoon")}</ComingSoon>
         </ActionCard>
       </ActionGrid>
     </Page>
