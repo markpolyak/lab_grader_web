@@ -264,12 +264,107 @@
       "group": "小组",
       "slotsCount": "时段数",
       "status": "状态",
-      "error": "错误"
+      "error": "错误",
+      "corrections": "修正",
+      "source": "来源"
     },
     "errors": {
       "loadGroupsFailed": "无法加载小组列表",
       "refreshFailed": "获取课程表失败",
       "saveGroupsFailed": "无法保存小组列表"
+    },
+    "editor": {
+      "title": "课程表编辑器",
+      "loading": "加载中…",
+      "loadFailed": "无法加载课程表文件",
+      "saveFailed": "无法保存课程表文件",
+      "saved": "课程表已保存",
+      "saving": "保存中…",
+      "placeholder": "课程表 YAML 配置…"
+    },
+    "corrections": {
+      "title": "课程表修正 — 小组 {{groupId}}",
+      "listTitle": "修正列表",
+      "addTitle": "添加修正",
+      "editTitle": "编辑修正",
+      "addButton": "添加修正",
+      "saveChanges": "保存修改",
+      "saving": "保存中…",
+      "loading": "加载修正…",
+      "empty": "暂无修正。点击「添加修正」创建。",
+      "close": "关闭",
+      "types": {
+        "remove": "取消课时",
+        "add": "额外课时"
+      },
+      "columns": {
+        "id": "ID",
+        "date": "日期",
+        "type": "类型",
+        "details": "详情",
+        "actions": "操作"
+      },
+      "fields": {
+        "id": "修正 ID",
+        "date": "日期",
+        "type": "修正类型",
+        "slotId": "时段 ID (来自课程表)",
+        "labs": "实验 (逗号分隔)",
+        "labsHint": "留空 = 取消整个时段。指定实验仅取消这些实验。",
+        "newSlotId": "新时段 ID",
+        "recurrenceDay": "星期 (重复)",
+        "recurrenceDayHint": "单次课时留空，填写下方「日期」。",
+        "recurrenceWeek": "周奇偶",
+        "dateOnce": "日期 (单次)",
+        "dateOnceHint": "替代重复规则：具体日期。",
+        "start": "开始",
+        "end": "结束",
+        "subject": "科目",
+        "room": "教室",
+        "teacher": "教师"
+      },
+      "details": {
+        "removeSlot": "移除时段",
+        "wholeSlot": "整个时段",
+        "addSlot": "添加时段",
+        "recurrence": "重复: {{day}}, {{week}}"
+      },
+      "errors": {
+        "loadFailed": "无法加载修正",
+        "saveFailed": "无法保存修正",
+        "requiredFields": "请填写 ID 和日期",
+        "slotRequired": "请指定时段 ID (取消) 或 ID/时间 (添加)"
+      },
+      "actions": {
+        "edit": "编辑",
+        "delete": "删除"
+      }
+    },
+    "source": {
+      "title": "课程表来源",
+      "defaultSource": "默认来源",
+      "defaultSourceLabel": "新小组的默认来源",
+      "defaultSourceHint": "当小组未指定来源时使用",
+      "groupSources": "各小组来源",
+      "columns": {
+        "group": "小组",
+        "currentSource": "当前来源",
+        "guapGroupId": "GUAP 代码",
+        "newSource": "新来源"
+      },
+      "types": {
+        "guap": "GUAP (自动)",
+        "manual": "手动"
+      },
+      "saveChanges": "保存修改",
+      "saving": "保存中…",
+      "loading": "加载中…",
+      "empty": "无小组",
+      "hint": "GUAP — 通过「获取课程表」更新时段。手动 — 仅在 YAML 中编辑时段。切换到手动会保留当前时段作为基础。切换到 GUAP — 下次刷新时将覆盖。",
+      "errors": {
+        "loadFailed": "无法加载来源",
+        "saveFailed": "无法保存来源"
+      }
     }
   }
 }
