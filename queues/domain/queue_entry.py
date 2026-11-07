@@ -1,8 +1,7 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
-from .status import DefenseResult, EntryStatus
 from .student import Student
 
 
@@ -10,12 +9,6 @@ from .student import Student
 class QueueEntry:
     student: Student
     lab_id: str
-    enqueued_time: datetime
+    enqueued_time: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     lab_name: str | None = None
-    queue_id: UUID | None = None
-    sequence: int | None = None
     id: UUID = field(default_factory=uuid4)
-    status: EntryStatus = EntryStatus.WAITING
-    called_at: datetime | None = None
-    finished_at: datetime | None = None
-    result: DefenseResult | None = None

@@ -1,37 +1,74 @@
-from datetime import datetime
-from uuid import UUID, uuid4
-
 from .queue_entry import QueueEntry
-from .status import RegistrationMode
+from .student import Student
 
 
 class Queue:
-    def __init__(
-        self,
-        *,
-        course_id: str = "",
-        group_id: str = "",
-        registration_opens_at: datetime | None = None,
-        registration_closes_at: datetime | None = None,
-        service_until: datetime | None = None,
-        id: UUID | None = None,
-        lesson_starts_at: datetime | None = None,
-        lesson_ends_at: datetime | None = None,
-        registration_mode: RegistrationMode = RegistrationMode.AUTOMATIC,
-        entries: list[QueueEntry] | None = None,
-        version: int = 0,
-    ) -> None:
-        self.course_id = course_id
-        self.group_id = group_id
-        self.registration_opens_at = registration_opens_at
-        self.registration_closes_at = registration_closes_at
-        self.service_until = service_until
-        self.id = id if id is not None else uuid4()
-        self.lesson_starts_at = lesson_starts_at
-        self.lesson_ends_at = lesson_ends_at
-        self.registration_mode = registration_mode
-        self.version = version
-        self.entries: list[QueueEntry] = list(entries) if entries is not None else []
+    def __init__(self, *, closed: bool = True) -> None:
+        self.closed = closed
+        self.entries: list[QueueEntry] = []
 
-    def add_entry(self, entry: QueueEntry) -> None:
+    def add_entry(
+        self, student: Student, lab_id: str, lab_name: str | None = None
+    ) -> QueueEntry:
+        if self.closed:
+            raise ValueError("Очередь закрыта для записи")
+        if not lab_id.strip():
+            raise ValueError("Укажите лабораторную работу")
+        github = student.github.strip().casefold()
+        if not github:
+            raise ValueError("Укажите GitHub-логин студента")
+        if any(entry.student.github.strip().casefold() == github for entry in self.entries):
+            raise ValueError("Студент уже стоит в очереди")
+
+        entry = QueueEntry(student=student, lab_id=lab_id.strip(), lab_name=lab_name)
         self.entries.append(entry)
+        return entry
+
+    def get_position(
+        self, *, full_name: str | None = None, github: str | None = None
+    ) -> int:
+        """Найти место студента по ФИО либо GitHub-логину."""
+        return self._find_index(full_name=full_name, github=github) + 1
+
+    def move_down(
+        self, *, full_name: str | None = None, github: str | None = None
+    ) -> bool:
+        """Уступить место студенту ниже."""
+        index = self._find_index(full_name=full_name, github=github)
+        if index == len(self.entries) - 1:
+            return False
+        self.entries[index], self.entries[index + 1] = (
+            self.entries[index + 1],
+            self.entries[index],
+        )
+        return True
+
+    def _find_index(self, *, full_name: str | None, github: str | None) -> int:
+        if (full_name is None) == (github is None):
+            raise ValueError("Укажите либо ФИО, либо GitHub-логин студента")
+
+        if github is not None:
+            query = github.strip().casefold()
+            values = [entry.student.github.strip().casefold() for entry in self.entries]
+        else:
+            assert full_name is not None
+            query = self._normalize_full_name(full_name)
+            values = [
+                self._normalize_full_name(
+                    f"{entry.student.surname} {entry.student.name} {entry.student.patronymic}"
+                )
+                for entry in self.entries
+            ]
+
+        if not query:
+            raise ValueError("Поисковый запрос не должен быть пустым")
+        matches = [index for index, value in enumerate(values) if value == query]
+        if not matches:
+            raise LookupError("Студент не найден в очереди")
+        if len(matches) > 1:
+            raise ValueError("Найдено несколько записей; уточните студента по GitHub-логину")
+        return matches[0]
+
+    @staticmethod
+    def _normalize_full_name(value: str) -> str:
+        return " ".join(value.split()).casefold().replace("ё", "е")

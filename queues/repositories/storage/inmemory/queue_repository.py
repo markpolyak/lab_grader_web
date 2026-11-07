@@ -7,16 +7,16 @@ from ....domain.err import (
     QueueNotFoundError,
     QueueVersionConflictError,
 )
-from ....domain.queue import Queue
+from ....domain.queue_record import QueueRecord
 
 
 class InMemoryQueueRepository:
 
     def __init__(self) -> None:
-        self._queues: dict[UUID, Queue] = {}
+        self._queues: dict[UUID, QueueRecord] = {}
         self._lock = Lock()
 
-    async def create(self, queue: Queue) -> Queue:
+    async def create(self, queue: QueueRecord) -> QueueRecord:
         if queue.version != 0:
             raise ValueError("Новая очередь должна иметь версию 0")
         with self._lock:
@@ -26,11 +26,11 @@ class InMemoryQueueRepository:
             self._queues[queue.id] = stored
             return deepcopy(stored)
 
-    async def get(self, queue_id: UUID) -> Queue | None:
+    async def get(self, queue_id: UUID) -> QueueRecord | None:
         with self._lock:
             return deepcopy(self._queues.get(queue_id))
 
-    async def save(self, queue: Queue, *, expected_version: int) -> Queue:
+    async def save(self, queue: QueueRecord, *, expected_version: int) -> QueueRecord:
         if queue.version != expected_version:
             raise ValueError("Версия снимка должна совпадать с expected_version")
         with self._lock:
@@ -48,7 +48,7 @@ class InMemoryQueueRepository:
 
     async def list_by_course(
         self, course_id: str, *, group_id: str | None = None
-    ) -> list[Queue]:
+    ) -> list[QueueRecord]:
         with self._lock:
             return [
                 deepcopy(queue)
