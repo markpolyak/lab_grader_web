@@ -9,3 +9,6 @@ python-multipart
 python-dotenv
 itsdangerous
 slowapi
+APScheduler>=3.10,<4
+beautifulsoup4>=4.12,<5
+lxml>=5,<7
