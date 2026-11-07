@@ -1,4 +1,18 @@
 {
+  "queueLessons": {
+    "title": "课程课次",
+    "back": "← 返回操作选择",
+    "week": "本周：{{dates}} · 莫斯科时间",
+    "selectionUnavailable": "暂时无法选择课次或加入队列。",
+    "loading": "正在加载课次…",
+    "empty": "本周没有课次。",
+    "notConfigured": "该课程的课表暂不可用。",
+    "loadFailed": "无法加载课次，请重试。",
+    "rateLimit": "请求过多，请稍后重试。",
+    "retry": "重试",
+    "groups": "班级",
+    "room": "教室"
+  },
   "courseActions": {
     "selectCourse": "选择课程",
     "selectAction": "选择操作",

@@ -9,6 +9,7 @@ export function CourseActionsWrapper() {
     <CourseActions
       courseId={courseId}
       onSelectGrading={() => navigate(`/course/${courseId}/groups`)}
+      onSelectQueue={() => navigate(`/course/${courseId}/queue`)}
       onBack={() => navigate("/")}
     />
   );
