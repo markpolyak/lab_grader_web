@@ -190,3 +190,4 @@ pnpm-debug.log*
 .vite/
 dist/
 .cache/logs/
+schedule/.cache/

@@ -80,6 +80,9 @@ from grading.course_index import (
 )
 import tempfile
 from queues.event.websocket import websocketService
+from queues.parser.parser import ScheduleParser
+from contextlib import asynccontextmanager
+import asyncio
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -124,7 +127,20 @@ logger = logging.getLogger(__name__)
 logger.info(f"Logging initialized. Log file: {log_file}")
 
 load_dotenv()
-app = FastAPI()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    parser = ScheduleParser(os.getenv("SCHEDULE_DIR", "schedule"))
+    configs = parser.load_configs(os.getenv("SCHEDULE_CONFIG", "schedule/index.yaml"))
+    parser.start(configs)
+    try:
+        yield
+    finally:
+        await asyncio.to_thread(parser.shutdown)
+
+
+app = FastAPI(lifespan=lifespan)
 COURSES_DIR = "courses"
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 

@@ -13,6 +13,7 @@ React + Vite (`frontend/courses-front/`), курсы — YAML-файлы в `cou
 | Документ | О чём |
 |---|---|
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Как поднять проект локально: таблица, GitHub, ключи, запуск, тесты |
+| [docs/SCHEDULE.md](docs/SCHEDULE.md) | Парсинг расписания преподавателей и обновление YAML через APScheduler |
 | [docs/PROJECT_DESCRIPTION.md](docs/PROJECT_DESCRIPTION.md) | Что умеет сервис, архитектура, API |
 | [docs/COURSE_CONFIG.md](docs/COURSE_CONFIG.md) | Все опции конфигурации курса |
 | [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) | Развёртывание на сервере |
