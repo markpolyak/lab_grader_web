@@ -247,38 +247,22 @@
   },
   "schedule": {
     "title": "Schedule",
-    "selectGroup": "Group",
     "refreshButton": "Fetch schedule",
     "refreshing": "Refreshing…",
-    "previewButton": "Preview next 7 days",
-    "refreshedOk": "Schedule updated: {{count}} slots",
-    "fetchedSlots": "Fetched slots",
-    "previewTitle": "Sessions for group {{group}} (next 7 days)",
-    "noSessions": "No sessions in the next 7 days.",
-    "maxStudents": "Max students",
-    "multiLabs": "Multiple labs",
-    "close": "Close",
-    "labs": {
-      "all": "all",
-      "closed": "closed"
+    "refreshedOk": "Groups refreshed: {{ok}}, errors: {{err}}",
+    "status": {
+      "ok": "OK",
+      "error": "Error"
     },
     "columns": {
-      "id": "Slot ID",
-      "day": "Day",
-      "date": "Date",
-      "time": "Time",
-      "slot": "Slot",
-      "subject": "Subject",
-      "labs": "Labs",
-      "room": "Room",
-      "teacher": "Teacher",
-      "window": "Queue window"
+      "group": "Group",
+      "slotsCount": "Slots",
+      "status": "Status",
+      "error": "Error"
     },
     "errors": {
-      "noGroup": "No group selected",
-      "groupsFailed": "Failed to load groups",
-      "refreshFailed": "Failed to fetch schedule",
-      "previewFailed": "Failed to load preview"
+      "loadGroupsFailed": "Failed to load groups",
+      "refreshFailed": "Failed to fetch schedule"
     }
   }
 }

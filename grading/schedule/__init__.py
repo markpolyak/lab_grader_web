@@ -160,6 +160,142 @@ def load_schedule_for_group(
     return sources.get(str(group_id))
 
 
+def load_course_groups(
+    course_id: str,
+    courses_dir: str | Path = "courses",
+) -> list[dict[str, str]]:
+    """Read group IDs and GUAP group IDs from a course config."""
+    path = Path(courses_dir) / f"{course_id}.yaml"
+    if not path.exists():
+        raise ScheduleConfigError(f"Course config not found: {path}")
+
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        raise ScheduleConfigError(f"YAML parse error in {path}: {e}")
+
+    if not isinstance(data, dict) or not isinstance(data.get("course"), dict):
+        raise ScheduleConfigError(f"Course config {path}: `course` must be a mapping")
+
+    groups_raw = data["course"].get("groups", [])
+    if groups_raw is None:
+        groups_raw = []
+    if not isinstance(groups_raw, list):
+        raise ScheduleConfigError(f"Course config {path}: `course.groups` must be a list")
+
+    groups: list[dict[str, str]] = []
+    for index, group in enumerate(groups_raw):
+        if not isinstance(group, dict):
+            raise ScheduleConfigError(
+                f"Course config {path}: `course.groups[{index}]` must be a mapping"
+            )
+        group_id = group.get("id")
+        if not group_id:
+            raise ScheduleConfigError(
+                f"Course config {path}: `course.groups[{index}].id` is required"
+            )
+        guap_group_id = group.get("guap_group_id") or group_id
+        groups.append({"id": str(group_id), "guap_group_id": str(guap_group_id)})
+    return groups
+
+
+def refresh_all_groups(
+    course_id: str,
+    courses_dir: str | Path = "courses",
+    schedules_dir: str | Path = "schedules",
+    snapshot_path: str = "data/schedule.json",
+) -> dict[str, object]:
+    """Refresh each configured group, retaining schedule corrections/settings."""
+    from .guap import GuapScheduleSource
+
+    groups = load_course_groups(course_id, courses_dir=courses_dir)
+    if not groups:
+        raise ScheduleConfigError(
+            f"Course {course_id!r} has no groups declared. Add a `groups:` "
+            f"list to courses/{course_id}.yaml with at least one group."
+        )
+
+    schedule_path = Path(schedules_dir) / f"{course_id}.yaml"
+    existing_data: dict = {}
+    if schedule_path.exists():
+        try:
+            with schedule_path.open("r", encoding="utf-8") as f:
+                existing_data = yaml.safe_load(f) or {}
+            if not isinstance(existing_data, dict):
+                existing_data = {}
+        except yaml.YAMLError:
+            existing_data = {}
+
+    schedule_groups = existing_data.setdefault("groups", {})
+    if not isinstance(schedule_groups, dict):
+        schedule_groups = {}
+        existing_data["groups"] = schedule_groups
+    existing_data.setdefault("course-id", course_id)
+
+    refreshed: dict[str, int] = {}
+    errors: dict[str, str] = {}
+    for group in groups:
+        group_id = group["id"]
+        guap_group_id = group["guap_group_id"]
+        try:
+            source = GuapScheduleSource(
+                group_code=guap_group_id,
+                snapshot_path=snapshot_path,
+                course_id=course_id,
+            )
+            raw_lessons = source.fetch_raw(guap_group_id)
+            slots = source.to_yaml_sessions(raw_lessons)
+
+            group_config = schedule_groups.get(group_id) or {}
+            if not isinstance(group_config, dict):
+                group_config = {}
+            group_config["slots"] = slots
+            group_config.setdefault("source", "guap")
+            group_config["guap_group_id"] = guap_group_id
+            group_config.setdefault("timezone", "UTC+3")
+            group_config.setdefault("auto_open_minutes_before", 15)
+            group_config.setdefault("auto_close_minutes_after", 10)
+            schedule_groups[group_id] = group_config
+            refreshed[group_id] = len(slots)
+        except Exception as e:
+            errors[group_id] = f"{type(e).__name__}: {e}"
+
+    new_yaml = yaml.safe_dump(
+        existing_data,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+    )
+    import os
+    import tempfile
+
+    schedule_path.parent.mkdir(parents=True, exist_ok=True)
+    directory = os.path.dirname(os.path.abspath(schedule_path))
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=directory,
+        prefix=".schedule-",
+        suffix=".yaml.tmp",
+    )
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_file:
+            tmp_file.write(new_yaml)
+            tmp_file.flush()
+            os.fsync(tmp_file.fileno())
+        os.replace(tmp_path, schedule_path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
+        raise
+
+    return {
+        "course_id": course_id,
+        "filename": schedule_path.name,
+        "refreshed": refreshed,
+        "errors": errors,
+    }
+
+
 def iter_schedule_files(
     schedules_dir: str | Path = "schedules",
 ) -> Iterator[tuple[str, Path]]:
@@ -205,6 +341,8 @@ __all__ = [
     # factory + helpers
     'parse_schedule_file',
     'load_schedule_for_group',
+    'load_course_groups',
+    'refresh_all_groups',
     'iter_schedule_files',
     'warn_about_schedule',
     # constants re-exported for tests

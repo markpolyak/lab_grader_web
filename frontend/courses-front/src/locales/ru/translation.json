@@ -247,38 +247,22 @@
   },
   "schedule": {
     "title": "Расписание",
-    "selectGroup": "Группа",
     "refreshButton": "Получить расписание",
     "refreshing": "Обновление…",
-    "previewButton": "Превью на 7 дней",
-    "refreshedOk": "Расписание обновлено: {{count}} слотов",
-    "fetchedSlots": "Полученные слоты",
-    "previewTitle": "Сессии группы {{group}} на ближайшие 7 дней",
-    "noSessions": "На ближайшие 7 дней сессий нет.",
-    "maxStudents": "Макс. студентов",
-    "multiLabs": "Несколько лаб",
-    "close": "Закрыть",
-    "labs": {
-      "all": "все",
-      "closed": "закрыт"
+    "refreshedOk": "Обновлено групп: {{ok}}, ошибок: {{err}}",
+    "status": {
+      "ok": "OK",
+      "error": "Ошибка"
     },
     "columns": {
-      "id": "ID слота",
-      "day": "День",
-      "date": "Дата",
-      "time": "Время",
-      "slot": "Слот",
-      "subject": "Предмет",
-      "labs": "Лабы",
-      "room": "Аудитория",
-      "teacher": "Преподаватель",
-      "window": "Окно очереди"
+      "group": "Группа",
+      "slotsCount": "Слотов",
+      "status": "Статус",
+      "error": "Ошибка"
     },
     "errors": {
-      "noGroup": "Не выбрана группа",
-      "groupsFailed": "Не удалось загрузить список групп",
-      "refreshFailed": "Не удалось получить расписание",
-      "previewFailed": "Не удалось загрузить превью"
+      "loadGroupsFailed": "Не удалось загрузить список групп",
+      "refreshFailed": "Не удалось получить расписание"
     }
   }
 }

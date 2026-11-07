@@ -82,10 +82,11 @@ from grading.schedule import (
     ScheduleError,
     ScheduleSource,
     ScheduledSession,
-    GuapScheduleSource,
     ManualScheduleSource,
     parse_schedule_file,
     load_schedule_for_group,
+    load_course_groups,
+    refresh_all_groups,
     iter_schedule_files,
     warn_about_schedule,
     known_sources as known_schedule_sources,
@@ -2589,111 +2590,6 @@ def schedule_edit_put(
     return {"detail": "Расписание сохранено", "filename": os.path.basename(path)}
 
 
-@app.post("/admin/courses/{course_id}/groups/{group_id}/schedule/refresh")
-@limiter.limit("5/minute")
-def schedule_refresh(
-    request: Request,
-    course_id: str,
-    group_id: str,
-    admin: str = Depends(require_admin),
-):
-    """Pull fresh data from GUAP for ONE group and write it back into the
-    course's schedule YAML file (which holds all groups).
-
-    What it does:
-      1. Reads the existing schedules/<course_id>.yaml (if it exists) to
-         preserve all other groups + corrections + queue_settings + settings.
-      2. Reads the target group's `guap_group_id` from the existing file,
-         or defaults to group_id itself if the group is new.
-      3. Calls GuapScheduleSource.fetch_raw() — runs suai_rasp dump.
-      4. Converts lessons to YAML slot dicts via to_yaml_sessions().
-      5. Replaces `groups.<group_id>.slots` with the fresh data, leaves
-         everything else untouched (other groups, corrections, settings).
-      6. Writes the file atomically.
-
-    If the file doesn't exist yet, this creates it with one group.
-    If the group doesn't exist in the file yet, this adds it.
-
-    Returns the new slots so the frontend can show what changed.
-    """
-    path = _schedule_path_for_course(course_id)
-
-    # Read existing file (if any) — preserve other groups + corrections.
-    existing_data: dict = {}
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                existing_data = yaml.safe_load(f) or {}
-            if not isinstance(existing_data, dict):
-                existing_data = {}
-        except yaml.YAMLError as e:
-            # The existing file is corrupt (e.g. contains Python object tags
-            # from a previous buggy version). Don't crash — start fresh,
-            # log a warning, the new refresh will overwrite it.
-            logger.warning("Schedule file %s is corrupt (%s); starting fresh.", path, e)
-            existing_data = {}
-
-    groups = existing_data.setdefault('groups', {})
-    if not isinstance(groups, dict):
-        raise HTTPException(
-            status_code=500,
-            detail="`groups` в файле расписания должна быть маппингом."
-        )
-
-    group_cfg = groups.get(group_id) or {}
-    if not isinstance(group_cfg, dict):
-        group_cfg = {}
-
-    # Find the GUAP group code.
-    guap_group_code = group_cfg.get('guap_group_id') or group_id
-
-    try:
-        src = GuapScheduleSource(
-            group_code=str(guap_group_code),
-            snapshot_path="data/schedule.json",
-            course_id=course_id,
-        )
-        raw = src.fetch_raw(str(guap_group_code))
-        new_slots = src.to_yaml_sessions(raw)
-    except ScheduleConfigError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"GUAP fetch failed: {type(e).__name__}: {e}"
-        )
-
-    # Update only this group's slots. Keep everything else as-is:
-    # other groups, corrections, queue_settings, auto_open/close, etc.
-    group_cfg['slots'] = new_slots
-    group_cfg.setdefault('source', 'guap')
-    group_cfg['guap_group_id'] = str(guap_group_code)
-    group_cfg.setdefault('timezone', 'UTC+3')
-    group_cfg.setdefault('auto_open_minutes_before', 15)
-    group_cfg.setdefault('auto_close_minutes_after', 10)
-    groups[group_id] = group_cfg
-    existing_data['groups'] = groups
-    existing_data.setdefault('course-id', course_id)
-
-    # safe_dump refuses to serialize Python objects (no !!python/object: tags),
-    # so even if some Ref sneaks through, we get a clean error instead of
-    # writing a file that safe_load can't read back.
-    new_yaml = yaml.safe_dump(existing_data, allow_unicode=True,
-                              sort_keys=False, default_flow_style=False)
-    _write_file_atomically(path, new_yaml)
-
-    logger.info("Schedule refreshed for course=%s group=%s: %d slots",
-                course_id, group_id, len(new_slots))
-
-    return {
-        "detail": "Расписание обновлено",
-        "filename": os.path.basename(path),
-        "group_id": group_id,
-        "slots_count": len(new_slots),
-        "slots": new_slots,  # so the frontend can show the diff
-    }
-
-
 @app.get("/admin/courses/{course_id}/groups/{group_id}/schedule/sessions")
 @limiter.limit("60/minute")
 def schedule_sessions(
@@ -2743,3 +2639,52 @@ def schedule_sessions(
             for s in sessions
         ],
     }
+
+
+@app.post("/admin/courses/{course_id}/schedule/refresh-all")
+@limiter.limit("5/minute")
+def schedule_refresh_all(
+    request: Request,
+    course_id: str,
+    admin: str = Depends(require_admin),
+):
+    """Refresh every configured group and preserve its teacher-edited settings."""
+    try:
+        result = refresh_all_groups(
+            course_id=course_id,
+            courses_dir=COURSES_DIR,
+            schedules_dir=SCHEDULES_DIR,
+            snapshot_path="data/schedule.json",
+        )
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Refresh failed: {type(e).__name__}: {e}",
+        )
+
+    logger.info(
+        "Schedule refreshed for course=%s by admin=%s: %d ok, %d errors",
+        course_id,
+        admin,
+        len(result["refreshed"]),
+        len(result["errors"]),
+    )
+    status_code = 200 if not result["errors"] else 207
+    return JSONResponse(status_code=status_code, content=result)
+
+
+@app.get("/admin/courses/{course_id}/schedule/groups")
+@limiter.limit("60/minute")
+def schedule_groups(
+    request: Request,
+    course_id: str,
+    admin: str = Depends(require_admin),
+):
+    """Return configured course groups for the schedule preview selector."""
+    try:
+        groups = load_course_groups(course_id, courses_dir=COURSES_DIR)
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"course_id": course_id, "groups": groups}

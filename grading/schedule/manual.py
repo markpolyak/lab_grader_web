@@ -205,7 +205,7 @@ def _validate_correction(c: dict, where: str) -> None:
 def _validate_group(group_id: str, group_cfg: dict, where: str) -> None:
     """Validate one group's block: source, slots, corrections."""
     if not isinstance(group_cfg, dict):
-        raise ScheduleConfigError(f"{where}: group must be a dict")
+        raise ScheduleConfigError(f"{where}: group must be a mapping")
 
     slots = group_cfg.get('slots')
     if not isinstance(slots, list):
