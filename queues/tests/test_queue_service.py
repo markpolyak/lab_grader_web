@@ -93,6 +93,49 @@ def test_refresh_preserves_queue_entries_and_manual_state():
     assert generate(service, doc)["os"].lessons[0] is original
 
 
+def test_week_rollover_retains_old_queue_and_is_repeatable():
+    service = QueueService()
+    doc = document({"2026-11-09": [item()], "2026-11-16": [item()]})
+    old = generate(service, doc)["os"].lessons[0]
+    old.queue.closed = False
+    entry = old.queue.add_entry(Student("Иван", "Иванов", "", "ivan"), "1")
+    next_monday = MONDAY + timedelta(days=7)
+    new = service.generate_week(courses(), [doc], week_start=next_monday)["os"].lessons[0]
+    assert new.id != old.id
+    assert new.queue.closed and not new.queue.entries
+    assert service._lessons[old.id] is old
+    assert old.queue.entries == [entry]
+    assert not old.queue.closed
+    assert service.generate_week(courses(), [doc], week_start=next_monday)["os"].lessons[0] is new
+    assert len(service._lessons) == 2
+    # A cancelled lesson is removed from the current view, but retained in memory.
+    assert service.generate_week(courses(), [document({})], week_start=next_monday)["os"].lessons == []
+    assert service._lessons[new.id] is new
+    assert service._lessons[old.id].queue.entries == [entry]
+
+
+def test_restart_restores_lessons_with_empty_queues():
+    doc = document()
+    original = generate(QueueService(), doc)["os"].lessons[0]
+    original.queue.closed = False
+    original.queue.add_entry(Student("Иван", "Иванов", "", "ivan"), "1")
+    restored = generate(QueueService(), doc)["os"].lessons[0]
+    assert restored.id == original.id
+    assert restored.queue.closed and not restored.queue.entries
+
+
+def test_parallel_refreshes_do_not_replace_queue_objects():
+    from concurrent.futures import ThreadPoolExecutor
+
+    service = QueueService()
+    doc = document()
+    original = generate(service, doc)["os"].lessons[0]
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: generate(service, deepcopy(doc)), range(20)))
+    assert all(result["os"].lessons[0] is original for result in results)
+    assert len(service._lessons) == 1
+
+
 def test_duplicates_merge_but_distinct_kind_and_time_have_their_own_queue():
     service = QueueService()
     doc = document({"2026-11-09": [

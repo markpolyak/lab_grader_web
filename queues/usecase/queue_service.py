@@ -17,6 +17,11 @@ class QueueService:
         self._lock = RLock()
 
     def load_saved_week(self, courses, directory="schedule", *, week_start=None):
+        # Serialize file reads and publication with parser callbacks and HTTP reloads.
+        with self._lock:
+            return self._load_saved_week(courses, directory, week_start=week_start)
+
+    def _load_saved_week(self, courses, directory, *, week_start):
         documents = [
             yaml.safe_load(path.read_text(encoding="utf-8"))
             for path in sorted(Path(directory).glob("suai/*/*.yaml"))
@@ -24,6 +29,10 @@ class QueueService:
         return self.generate_week(courses, documents, week_start=week_start)
 
     def generate_week(self, courses, documents, *, week_start=None):
+        with self._lock:
+            return self._generate_week(courses, documents, week_start=week_start)
+
+    def _generate_week(self, courses, documents, *, week_start):
         if week_start is None:
             today = datetime.now(ZoneInfo("Europe/Moscow")).date()
             week_start = today - timedelta(days=today.weekday())
@@ -88,5 +97,7 @@ class QueueService:
                     lesson.starts_at, lesson.groups, lesson.kind,
                 ))
                 
+            # Only publish the current week. Historical and vanished lessons stay
+            # in _lessons with their original queues until archiving is implemented.
             self.schedules = schedules
             return dict(schedules)
