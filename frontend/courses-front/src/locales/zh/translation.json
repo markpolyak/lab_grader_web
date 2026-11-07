@@ -247,5 +247,41 @@
       "closed": "提交已截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。",
       "closedAt": "提交已于 {{moment}} 截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。"
     }
+  },
+  "schedule": {
+    "title": "课程表",
+    "selectGroup": "小组",
+    "refreshButton": "获取课程表",
+    "refreshing": "刷新中…",
+    "previewButton": "预览未来7天",
+    "refreshedOk": "课程表已更新：{{count}} 个时段",
+    "fetchedSlots": "已获取时段",
+    "previewTitle": "小组 {{group}} 未来7天的会话",
+    "noSessions": "未来7天没有会话。",
+    "maxStudents": "最多学生",
+    "multiLabs": "多个实验",
+    "close": "关闭",
+    "labs": {
+      "all": "全部",
+      "closed": "已关闭"
+    },
+    "columns": {
+      "id": "时段ID",
+      "day": "星期",
+      "date": "日期",
+      "time": "时间",
+      "slot": "时段",
+      "subject": "科目",
+      "labs": "实验",
+      "room": "教室",
+      "teacher": "教师",
+      "window": "排队窗口"
+    },
+    "errors": {
+      "noGroup": "未选择小组",
+      "groupsFailed": "无法加载小组列表",
+      "refreshFailed": "获取课程表失败",
+      "previewFailed": "加载预览失败"
+    }
   }
 }

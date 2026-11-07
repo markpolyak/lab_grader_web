@@ -77,6 +77,19 @@ from grading.course_index import (
     iter_course_configs as _iter_course_configs,
     load_course_index as _load_course_index,
 )
+from grading.schedule import (
+    ScheduleConfigError,
+    ScheduleError,
+    ScheduleSource,
+    ScheduledSession,
+    GuapScheduleSource,
+    ManualScheduleSource,
+    parse_schedule_file,
+    load_schedule_for_group,
+    iter_schedule_files,
+    warn_about_schedule,
+    known_sources as known_schedule_sources,
+)
 import tempfile
 
 # Configure logging to both file and console
@@ -386,6 +399,13 @@ if not validate_course_index():
 for _collision in check_token_collisions(SECRET_KEY, iter_course_configs()):
     logger.error(f"Конфликт секретных ссылок: {_collision}")
 
+# Path to the schedules/ directory, mirroring COURSES_DIR.
+SCHEDULES_DIR = "schedules"
+
+# Validate every schedules/*.yaml file at startup. Bad files are logged
+# but don't crash the app — same pattern as warn_about_join_links.
+warn_about_schedule(SCHEDULES_DIR)
+
 # Mount static files for course logos
 LOGOS_DIR = os.path.join(COURSES_DIR, "logos")
 if os.path.exists(LOGOS_DIR):
@@ -404,6 +424,13 @@ class StudentRegistration(BaseModel):
     surname: str = Field(..., min_length=1)
     patronymic: str = ""
     github: str = Field(..., min_length=1)
+
+
+class ScheduleEditRequest(BaseModel):
+    """Body of PUT /admin/courses/{course_id}/schedule/edit — raw YAML text
+    from the CodeMirror editor in the admin UI. One file holds all groups
+    of the course."""
+    content: str
 
 
 @app.get("/")
@@ -2470,4 +2497,249 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
         "detail": "Курс успешно загружен и добавлен в индекс",
         "course_id": course_id,
         "filename": file.filename
+    }
+
+
+def _schedule_path_for_course(course_id: str) -> str:
+    """Convention: schedule file for course X is schedules/X.yaml.
+    One file holds all groups of the course."""
+    return os.path.join(SCHEDULES_DIR, f"{course_id}.yaml")
+
+
+def _load_schedule_for_course(course_id: str) -> dict[str, ManualScheduleSource]:
+    """Load and parse the schedule file for a course. Returns one source
+    per group in the file. Raises HTTPException on file/parse errors so
+    the admin endpoint returns a clean 400/404 instead of a 500."""
+    path = _schedule_path_for_course(course_id)
+    if not os.path.exists(path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Файл расписания не найден: {path}. "
+                   "Нажмите «Обновить из ГУАП», чтобы создать его."
+        )
+    try:
+        return parse_schedule_file(path, course_id=course_id)
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/admin/courses/{course_id}/schedule/edit")
+@limiter.limit("30/minute")
+def schedule_edit_get(
+    request: Request,
+    course_id: str,
+    admin: str = Depends(require_admin),
+):
+    """Return the raw YAML of a course's schedule file, for the CodeMirror
+    editor in the admin UI. Same shape as /courses/{id}/edit. The file
+    contains ALL groups of the course; the frontend can show a group
+    selector that scrolls/filters within the editor."""
+    path = _schedule_path_for_course(course_id)
+    if not os.path.exists(path):
+        raise HTTPException(
+            status_code=404,
+            detail=f"Файл расписания не найден: {path}"
+        )
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return {"filename": os.path.basename(path), "content": content}
+
+
+@app.put("/admin/courses/{course_id}/schedule/edit")
+@limiter.limit("20/minute")
+def schedule_edit_put(
+    request: Request,
+    course_id: str,
+    data: ScheduleEditRequest,
+    admin: str = Depends(require_admin),
+):
+    """Save the schedule YAML edited in the admin UI. Validates structure
+    before writing — same atomic-write pattern as PUT /courses/{id}/edit.
+
+    The file holds all groups of the course; the teacher edits the whole
+    thing in one editor. If the file doesn't exist yet, this creates it.
+    """
+    path = _schedule_path_for_course(course_id)
+
+    # Parse first — never write invalid YAML to disk.
+    try:
+        yaml.safe_load(data.content)
+    except yaml.YAMLError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Ошибка в YAML формате: {e}"
+        )
+
+    # Validate via the same parser that runs at startup.
+    # Write to a temp file so parse_schedule_file can read it back.
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".yaml", delete=False, encoding="utf-8"
+    ) as tmp:
+        tmp.write(data.content)
+        tmp_path = tmp.name
+    try:
+        parse_schedule_file(tmp_path, course_id=course_id)
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        os.unlink(tmp_path)
+
+    _write_file_atomically(path, data.content)
+    logger.info("Schedule for course=%s updated by admin %s", course_id, admin)
+    return {"detail": "Расписание сохранено", "filename": os.path.basename(path)}
+
+
+@app.post("/admin/courses/{course_id}/groups/{group_id}/schedule/refresh")
+@limiter.limit("5/minute")
+def schedule_refresh(
+    request: Request,
+    course_id: str,
+    group_id: str,
+    admin: str = Depends(require_admin),
+):
+    """Pull fresh data from GUAP for ONE group and write it back into the
+    course's schedule YAML file (which holds all groups).
+
+    What it does:
+      1. Reads the existing schedules/<course_id>.yaml (if it exists) to
+         preserve all other groups + corrections + queue_settings + settings.
+      2. Reads the target group's `guap_group_id` from the existing file,
+         or defaults to group_id itself if the group is new.
+      3. Calls GuapScheduleSource.fetch_raw() — runs suai_rasp dump.
+      4. Converts lessons to YAML slot dicts via to_yaml_sessions().
+      5. Replaces `groups.<group_id>.slots` with the fresh data, leaves
+         everything else untouched (other groups, corrections, settings).
+      6. Writes the file atomically.
+
+    If the file doesn't exist yet, this creates it with one group.
+    If the group doesn't exist in the file yet, this adds it.
+
+    Returns the new slots so the frontend can show what changed.
+    """
+    path = _schedule_path_for_course(course_id)
+
+    # Read existing file (if any) — preserve other groups + corrections.
+    existing_data: dict = {}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                existing_data = yaml.safe_load(f) or {}
+            if not isinstance(existing_data, dict):
+                existing_data = {}
+        except yaml.YAMLError as e:
+            # The existing file is corrupt (e.g. contains Python object tags
+            # from a previous buggy version). Don't crash — start fresh,
+            # log a warning, the new refresh will overwrite it.
+            logger.warning("Schedule file %s is corrupt (%s); starting fresh.", path, e)
+            existing_data = {}
+
+    groups = existing_data.setdefault('groups', {})
+    if not isinstance(groups, dict):
+        raise HTTPException(
+            status_code=500,
+            detail="`groups` в файле расписания должна быть маппингом."
+        )
+
+    group_cfg = groups.get(group_id) or {}
+    if not isinstance(group_cfg, dict):
+        group_cfg = {}
+
+    # Find the GUAP group code.
+    guap_group_code = group_cfg.get('guap_group_id') or group_id
+
+    try:
+        src = GuapScheduleSource(
+            group_code=str(guap_group_code),
+            snapshot_path="data/schedule.json",
+            course_id=course_id,
+        )
+        raw = src.fetch_raw(str(guap_group_code))
+        new_slots = src.to_yaml_sessions(raw)
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"GUAP fetch failed: {type(e).__name__}: {e}"
+        )
+
+    # Update only this group's slots. Keep everything else as-is:
+    # other groups, corrections, queue_settings, auto_open/close, etc.
+    group_cfg['slots'] = new_slots
+    group_cfg.setdefault('source', 'guap')
+    group_cfg['guap_group_id'] = str(guap_group_code)
+    group_cfg.setdefault('timezone', 'UTC+3')
+    group_cfg.setdefault('auto_open_minutes_before', 15)
+    group_cfg.setdefault('auto_close_minutes_after', 10)
+    groups[group_id] = group_cfg
+    existing_data['groups'] = groups
+    existing_data.setdefault('course-id', course_id)
+
+    # safe_dump refuses to serialize Python objects (no !!python/object: tags),
+    # so even if some Ref sneaks through, we get a clean error instead of
+    # writing a file that safe_load can't read back.
+    new_yaml = yaml.safe_dump(existing_data, allow_unicode=True,
+                              sort_keys=False, default_flow_style=False)
+    _write_file_atomically(path, new_yaml)
+
+    logger.info("Schedule refreshed for course=%s group=%s: %d slots",
+                course_id, group_id, len(new_slots))
+
+    return {
+        "detail": "Расписание обновлено",
+        "filename": os.path.basename(path),
+        "group_id": group_id,
+        "slots_count": len(new_slots),
+        "slots": new_slots,  # so the frontend can show the diff
+    }
+
+
+@app.get("/admin/courses/{course_id}/groups/{group_id}/schedule/sessions")
+@limiter.limit("60/minute")
+def schedule_sessions(
+    request: Request,
+    course_id: str,
+    group_id: str,
+    days: int = 7,
+    admin: str = Depends(require_admin),
+):
+    """Preview: list upcoming sessions for one group, after applying corrections.
+
+    Used by the admin UI to show "what's coming this week" without the
+    teacher having to read the YAML mentally. Not used by the queue itself
+    (the queue calls list_sessions directly)."""
+    source = load_schedule_for_group(course_id, group_id, SCHEDULES_DIR)
+    if source is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Группа {group_id!r} не найдена в расписании курса "
+                   f"{course_id!r} (файл {_schedule_path_for_course(course_id)})."
+        )
+    # Course timezone would normally come from course config; default to MSK.
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone(timedelta(hours=3))).replace(tzinfo=None)
+    since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    until = since + timedelta(days=days)
+    sessions = list(source.list_sessions(group_id, since, until))
+    return {
+        "course_id": course_id,
+        "group_id": group_id,
+        "since": since.isoformat(),
+        "until": until.isoformat(),
+        "queue_settings": source.queue_settings,
+        "sessions": [
+            {
+                "slot_id": s.slot_id,
+                "subject": s.subject,
+                "starts_at": s.starts_at.isoformat(),
+                "ends_at": s.ends_at.isoformat(),
+                "auto_open_at": s.auto_open_at.isoformat(),
+                "auto_close_at": s.auto_close_at.isoformat(),
+                "room": s.room,
+                "teacher": s.teacher,
+                "note": s.note,
+                "allowed_lab_ids": s.allowed_lab_ids,  # None=all, []=closed, [...] = only these
+            }
+            for s in sessions
+        ],
     }
