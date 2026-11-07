@@ -124,6 +124,8 @@ from queues.event.websocket import websocketService
 from queues.parser.parser import ScheduleParser
 from queues.repositories.storage.file import FileQueueRepository
 from queues.usecase.queue_service import QueueService
+from queues.usecase.queue_history_service import QueueHistoryService
+from queues.repositories.storage.google import GoogleRepo
 from apscheduler.events import EVENT_JOB_EXECUTED
 from contextlib import asynccontextmanager
 import asyncio
@@ -176,7 +178,18 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     schedule_dir = os.getenv("SCHEDULE_DIR", "schedule")
-    queue_service = QueueService(FileQueueRepository())
+    history_sheet = os.getenv("QUEUE_HISTORY_SPREADSHEET_ID", "").strip()
+    history = GoogleRepo(
+        sheets_client, history_sheet,
+    ) if history_sheet else None
+    history_by_course = {
+        course_id: GoogleRepo(sheets_client, spreadsheet_id)
+        for course_id, course in iter_course_configs()
+        if (spreadsheet_id := course.get("google", {}).get("queue-history-spreadsheet"))
+    }
+    queue_service = QueueService()
+    history_service = QueueHistoryService(queue_service, history, history_by_course=history_by_course)
+    app.state.queue_history_service = history_service
     week_start = os.getenv("QUEUE_WEEK_START")
 
     def load_queue_schedules():
@@ -207,6 +220,23 @@ async def lifespan(app: FastAPI):
         id="queue-schedule-sync", max_instances=1, coalesce=True,
         misfire_grace_time=60,
     )
+    if history is not None or history_by_course:
+        loop = asyncio.get_running_loop()
+
+        def archive_queues(retry_only=False):
+            asyncio.run_coroutine_threadsafe(
+                history_service.archive_finished(retry_only=retry_only), loop,
+            ).result()
+
+        parser.scheduler.add_job(
+            archive_queues, "cron", hour=23, minute=59, timezone="Europe/Moscow",
+            id="queue-history-daily", max_instances=1, coalesce=True,
+            misfire_grace_time=3600,
+        )
+        parser.scheduler.add_job(
+            archive_queues, "interval", hours=1, kwargs={"retry_only": True},
+            id="queue-history-retry", max_instances=1, coalesce=True,
+        )
     configs = parser.load_configs(os.getenv("SCHEDULE_CONFIG", "schedule/index.yaml"))
     try:
         parser.start(configs)
@@ -768,6 +798,7 @@ class CourseLessonResponse(BaseModel):
 
 
 class CourseLessonsResponse(BaseModel):
+    schedule_id: uuid.UUID
     course_id: str
     course_name: str
     week_start: date
@@ -854,7 +885,25 @@ def _get_current_schedule(request: Request, course_id: str):
         if schedule is None:
             raise HTTPException(status_code=404, detail="Расписание очередей для этого курса не настроено")
 
-    return service, schedule
+    return {
+        "course_id": schedule.course_id,
+        "schedule_id": schedule.id,
+        "course_name": schedule.course_name,
+        "week_start": schedule.week_start,
+        "week_end": schedule.week_start + timedelta(days=6),
+        "lessons": [
+            {
+                "id": lesson.id,
+                "starts_at": lesson.starts_at,
+                "ends_at": lesson.ends_at,
+                "groups": lesson.groups,
+                "kind": lesson.kind,
+                "room": lesson.room,
+                "queue": {"closed": lesson.queue.closed, "entries_count": len(lesson.queue.entries)},
+            }
+            for lesson in sorted(schedule.lessons, key=lambda item: (item.starts_at, item.groups, item.kind))
+        ],
+    }
 
 
 @app.get("/admin/courses/{course_id}/queues", response_model=AdminQueuesResponse)

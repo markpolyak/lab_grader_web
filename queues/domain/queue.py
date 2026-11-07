@@ -8,6 +8,7 @@ class Queue:
     def __init__(self, *, closed: bool = True) -> None:
         self.closed = closed
         self.entries: list[QueueEntry] = []
+        self._archiving = False
 
     def add_entry(
         self,
@@ -17,12 +18,8 @@ class Queue:
         *,
         active_entry_ids: set[UUID] | None = None,
     ) -> QueueEntry:
-        """Добавить запись в очередь.
-
-        ``active_entry_ids`` ограничивает проверку дубликата активными
-        записями: завершённые и вышедшие не мешают записаться снова.
-        По умолчанию (None) проверяются все записи — прежнее поведение.
-        """
+        if self._archiving:
+            raise ValueError("Очередь сохраняется в историю")
         if self.closed:
             raise ValueError("Очередь закрыта для записи")
         if not lab_id.strip():
@@ -52,6 +49,8 @@ class Queue:
         self, *, full_name: str | None = None, github: str | None = None
     ) -> bool:
         """Уступить место студенту ниже."""
+        if self._archiving:
+            raise ValueError("Очередь сохраняется в историю")
         index = self._find_index(full_name=full_name, github=github)
         if index == len(self.entries) - 1:
             return False
