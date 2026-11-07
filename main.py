@@ -17,7 +17,8 @@ import uuid
 import base64
 import logging
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from urllib.parse import quote, urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -81,6 +82,8 @@ from grading.course_index import (
 import tempfile
 from queues.event.websocket import websocketService
 from queues.parser.parser import ScheduleParser
+from queues.usecase.queue_service import QueueService
+from apscheduler.events import EVENT_JOB_EXECUTED
 from contextlib import asynccontextmanager
 import asyncio
 
@@ -131,7 +134,28 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    parser = ScheduleParser(os.getenv("SCHEDULE_DIR", "schedule"))
+    schedule_dir = os.getenv("SCHEDULE_DIR", "schedule")
+    queue_service = QueueService()
+    week_start = os.getenv("QUEUE_WEEK_START")
+
+    def load_queue_schedules():
+        queue_service.load_saved_week(
+            dict(iter_course_configs()), schedule_dir,
+            week_start=date.fromisoformat(week_start) if week_start else None,
+        )
+
+    load_queue_schedules()
+    app.state.queue_service = queue_service
+    parser = ScheduleParser(schedule_dir)
+
+    def after_schedule_refresh(event):
+        if event.job_id == "schedule-refresh":
+            try:
+                load_queue_schedules()
+            except Exception:
+                logger.exception("Не удалось обновить занятия и очереди; прежнее состояние сохранено")
+
+    parser.scheduler.add_listener(after_schedule_refresh, EVENT_JOB_EXECUTED)
     configs = parser.load_configs(os.getenv("SCHEDULE_CONFIG", "schedule/index.yaml"))
     parser.start(configs)
     try:
@@ -673,6 +697,84 @@ def get_course(request: Request, course_id: str):
         "status": course_info["_meta"]["status"],
         "priority": course_info["_meta"]["priority"],
     }
+
+class LessonQueueResponse(BaseModel):
+    closed: bool
+    entries_count: int
+
+
+class CourseLessonResponse(BaseModel):
+    id: uuid.UUID
+    starts_at: datetime
+    ends_at: datetime
+    groups: list[str]
+    kind: str
+    room: str | None
+    queue: LessonQueueResponse
+
+
+class CourseLessonsResponse(BaseModel):
+    course_id: str
+    course_name: str
+    week_start: date
+    week_end: date
+    lessons: list[CourseLessonResponse]
+
+
+@app.get("/courses/{course_id}/lessons", response_model=CourseLessonsResponse)
+@limiter.limit("100/minute")
+def get_course_lessons(request: Request, course_id: str):
+    """Занятия курса с понедельника по воскресенье текущей московской недели.
+
+    QUEUE_WEEK_START фиксирует неделю для локального тестирования. Читаются
+    только локальные выгрузки; этот запрос не обращается к Google или сайту вуза.
+    """
+    get_course_by_id(course_id)
+    service = getattr(request.app.state, "queue_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Сервис очередей ещё не готов")
+
+    today = datetime.now(ZoneInfo("Europe/Moscow")).date()
+    configured_week = os.getenv("QUEUE_WEEK_START")
+    week_start = date.fromisoformat(configured_week) if configured_week else today - timedelta(days=today.weekday())
+    schedule = service.schedules.get(course_id)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Расписание очередей для этого курса не настроено")
+
+    # A server may cross Monday before the next scheduled refresh. Reuse the
+    # saved export immediately, retaining existing lesson queues in the service.
+    if schedule.week_start != week_start:
+        try:
+            service.load_saved_week(
+                dict(iter_course_configs()), os.getenv("SCHEDULE_DIR", "schedule"),
+                week_start=week_start,
+            )
+        except Exception:
+            logger.exception("Не удалось загрузить занятия текущей недели")
+            raise HTTPException(status_code=503, detail="Расписание текущей недели временно недоступно")
+        schedule = service.schedules.get(course_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="Расписание очередей для этого курса не настроено")
+
+    return {
+        "course_id": schedule.course_id,
+        "course_name": schedule.course_name,
+        "week_start": schedule.week_start,
+        "week_end": schedule.week_start + timedelta(days=6),
+        "lessons": [
+            {
+                "id": lesson.id,
+                "starts_at": lesson.starts_at,
+                "ends_at": lesson.ends_at,
+                "groups": lesson.groups,
+                "kind": lesson.kind,
+                "room": lesson.room,
+                "queue": {"closed": lesson.queue.closed, "entries_count": len(lesson.queue.entries)},
+            }
+            for lesson in sorted(schedule.lessons, key=lambda item: (item.starts_at, item.groups, item.kind))
+        ],
+    }
+
 
 @app.delete("/courses/{course_id}")
 @limiter.limit("20/minute")
