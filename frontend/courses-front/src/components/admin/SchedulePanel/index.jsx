@@ -17,6 +17,9 @@ import {
   TextField,
   Typography,
 } from "@mui/material";
+import { ScheduleEditor } from "../ScheduleEditor";
+import { CorrectionsDialog } from "../CorrectionsDialog";
+import { SourceDialog } from "../SourceDialog";
 
 function errorDetail(data, fallback) {
   const detail = data && data.detail;
@@ -61,6 +64,10 @@ export const SchedulePanel = ({ courseId, open, onClose, autoRefresh = false }) 
   const [refreshing, setRefreshing] = useState(false);
   const [refreshResult, setRefreshResult] = useState(null);
   const [error, setError] = useState(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [correctionsOpen, setCorrectionsOpen] = useState(false);
+  const [correctionsGroupId, setCorrectionsGroupId] = useState("");
+  const [sourceOpen, setSourceOpen] = useState(false);
   const startedAutoRefresh = useRef(false);
 
   useEffect(() => {
@@ -160,104 +167,158 @@ export const SchedulePanel = ({ courseId, open, onClose, autoRefresh = false }) 
   const refreshErrorCount = refreshResult ? Object.keys(refreshResult.errors || {}).length : 0;
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
-      <DialogTitle>{t("schedule.title")}</DialogTitle>
-      <DialogContent>
-        <Typography variant="body2" sx={{ mb: 2 }}>
-          {t("schedule.groupSourcesDescription")}
-        </Typography>
-        <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 2 }}>
-          <TextField
-            size="small"
-            label={t("schedule.manualGroupInput")}
-            value={newGroup}
-            onChange={(event) => setNewGroup(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                handleSaveManualGroups();
-              }
-            }}
-          />
-          <Button
-            variant="outlined"
-            onClick={handleSaveManualGroups}
-            disabled={savingGroups || !newGroup.trim()}
-          >
-            {t("schedule.addManualGroup")}
-          </Button>
-        </Stack>
-        {manualGroups.length > 0 && (
-          <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
-            {manualGroups.map((id) => (
-              <Chip
-                key={id}
-                label={id}
-                onDelete={() => handleRemoveManualGroup(id)}
-                disabled={savingGroups}
-              />
-            ))}
+    <>
+      <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+        <DialogTitle>{t("schedule.title")}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" sx={{ mb: 2 }}>
+            {t("schedule.groupSourcesDescription")}
+          </Typography>
+          <Stack direction="row" spacing={1} alignItems="flex-start" sx={{ mb: 2 }}>
+            <TextField
+              size="small"
+              label={t("schedule.manualGroupInput")}
+              value={newGroup}
+              onChange={(event) => setNewGroup(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  handleSaveManualGroups();
+                }
+              }}
+            />
+            <Button
+              variant="outlined"
+              onClick={handleSaveManualGroups}
+              disabled={savingGroups || !newGroup.trim()}
+            >
+              {t("schedule.addManualGroup")}
+            </Button>
           </Stack>
-        )}
-        {warnings.map((warning) => (
-          <Alert key={warning} severity="warning" sx={{ mb: 1 }}>
-            {warning}
-          </Alert>
-        ))}
-        {error && (
-          <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 1 }}>
-            {error}
-          </Alert>
-        )}
-        {refreshResult && (
-          <Alert
-            severity={
-              refreshErrorCount === 0 && warnings.length === 0
-                ? "success"
-                : refreshedCount === 0
-                  ? "error"
-                  : "warning"
-            }
-            sx={{ mb: 1 }}
-          >
-            {t("schedule.refreshedOk", { ok: refreshedCount, err: refreshErrorCount })}
-          </Alert>
-        )}
-        {refreshing && <Alert severity="info" sx={{ mb: 1 }}>{t("schedule.refreshing")}</Alert>}
-        {refreshResult && (
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>{t("schedule.columns.group")}</TableCell>
-                <TableCell>{t("schedule.columns.slotsCount")}</TableCell>
-                <TableCell>{t("schedule.columns.status")}</TableCell>
-                <TableCell>{t("schedule.columns.error")}</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {groups.map((group) => {
-                const id = String(group.id);
-                const groupError = refreshResult.errors?.[id];
-                const slotCount = refreshResult.refreshed?.[id];
-                return (
-                  <TableRow key={id}>
-                    <TableCell>{id}</TableCell>
-                    <TableCell>{slotCount ?? "—"}</TableCell>
-                    <TableCell>
-                      {groupError ? t("schedule.status.error") : t("schedule.status.ok")}
-                    </TableCell>
-                    <TableCell>{groupError || "—"}</TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        )}
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={onClose}>{t("schedule.status.ok")}</Button>
-      </DialogActions>
-    </Dialog>
+          {manualGroups.length > 0 && (
+            <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap" sx={{ mb: 2 }}>
+              {manualGroups.map((id) => (
+                <Chip
+                  key={id}
+                  label={id}
+                  onDelete={() => handleRemoveManualGroup(id)}
+                  disabled={savingGroups}
+                />
+              ))}
+            </Stack>
+          )}
+          {warnings.map((warning) => (
+            <Alert key={warning} severity="warning" sx={{ mb: 1 }}>
+              {warning}
+            </Alert>
+          ))}
+          {error && (
+            <Alert severity="error" onClose={() => setError(null)} sx={{ mb: 1 }}>
+              {error}
+            </Alert>
+          )}
+          {refreshResult && (
+            <Alert
+              severity={
+                refreshErrorCount === 0 && warnings.length === 0
+                  ? "success"
+                  : refreshedCount === 0
+                    ? "error"
+                    : "warning"
+              }
+              sx={{ mb: 1 }}
+            >
+              {t("schedule.refreshedOk", { ok: refreshedCount, err: refreshErrorCount })}
+            </Alert>
+          )}
+          {refreshing && <Alert severity="info" sx={{ mb: 1 }}>{t("schedule.refreshing")}</Alert>}
+          {refreshResult && (
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>{t("schedule.columns.group")}</TableCell>
+                  <TableCell>{t("schedule.columns.slotsCount")}</TableCell>
+                  <TableCell>{t("schedule.columns.status")}</TableCell>
+                  <TableCell>{t("schedule.columns.error")}</TableCell>
+                  <TableCell>{t("schedule.columns.corrections")}</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {groups.map((group) => {
+                  const id = String(group.id);
+                  const groupError = refreshResult.errors?.[id];
+                  const slotCount = refreshResult.refreshed?.[id];
+                  return (
+                    <TableRow key={id}>
+                      <TableCell>{id}</TableCell>
+                      <TableCell>{slotCount ?? "—"}</TableCell>
+                      <TableCell>
+                        {groupError ? t("schedule.status.error") : t("schedule.status.ok")}
+                      </TableCell>
+                      <TableCell>{groupError || "—"}</TableCell>
+                      <TableCell>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          onClick={() => {
+                            setCorrectionsGroupId(id);
+                            setCorrectionsOpen(true);
+                          }}
+                        >
+                          {t("schedule.columns.corrections")}
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setSourceOpen(true)} variant="outlined">
+            {t("schedule.columns.source")}
+          </Button>
+          <Button onClick={() => setEditorOpen(true)} variant="outlined" sx={{ ml: "auto" }}>
+            {t("schedule.editor.title")}
+          </Button>
+          <Button onClick={onClose}>{t("schedule.status.ok")}</Button>
+        </DialogActions>
+      </Dialog>
+      <ScheduleEditor courseId={courseId} open={editorOpen} onClose={() => setEditorOpen(false)} />
+      <CorrectionsDialog
+        courseId={courseId}
+        groupId={correctionsGroupId}
+        open={correctionsOpen}
+        onClose={() => setCorrectionsOpen(false)}
+        onSaved={() => {
+          // Refresh groups list after corrections saved
+          fetchJson(`/api/v1/admin/courses/${encodeURIComponent(courseId)}/schedule/groups`)
+            .then((data) => {
+              const courseGroups = Array.isArray(data.groups) ? data.groups : [];
+              setGroups(courseGroups);
+              setManualGroups(Array.isArray(data.manual_groups) ? data.manual_groups : []);
+              setWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+            })
+            .catch((err) => setError(err.message || t("schedule.errors.loadGroupsFailed")));
+        }}
+      />
+      <SourceDialog
+        courseId={courseId}
+        open={sourceOpen}
+        onClose={() => setSourceOpen(false)}
+        onSaved={() => {
+          fetchJson(`/api/v1/admin/courses/${encodeURIComponent(courseId)}/schedule/groups`)
+            .then((data) => {
+              const courseGroups = Array.isArray(data.groups) ? data.groups : [];
+              setGroups(courseGroups);
+              setManualGroups(Array.isArray(data.manual_groups) ? data.manual_groups : []);
+              setWarnings(Array.isArray(data.warnings) ? data.warnings : []);
+            })
+            .catch((err) => setError(err.message || t("schedule.errors.loadGroupsFailed")));
+        }}
+      />
+    </>
   );
 };
 
