@@ -8,18 +8,57 @@ from zoneinfo import ZoneInfo
 
 import yaml
 
+from ..domain.err import (
+    AlreadyQueuedError,
+    EntryNotFoundError,
+    EntryNotOwnedError,
+    GroupNotAllowedError,
+    InvalidStateError,
+    QueueClosedError,
+    QueueEmptyError,
+    QueueNotFoundError,
+)
 from ..domain.lesson import Lesson
+from ..domain.queue_entry import QueueEntry
+from ..domain.queue_record import QueueEntryMetadata, QueueRecord
 from ..domain.schedule import Schedule
+from ..domain.status import DefenseResult, EntryStatus
+from ..repositories.mappers import (
+    ensure_entry_metadata,
+    group_ids,
+    record_from_lesson,
+    restore_record,
+    sync_record_with_lesson,
+)
+from ..repositories.storage.inmemory import InMemoryQueueRepository
+
+
+ACTIVE_STATUSES = frozenset({EntryStatus.WAITING, EntryStatus.CALLED})
+TERMINAL_STATUSES = frozenset(
+    {EntryStatus.FINISHED, EntryStatus.WITHDRAWN, EntryStatus.EXPIRED}
+)
+
+
+def _full_name(student) -> str:
+    return " ".join(
+        part for part in (student.surname, student.name, student.patronymic) if part
+    )
+
+
+def _now() -> datetime:
+    return datetime.now(ZoneInfo("Europe/Moscow"))
 
 
 class QueueService:
-    def __init__(self):
+    def __init__(self, repository=None):
+        self.repository = repository or InMemoryQueueRepository()
         self.schedules: dict[str, Schedule] = {}
         # Retain schedules of previous weeks and lessons removed from current YAML.
         self._schedules: dict[uuid.UUID, Schedule] = {}
         self._lessons: dict = {}
         self._archived_lesson_ids: set[uuid.UUID] = set()
         self._archive_week: date | None = None
+        self._records: dict = {}
         self._lock = RLock()
 
     def load_saved_week(self, courses, directory="schedule", *, week_start=None):
@@ -96,6 +135,7 @@ class QueueService:
                 self._archived_lesson_ids.clear()
                 self._archive_week = week_start
             for course_id, lessons in candidates.items():
+                schedule = schedules[course_id]
                 for lesson_id, candidate in lessons.items():
                     if lesson_id in self._archived_lesson_ids:
                         continue
@@ -105,8 +145,16 @@ class QueueService:
                         self._lessons[lesson_id] = lesson
                     elif not lesson.queue._archiving:
                         lesson.room = candidate.room
-                    schedules[course_id].lessons.append(lesson)
-                schedules[course_id].lessons.sort(key=lambda lesson: (
+
+                    record = self.repository.get(lesson_id)
+                    if record is None:
+                        record = record_from_lesson(schedule, lesson)
+                    else:
+                        record = restore_record(record, schedule, lesson)
+                    self._records[lesson_id] = record
+
+                    schedule.lessons.append(lesson)
+                schedule.lessons.sort(key=lambda lesson: (
                     lesson.starts_at, lesson.groups, lesson.kind,
                 ))
 
@@ -177,3 +225,216 @@ class QueueService:
                 if lesson.id in self._lessons and lesson.ends_at <= now
                 and not lesson.queue._archiving
             ]
+    def set_registration(self, lesson_id, *, closed: bool) -> QueueRecord:
+        """Открыть или закрыть запись в очередь (write-through)."""
+        with self._lock:
+            lesson = self._lessons.get(lesson_id)
+            record = self._records.get(lesson_id)
+            if lesson is None or record is None:
+                raise KeyError(f"Занятие {lesson_id} не найдено")
+            closed = bool(closed)
+            if lesson.queue.closed == closed:
+                return record
+            lesson.queue.closed = closed
+            return self.save_lesson(lesson_id)
+
+    def get_record(self, lesson_id) -> QueueRecord | None:
+        """Сохранённое состояние очереди занятия (только чтение)."""
+        with self._lock:
+            return self._records.get(lesson_id)
+
+    def save_lesson(self, lesson_id) -> QueueRecord:
+        """Сохранить состояние очереди занятия (write-through после мутации)."""
+        with self._lock:
+            record = self._records.get(lesson_id)
+            lesson = self._lessons.get(lesson_id)
+            if record is None or lesson is None:
+                raise KeyError(f"Занятие {lesson_id} не найдено")
+            schedule = self.schedules.get(record.course_id)
+            if schedule is None:
+                raise KeyError(f"Расписание курса {record.course_id} не найдено")
+
+            sync_record_with_lesson(record, schedule, lesson)
+            ensure_entry_metadata(record)
+            try:
+                saved = self.repository.save(record, expected_version=record.version)
+            except QueueNotFoundError:
+                saved = self.repository.create(record)
+            record.version = saved.version
+            self._records[lesson_id] = record
+            return record
+
+    def active_entry(self, course_id, github) -> tuple[QueueRecord, QueueEntry] | None:
+        """Активная запись студента (waiting/called) в пределах курса."""
+        query = github.strip().casefold()
+        with self._lock:
+            for record in self._records.values():
+                if record.course_id != course_id:
+                    continue
+                ensure_entry_metadata(record)
+                for entry in record.queue.entries:
+                    if (
+                        record.entry_metadata[entry.id].status in ACTIVE_STATUSES
+                        and entry.student.github.strip().casefold() == query
+                    ):
+                        return record, entry
+        return None
+
+    def join(self, lesson_id, eligible, *, now=None) -> QueueEntry:
+        """Записать студента в очередь занятия."""
+        with self._lock:
+            lesson = self._lessons.get(lesson_id)
+            record = self._records.get(lesson_id)
+            if lesson is None or record is None:
+                raise EntryNotFoundError(lesson_id)
+            if lesson.queue.closed:
+                raise QueueClosedError()
+            if eligible.group_id not in lesson.groups:
+                raise GroupNotAllowedError()
+
+            existing = self.active_entry(record.course_id, eligible.student.github)
+            if existing is not None:
+                raise AlreadyQueuedError(existing[1].id)
+
+            ensure_entry_metadata(record)
+            active_ids = {
+                entry.id
+                for entry in lesson.queue.entries
+                if record.entry_metadata[entry.id].status in ACTIVE_STATUSES
+            }
+            entry = lesson.queue.add_entry(
+                eligible.student,
+                eligible.lab_id,
+                eligible.lab_name,
+                active_entry_ids=active_ids,
+            )
+            record.entry_metadata[entry.id] = QueueEntryMetadata(
+                queue_id=record.id,
+                sequence=len(lesson.queue.entries),
+                status=EntryStatus.WAITING,
+            )
+            self.save_lesson(lesson_id)
+            return entry
+
+    def leave(self, course_id, entry_id, github, *, now=None) -> QueueEntry:
+        """Выйти из ожидающей записи; запись остаётся в истории."""
+        query = github.strip().casefold()
+        with self._lock:
+            for record in list(self._records.values()):
+                if record.course_id != course_id:
+                    continue
+                entry = next(
+                    (item for item in record.queue.entries if item.id == entry_id),
+                    None,
+                )
+                if entry is None:
+                    continue
+                if entry.student.github.strip().casefold() != query:
+                    raise EntryNotOwnedError()
+                ensure_entry_metadata(record)
+                metadata = record.entry_metadata[entry.id]
+                if metadata.status != EntryStatus.WAITING:
+                    raise InvalidStateError("Выйти можно только из ожидающей записи")
+                metadata.status = EntryStatus.WITHDRAWN
+                metadata.finished_at = now or _now()
+                self.save_lesson(record.id)
+                return entry
+        raise EntryNotFoundError(entry_id)
+
+    def call_next(self, lesson_id, *, now=None) -> QueueEntry:
+        """Вызвать первого ожидающего."""
+        with self._lock:
+            lesson = self._lessons.get(lesson_id)
+            record = self._records.get(lesson_id)
+            if lesson is None or record is None:
+                raise EntryNotFoundError(lesson_id)
+            ensure_entry_metadata(record)
+            waiting = [
+                entry
+                for entry in lesson.queue.entries
+                if record.entry_metadata[entry.id].status == EntryStatus.WAITING
+            ]
+            if not waiting:
+                raise QueueEmptyError()
+            entry = waiting[0]
+            metadata = record.entry_metadata[entry.id]
+            metadata.status = EntryStatus.CALLED
+            metadata.called_at = now or _now()
+            self.save_lesson(lesson_id)
+            return entry
+
+    def finish(
+        self, lesson_id, entry_id, outcome: DefenseResult, *, now=None
+    ) -> QueueEntry:
+        """Завершить вызванную запись с результатом защиты."""
+        with self._lock:
+            lesson = self._lessons.get(lesson_id)
+            record = self._records.get(lesson_id)
+            if lesson is None or record is None:
+                raise EntryNotFoundError(entry_id)
+            ensure_entry_metadata(record)
+            entry = next(
+                (item for item in lesson.queue.entries if item.id == entry_id), None
+            )
+            if entry is None:
+                raise EntryNotFoundError(entry_id)
+            metadata = record.entry_metadata[entry.id]
+            if metadata.status != EntryStatus.CALLED:
+                raise InvalidStateError("Завершить можно только вызванную запись")
+            metadata.status = EntryStatus.FINISHED
+            metadata.result = outcome
+            metadata.finished_at = now or _now()
+            self.save_lesson(lesson_id)
+            return entry
+
+    def history(
+        self,
+        course_id,
+        *,
+        group_id=None,
+        date_from=None,
+        date_to=None,
+        offset=0,
+        limit=50,
+    ) -> tuple[list[dict], int | None]:
+        """История терминальных записей курса, новые сверху."""
+        with self._lock:
+            records = {
+                record.id: record
+                for record in self.repository.list_by_course(course_id)
+            }
+            records.update(self._records)
+            items: list[dict] = []
+            for record in records.values():
+                if record.course_id != course_id:
+                    continue
+                if group_id is not None and group_id not in group_ids(record):
+                    continue
+                ensure_entry_metadata(record)
+                for entry in record.queue.entries:
+                    metadata = record.entry_metadata.get(entry.id)
+                    if metadata is None or metadata.status not in TERMINAL_STATUSES:
+                        continue
+                    finished_at = metadata.finished_at
+                    if finished_at is None:
+                        continue
+                    if date_from is not None and finished_at.date() < date_from:
+                        continue
+                    if date_to is not None and finished_at.date() > date_to:
+                        continue
+                    items.append({
+                        "queue_id": record.id,
+                        "lesson_starts_at": record.lesson_starts_at,
+                        "group_id": record.group_id,
+                        "github": entry.student.github,
+                        "full_name": _full_name(entry.student),
+                        "lab_id": entry.lab_id,
+                        "lab_name": entry.lab_name,
+                        "status": metadata.status,
+                        "result": metadata.result,
+                        "finished_at": finished_at,
+                    })
+            items.sort(key=lambda item: item["finished_at"], reverse=True)
+            page = items[offset:offset + limit]
+            next_offset = offset + limit if offset + limit < len(items) else None
+            return page, next_offset

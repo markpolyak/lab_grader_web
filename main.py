@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, WebSocket, WebSocketDisconnect, Query
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -79,9 +79,50 @@ from grading.course_index import (
     iter_course_configs as _iter_course_configs,
     load_course_index as _load_course_index,
 )
+from grading.queue_eligibility import (
+    LabNotFoundError,
+    LabNotPassedError,
+    SheetsUnavailableError,
+    StudentNotFoundError,
+    resolve_eligible_lab,
+    resolve_student,
+)
 import tempfile
+from queues.api.presenters import (
+    entry_action_response,
+    history_response,
+    queue_detail,
+    queues_response,
+    registration_response,
+    student_queue_entry,
+    student_queue_state,
+    waiting_position,
+)
+from queues.api.schemas import (
+    AdminQueueDetailResponse,
+    AdminQueuesResponse,
+    QueueEntryActionResponse,
+    QueueFinishRequest,
+    QueueHistoryResponse,
+    QueueJoinRequest,
+    QueueLeaveRequest,
+    QueueLeaveResponse,
+    QueueRegistrationRequest,
+    QueueRegistrationResponse,
+    StudentQueueStateResponse,
+)
+from queues.domain.err import (
+    AlreadyQueuedError,
+    EntryNotFoundError,
+    EntryNotOwnedError,
+    GroupNotAllowedError,
+    InvalidStateError,
+    QueueClosedError,
+    QueueEmptyError,
+)
 from queues.event.websocket import websocketService
 from queues.parser.parser import ScheduleParser
+from queues.repositories.storage.file import FileQueueRepository
 from queues.usecase.queue_service import QueueService
 from queues.usecase.queue_history_service import QueueHistoryService
 from queues.repositories.storage.google import GoogleRepo
@@ -773,10 +814,54 @@ def get_course_lessons(request: Request, course_id: str):
     QUEUE_WEEK_START фиксирует неделю для локального тестирования. Читаются
     только локальные выгрузки; этот запрос не обращается к Google или сайту вуза.
     """
-    get_course_by_id(course_id)
+    _, schedule = _get_current_schedule(request, course_id)
+
+    return {
+        "course_id": schedule.course_id,
+        "course_name": schedule.course_name,
+        "week_start": schedule.week_start,
+        "week_end": schedule.week_start + timedelta(days=6),
+        "lessons": [
+            {
+                "id": lesson.id,
+                "starts_at": lesson.starts_at,
+                "ends_at": lesson.ends_at,
+                "groups": lesson.groups,
+                "kind": lesson.kind,
+                "room": lesson.room,
+                "queue": {"closed": lesson.queue.closed, "entries_count": len(lesson.queue.entries)},
+            }
+            for lesson in sorted(schedule.lessons, key=lambda item: (item.starts_at, item.groups, item.kind))
+        ],
+    }
+
+
+def _get_queue_service(request: Request):
     service = getattr(request.app.state, "queue_service", None)
     if service is None:
         raise HTTPException(status_code=503, detail="Сервис очередей ещё не готов")
+    return service
+
+
+def _open_spreadsheet(course_info: dict):
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+    if not spreadsheet_id:
+        raise HTTPException(status_code=503, detail="SHEETS_UNAVAILABLE")
+    try:
+        return sheets_client().open_by_key(spreadsheet_id)
+    except Exception:
+        logger.exception("Не удалось открыть таблицу курса")
+        raise HTTPException(status_code=503, detail="SHEETS_UNAVAILABLE")
+
+
+def _get_current_schedule(request: Request, course_id: str):
+    """Расписание текущей московской недели с подгрузкой выгрузки при смене недели.
+
+    Общая точка для публичного /lessons и админских маршрутов очередей, чтобы
+    переход через понедельник вёл себя одинаково.
+    """
+    get_course_by_id(course_id)
+    service = _get_queue_service(request)
 
     today = datetime.now(ZoneInfo("Europe/Moscow")).date()
     configured_week = os.getenv("QUEUE_WEEK_START")
@@ -819,6 +904,294 @@ def get_course_lessons(request: Request, course_id: str):
             for lesson in sorted(schedule.lessons, key=lambda item: (item.starts_at, item.groups, item.kind))
         ],
     }
+
+
+@app.get("/admin/courses/{course_id}/queues", response_model=AdminQueuesResponse)
+@limiter.limit("60/minute")
+def admin_list_queues(
+    request: Request,
+    course_id: str,
+    group_id: str | None = None,
+    lesson_date: date | None = Query(None, alias="date"),
+    admin: str = Depends(require_admin),
+):
+    """Очереди занятий курса на текущую московскую неделю.
+
+    Только чтение: записи в Google Sheets не выполняются, персональные данные
+    студентов в ответ не попадают. ``queue_id`` совпадает с id занятия, пока
+    очередь живёт внутри Lesson.
+    """
+    _, schedule = _get_current_schedule(request, course_id)
+
+    lessons = list(schedule.lessons)
+    if group_id is not None:
+        lessons = [lesson for lesson in lessons if group_id in lesson.groups]
+    if lesson_date is not None:
+        lessons = [lesson for lesson in lessons if lesson.starts_at.date() == lesson_date]
+    lessons.sort(key=lambda item: (item.starts_at, item.groups, item.kind))
+
+    return queues_response(schedule, lessons)
+
+
+@app.get("/admin/courses/{course_id}/queues/{queue_id}", response_model=AdminQueueDetailResponse)
+@limiter.limit("60/minute")
+def admin_get_queue(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    admin: str = Depends(require_admin),
+):
+    """Снимок одной очереди: ожидающие, вызванные и итоги (только чтение)."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    record = service.get_record(lesson.id)
+    return queue_detail(schedule, lesson, record)
+
+
+@app.put(
+    "/admin/courses/{course_id}/queues/{queue_id}/registration",
+    response_model=QueueRegistrationResponse,
+)
+@limiter.limit("60/minute")
+def admin_set_queue_registration(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    body: QueueRegistrationRequest,
+    admin: str = Depends(require_admin),
+):
+    """Открыть или закрыть запись в очередь вручную."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        record = service.set_registration(lesson.id, closed=body.closed)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    return registration_response(lesson, record)
+
+
+@app.post(
+    "/admin/courses/{course_id}/queues/{queue_id}/call-next",
+    response_model=QueueEntryActionResponse,
+)
+@limiter.limit("60/minute")
+def admin_call_next(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    admin: str = Depends(require_admin),
+):
+    """Вызвать следующего ожидающего."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        entry = service.call_next(lesson.id)
+    except QueueEmptyError:
+        raise HTTPException(status_code=409, detail="QUEUE_EMPTY")
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    record = service.get_record(lesson.id)
+    metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    return entry_action_response(
+        entry, metadata, record.version if record is not None else 0
+    )
+
+
+@app.post(
+    "/admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}/finish",
+    response_model=QueueEntryActionResponse,
+)
+@limiter.limit("60/minute")
+def admin_finish_entry(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    body: QueueFinishRequest,
+    admin: str = Depends(require_admin),
+):
+    """Отметить результат защиты вызванного студента."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        entry = service.finish(lesson.id, entry_id, body.outcome)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+
+    record = service.get_record(lesson.id)
+    metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    return entry_action_response(
+        entry, metadata, record.version if record is not None else 0
+    )
+
+
+@app.get("/courses/{course_id}/queue", response_model=StudentQueueStateResponse)
+@limiter.limit("60/minute")
+def get_student_queue(
+    request: Request,
+    course_id: str,
+    github: str = Query(..., min_length=1),
+    group_id: str = Query(..., min_length=1),
+):
+    """Состояние студента: его активная запись и место в очереди."""
+    course_info = get_course_by_id(course_id)
+    service, _ = _get_current_schedule(request, course_id)
+    spreadsheet = _open_spreadsheet(course_info)
+
+    try:
+        student = resolve_student(course_info, spreadsheet, group_id, github)
+    except SheetsUnavailableError:
+        raise HTTPException(status_code=503, detail="SHEETS_UNAVAILABLE")
+    except StudentNotFoundError:
+        raise HTTPException(status_code=403, detail="STUDENT_NOT_FOUND")
+
+    found = service.active_entry(course_id, student.student.github)
+    if found is None:
+        return student_queue_state(
+            github=student.student.github,
+            group_id=student.group_id,
+            full_name=student.full_name,
+            entry=None,
+        )
+
+    record, entry = found
+    metadata = record.entry_metadata.get(entry.id)
+    position = waiting_position(record, entry.id)
+    return student_queue_state(
+        github=student.student.github,
+        group_id=student.group_id,
+        full_name=student.full_name,
+        entry=student_queue_entry(
+            entry, metadata, lesson_id=record.id, position=position
+        ),
+    )
+
+
+@app.post(
+    "/courses/{course_id}/queue/join",
+    response_model=StudentQueueStateResponse,
+    status_code=201,
+)
+@limiter.limit("30/minute")
+def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
+    """Встать в очередь на занятие."""
+    course_info = get_course_by_id(course_id)
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next(
+        (item for item in schedule.lessons if item.id == body.lesson_id), None
+    )
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="LESSON_NOT_FOUND")
+
+    spreadsheet = _open_spreadsheet(course_info)
+    try:
+        eligible = resolve_eligible_lab(
+            course_info, spreadsheet, body.github, body.lab_id, lesson.groups
+        )
+    except SheetsUnavailableError:
+        raise HTTPException(status_code=503, detail="SHEETS_UNAVAILABLE")
+    except StudentNotFoundError:
+        raise HTTPException(status_code=403, detail="STUDENT_NOT_FOUND")
+    except LabNotFoundError:
+        raise HTTPException(status_code=404, detail="LAB_NOT_FOUND")
+    except LabNotPassedError:
+        raise HTTPException(status_code=403, detail="LAB_NOT_PASSED")
+
+    try:
+        entry = service.join(lesson.id, eligible)
+    except QueueClosedError:
+        raise HTTPException(status_code=409, detail="QUEUE_CLOSED")
+    except GroupNotAllowedError:
+        raise HTTPException(status_code=403, detail="GROUP_NOT_ALLOWED")
+    except AlreadyQueuedError:
+        raise HTTPException(status_code=409, detail="ALREADY_QUEUED")
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="LESSON_NOT_FOUND")
+
+    record = service.get_record(lesson.id)
+    metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    position = waiting_position(record, entry.id) if record is not None else None
+    return student_queue_state(
+        github=eligible.student.github,
+        group_id=eligible.group_id,
+        full_name=eligible.full_name,
+        entry=student_queue_entry(
+            entry, metadata, lesson_id=lesson.id, position=position
+        ),
+    )
+
+
+@app.post("/courses/{course_id}/queue/leave", response_model=QueueLeaveResponse)
+@limiter.limit("30/minute")
+def leave_queue(request: Request, course_id: str, body: QueueLeaveRequest):
+    """Выйти из своей ожидающей записи."""
+    service, _ = _get_current_schedule(request, course_id)
+    try:
+        service.leave(course_id, body.entry_id, body.github)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
+    except EntryNotOwnedError:
+        raise HTTPException(status_code=403, detail="FORBIDDEN")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+    return {"left": True}
+
+
+@app.get(
+    "/admin/courses/{course_id}/queue-history",
+    response_model=QueueHistoryResponse,
+)
+@limiter.limit("60/minute")
+def admin_queue_history(
+    request: Request,
+    course_id: str,
+    group_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: str | None = None,
+    admin: str = Depends(require_admin),
+):
+    """История завершённых и отменённых записей курса."""
+    get_course_by_id(course_id)
+    service = _get_queue_service(request)
+
+    offset = 0
+    if cursor is not None:
+        try:
+            offset = int(cursor)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="INVALID_CURSOR")
+        if offset < 0:
+            raise HTTPException(status_code=422, detail="INVALID_CURSOR")
+
+    items, next_offset = service.history(
+        course_id,
+        group_id=group_id,
+        date_from=date_from,
+        date_to=date_to,
+        offset=offset,
+        limit=limit,
+    )
+    return history_response(
+        items, str(next_offset) if next_offset is not None else None
+    )
 
 
 @app.delete("/courses/{course_id}")
