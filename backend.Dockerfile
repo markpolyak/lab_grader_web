@@ -25,7 +25,7 @@ COPY main.py .
 COPY requirements.txt .
 COPY courses/ courses/
 COPY grading/ grading/
-COPY queue/ queue/
+COPY queues/ queues/
 
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
