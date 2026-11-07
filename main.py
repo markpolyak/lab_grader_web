@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, WebSocket, WebSocketDisconnect, Query
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -742,6 +742,34 @@ def get_course_lessons(request: Request, course_id: str):
     QUEUE_WEEK_START фиксирует неделю для локального тестирования. Читаются
     только локальные выгрузки; этот запрос не обращается к Google или сайту вуза.
     """
+    _, schedule = _get_current_schedule(request, course_id)
+
+    return {
+        "course_id": schedule.course_id,
+        "course_name": schedule.course_name,
+        "week_start": schedule.week_start,
+        "week_end": schedule.week_start + timedelta(days=6),
+        "lessons": [
+            {
+                "id": lesson.id,
+                "starts_at": lesson.starts_at,
+                "ends_at": lesson.ends_at,
+                "groups": lesson.groups,
+                "kind": lesson.kind,
+                "room": lesson.room,
+                "queue": {"closed": lesson.queue.closed, "entries_count": len(lesson.queue.entries)},
+            }
+            for lesson in sorted(schedule.lessons, key=lambda item: (item.starts_at, item.groups, item.kind))
+        ],
+    }
+
+
+def _get_current_schedule(request: Request, course_id: str):
+    """Расписание текущей московской недели с подгрузкой выгрузки при смене недели.
+
+    Общая точка для публичного /lessons и админских маршрутов очередей, чтобы
+    переход через понедельник вёл себя одинаково.
+    """
     get_course_by_id(course_id)
     service = getattr(request.app.state, "queue_service", None)
     if service is None:
@@ -769,22 +797,77 @@ def get_course_lessons(request: Request, course_id: str):
         if schedule is None:
             raise HTTPException(status_code=404, detail="Расписание очередей для этого курса не настроено")
 
+    return service, schedule
+
+
+class AdminQueueLessonResponse(BaseModel):
+    id: uuid.UUID
+    starts_at: datetime
+    ends_at: datetime
+    groups: list[str]
+    kind: str
+    room: str | None
+
+
+class AdminQueueSummaryResponse(BaseModel):
+    queue_id: uuid.UUID
+    lesson: AdminQueueLessonResponse
+    closed: bool
+    entries_count: int
+
+
+class AdminQueuesResponse(BaseModel):
+    course_id: str
+    course_name: str
+    week_start: date
+    week_end: date
+    queues: list[AdminQueueSummaryResponse]
+
+
+@app.get("/admin/courses/{course_id}/queues", response_model=AdminQueuesResponse)
+@limiter.limit("60/minute")
+def admin_list_queues(
+    request: Request,
+    course_id: str,
+    group_id: str | None = None,
+    lesson_date: date | None = Query(None, alias="date"),
+    admin: str = Depends(require_admin),
+):
+    """Очереди занятий курса на текущую московскую неделю.
+
+    Только чтение: записи в Google Sheets не выполняются, персональные данные
+    студентов в ответ не попадают. ``queue_id`` совпадает с id занятия, пока
+    очередь живёт внутри Lesson.
+    """
+    _, schedule = _get_current_schedule(request, course_id)
+
+    lessons = list(schedule.lessons)
+    if group_id is not None:
+        lessons = [lesson for lesson in lessons if group_id in lesson.groups]
+    if lesson_date is not None:
+        lessons = [lesson for lesson in lessons if lesson.starts_at.date() == lesson_date]
+    lessons.sort(key=lambda item: (item.starts_at, item.groups, item.kind))
+
     return {
         "course_id": schedule.course_id,
         "course_name": schedule.course_name,
         "week_start": schedule.week_start,
         "week_end": schedule.week_start + timedelta(days=6),
-        "lessons": [
+        "queues": [
             {
-                "id": lesson.id,
-                "starts_at": lesson.starts_at,
-                "ends_at": lesson.ends_at,
-                "groups": lesson.groups,
-                "kind": lesson.kind,
-                "room": lesson.room,
-                "queue": {"closed": lesson.queue.closed, "entries_count": len(lesson.queue.entries)},
+                "queue_id": lesson.id,
+                "lesson": {
+                    "id": lesson.id,
+                    "starts_at": lesson.starts_at,
+                    "ends_at": lesson.ends_at,
+                    "groups": list(lesson.groups),
+                    "kind": lesson.kind,
+                    "room": lesson.room,
+                },
+                "closed": lesson.queue.closed,
+                "entries_count": len(lesson.queue.entries),
             }
-            for lesson in sorted(schedule.lessons, key=lambda item: (item.starts_at, item.groups, item.kind))
+            for lesson in lessons
         ],
     }
 

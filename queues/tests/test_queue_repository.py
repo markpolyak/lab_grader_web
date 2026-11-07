@@ -1,5 +1,5 @@
-import asyncio
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -33,111 +33,114 @@ def make_entry(queue: QueueRecord) -> QueueEntry:
     )
 
 
-class QueueRepositoryTests(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
+class QueueRepositoryTests(unittest.TestCase):
+    def setUp(self):
         self.repo = InMemoryQueueRepository()
 
-    async def test_new_queues_do_not_share_entries(self):
+    def test_new_queues_do_not_share_entries(self):
         first, second = make_queue(), make_queue()
         first.queue.entries.append(make_entry(first))
         self.assertNotEqual(first.id, second.id)
         self.assertEqual(second.queue.entries, [])
 
-    async def test_create_and_reads_do_not_expose_internal_state(self):
+    def test_create_and_reads_do_not_expose_internal_state(self):
         original = make_queue()
         original.queue.entries.append(make_entry(original))
         original.entry_metadata[original.queue.entries[0].id] = QueueEntryMetadata(queue_id=original.id)
-        created = await self.repo.create(original)
+        created = self.repo.create(original)
         original.queue.entries.clear()
         created.entry_metadata[created.queue.entries[0].id].status = EntryStatus.CALLED
 
-        first_read = await self.repo.get(original.id)
+        first_read = self.repo.get(original.id)
         self.assertEqual(len(first_read.queue.entries), 1)
         self.assertEqual(first_read.entry_metadata[first_read.queue.entries[0].id].status, EntryStatus.WAITING)
         first_read.queue.entries.clear()
-        self.assertEqual(len((await self.repo.get(original.id)).queue.entries), 1)
+        self.assertEqual(len(self.repo.get(original.id).queue.entries), 1)
 
-    async def test_duplicate_creation_does_not_overwrite_queue(self):
+    def test_duplicate_creation_does_not_overwrite_queue(self):
         queue = make_queue()
-        await self.repo.create(queue)
+        self.repo.create(queue)
         queue.queue.entries.append(make_entry(queue))
         with self.assertRaises(QueueAlreadyExistsError):
-            await self.repo.create(queue)
-        self.assertEqual((await self.repo.get(queue.id)).queue.entries, [])
+            self.repo.create(queue)
+        self.assertEqual(self.repo.get(queue.id).queue.entries, [])
 
-    async def test_stale_snapshot_cannot_erase_another_update(self):
-        original = await self.repo.create(make_queue())
-        first = await self.repo.get(original.id)
-        second = await self.repo.get(original.id)
+    def test_stale_snapshot_cannot_erase_another_update(self):
+        original = self.repo.create(make_queue())
+        first = self.repo.get(original.id)
+        second = self.repo.get(original.id)
         first.queue.entries.append(make_entry(first))
 
-        results = await asyncio.gather(
-            self.repo.save(first, expected_version=0),
-            self.repo.save(second, expected_version=0),
-            return_exceptions=True,
-        )
+        def save(queue):
+            try:
+                return self.repo.save(queue, expected_version=0)
+            except QueueVersionConflictError as exc:
+                return exc
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(save, (first, second)))
         self.assertEqual(sum(isinstance(r, QueueRecord) for r in results), 1)
         self.assertEqual(sum(isinstance(r, QueueVersionConflictError) for r in results), 1)
-        stored = await self.repo.get(original.id)
+        stored = self.repo.get(original.id)
         self.assertEqual(stored.version, 1)
         self.assertEqual(len(stored.queue.entries), 1)
 
-    async def test_saved_result_and_input_remain_independent(self):
-        queue = await self.repo.create(make_queue())
+    def test_saved_result_and_input_remain_independent(self):
+        queue = self.repo.create(make_queue())
         queue.queue.entries.append(make_entry(queue))
         entry_id = queue.queue.entries[0].id
         queue.entry_metadata[entry_id] = QueueEntryMetadata(
             queue_id=queue.id, status=EntryStatus.FINISHED,
             result=DefenseResult.DEFENDED, finished_at=queue.lesson_ends_at,
         )
-        saved = await self.repo.save(queue, expected_version=0)
+        saved = self.repo.save(queue, expected_version=0)
         self.assertEqual(queue.version, 0)
         self.assertEqual(saved.version, 1)
         saved.queue.entries.clear()
         queue.queue.entries.clear()
 
-        restored = await self.repo.get(queue.id)
+        restored = self.repo.get(queue.id)
         self.assertEqual(restored.entry_metadata[entry_id].result, DefenseResult.DEFENDED)
         self.assertEqual(restored.entry_metadata[entry_id].finished_at, restored.lesson_ends_at)
 
-    async def test_course_and_group_filters_return_independent_snapshots(self):
-        await self.repo.create(make_queue())
-        await self.repo.create(make_queue(group_id="5678"))
-        await self.repo.create(make_queue(course_id="ml"))
-        self.assertEqual(len(await self.repo.list_by_course("os")), 2)
-        selected = await self.repo.list_by_course("os", group_id="1234")
+    def test_course_and_group_filters_return_independent_snapshots(self):
+        self.repo.create(make_queue())
+        self.repo.create(make_queue(group_id="5678"))
+        self.repo.create(make_queue(course_id="ml"))
+        self.assertEqual(len(self.repo.list_by_course("os")), 2)
+        selected = self.repo.list_by_course("os", group_id="1234")
         self.assertEqual(len(selected), 1)
         selected[0].queue.entries.append(make_entry(selected[0]))
-        self.assertEqual((await self.repo.get(selected[0].id)).queue.entries, [])
+        self.assertEqual(self.repo.get(selected[0].id).queue.entries, [])
 
-    async def test_missing_queue_is_not_created_by_save(self):
-        self.assertIsNone(await self.repo.get(uuid4()))
+    def test_missing_queue_is_not_created_by_save(self):
+        self.assertIsNone(self.repo.get(uuid4()))
         with self.assertRaises(QueueNotFoundError):
-            await self.repo.save(make_queue(), expected_version=0)
+            self.repo.save(make_queue(), expected_version=0)
 
-    async def test_repository_owns_version_numbers(self):
+    def test_repository_owns_version_numbers(self):
         queue = make_queue()
         queue.version = 10
         with self.assertRaises(ValueError):
-            await self.repo.create(queue)
+            self.repo.create(queue)
         queue.version = 0
-        await self.repo.create(queue)
+        self.repo.create(queue)
         with self.assertRaises(ValueError):
-            await self.repo.save(queue, expected_version=1)
+            self.repo.save(queue, expected_version=1)
 
-    async def test_colleague_queue_behavior_survives_storage(self):
+    def test_colleague_queue_behavior_survives_storage(self):
         record = make_queue()
         record.queue.closed = False
         student = Student("Иван", "Иванов", "", "student")
         entry = record.queue.add_entry(student, "1")
-        await self.repo.create(record)
-        saved = await self.repo.get(record.id)
+        self.repo.create(record)
+        saved = self.repo.get(record.id)
         self.assertEqual(saved.queue.get_position(github="student"), 1)
         self.assertEqual(saved.queue.entries[0].id, entry.id)
         with self.assertRaises(ValueError):
             saved.queue.add_entry(student, "2")
         saved.queue.closed = True
-        updated = await self.repo.save(saved, expected_version=0)
+        updated = self.repo.save(saved, expected_version=0)
         self.assertTrue(updated.queue.closed)
         self.assertFalse(record.queue.closed)
 

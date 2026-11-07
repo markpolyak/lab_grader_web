@@ -6,17 +6,23 @@ from ...domain.queue_record import QueueRecord
 
 
 class QueueRepository(Protocol):
+    """Хранилище очередей.
 
-    async def create(self, queue: QueueRecord) -> QueueRecord:
+    Интерфейс намеренно синхронный: текущий QueueService и HTTP-слой
+    синхронные, а файловый и SQLite-адаптеры не требуют async. Замена
+    хранилища (файлы -> SQLite/Postgres) не должна менять вызывающий код.
+    """
+
+    def create(self, queue: QueueRecord) -> QueueRecord:
         ...
 
-    async def get(self, queue_id: UUID) -> QueueRecord | None:
+    def get(self, queue_id: UUID) -> QueueRecord | None:
         ...
 
-    async def save(self, queue: QueueRecord, *, expected_version: int) -> QueueRecord:
+    def save(self, queue: QueueRecord, *, expected_version: int) -> QueueRecord:
         ...
 
-    async def list_by_course(
+    def list_by_course(
         self, course_id: str, *, group_id: str | None = None
     ) -> list[QueueRecord]:
         ...
@@ -24,13 +30,13 @@ class QueueRepository(Protocol):
 
 class QueueHistoryRepository(Protocol):
 
-    async def save_snapshot(self, queue: QueueRecord) -> None:
+    def save_snapshot(self, queue: QueueRecord) -> None:
         ...
 
-    async def get(self, queue_id: UUID) -> QueueRecord | None:
+    def get(self, queue_id: UUID) -> QueueRecord | None:
         ...
 
-    async def list_by_course(
+    def list_by_course(
         self,
         course_id: str,
         *,
