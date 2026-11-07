@@ -1,4 +1,13 @@
 {
+  "courseActions": {
+    "selectCourse": "Choose a course",
+    "selectAction": "Choose an action",
+    "forTeachers": "For teachers",
+    "back": "← Back to courses",
+    "grading": "Lab grading",
+    "queue": "Join the queue",
+    "comingSoon": "Coming soon"
+  },
   "course": "Course",
   "semester": "Semester",
   "email": "Email",

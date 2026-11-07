@@ -1,4 +1,13 @@
 {
+  "courseActions": {
+    "selectCourse": "选择课程",
+    "selectAction": "选择操作",
+    "forTeachers": "教师入口",
+    "back": "← 返回课程列表",
+    "grading": "检查实验作业",
+    "queue": "加入队列",
+    "comingSoon": "即将推出"
+  },
   "loadCourse": "加载课程",
   "courseUploaded": "课程上传成功",
   "select": "选择",

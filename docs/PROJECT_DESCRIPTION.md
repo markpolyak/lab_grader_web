@@ -78,7 +78,7 @@
 
 ### Для студентов
 
-1. **Выбор курса и группы** — навигация через интуитивный интерфейс
+1. **Выбор курса и действия** — после выбора курса доступны проверка лабораторной работы (существующий выбор группы и лабораторной) и плашка «Запись в очередь» (пока неактивна)
 2. **Регистрация** — ввод ФИО и GitHub никнейма с валидацией
 3. **Отправка работы на проверку** — автоматический запуск процесса оценивания
 4. **Получение результата** — мгновенная обратная связь о статусе проверки
@@ -132,13 +132,17 @@ lab_grader_web/
 │   ├── teams.py                 # Командные лабораторные
 │   ├── join_links.py            # Секретные ссылки и окна доступности
 │   └── course_index.py          # Чтение courses/index.yaml
+├── queues/                      # Очередь на защиту (начальный каркас)
+│   ├── domain/                  # Student, QueueEntry, Queue, Lesson, Schedule
+│   ├── usecase/                 # Заготовка QueueService
+│   └── event/                   # WebSocketService: подписки и рассылка; эндпоинт /ws в main.py
 ├── courses/                     # Конфигурации курсов (index.yaml + YAML курсов, logos/)
 ├── tests/                       # pytest
 ├── scripts/                     # join-link.py, switch-branch.sh
 ├── docs/                        # Документация (DEVELOPMENT.md — локальная разработка)
 ├── frontend/courses-front/      # React-приложение
 │   └── src/
-│       ├── components/          # course-list, group-list, lab-list, registration-form,
+│       ├── components/          # course-list, course-actions, language-switcher, group-list, lab-list, registration-form,
 │       │                        # breadcrumb, JoinLab, admin (каждый: index.jsx + styled.js)
 │       ├── api/                 # Базовый URL API
 │       ├── locales/             # Переводы (en, ru, zh)
