@@ -21,6 +21,7 @@ from urllib.parse import quote, urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from ruamel.yaml import YAML as RoundTripYAML
 
 from grading import (
     LabGrader,
@@ -77,6 +78,15 @@ from grading.course_index import (
     iter_course_configs as _iter_course_configs,
     load_course_index as _load_course_index,
 )
+from grading.schedule import (
+    ScheduleConfigError,
+    parse_course_schedule,
+    manual_course_groups,
+    load_schedule_data,
+    parse_schedule_file,
+    refresh_all_groups,
+    schedule_path_for_course,
+)
 import tempfile
 
 # Configure logging to both file and console
@@ -124,6 +134,7 @@ logger.info(f"Logging initialized. Log file: {log_file}")
 load_dotenv()
 app = FastAPI()
 COURSES_DIR = "courses"
+SCHEDULES_DIR = "schedules"
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 
 SHEETS_SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -404,6 +415,10 @@ class StudentRegistration(BaseModel):
     surname: str = Field(..., min_length=1)
     patronymic: str = ""
     github: str = Field(..., min_length=1)
+
+
+class ScheduleManualGroupsRequest(BaseModel):
+    group_ids: list[str] = Field(default_factory=list)
 
 
 @app.get("/")
@@ -769,6 +784,7 @@ def _write_file_atomically(file_path: str, content: str) -> None:
     атомарным переименованием в пределах одной файловой системы.
     """
     directory = os.path.dirname(os.path.abspath(file_path))
+    os.makedirs(directory, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".course-", suffix=".yaml.tmp")
     try:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_file:
@@ -803,7 +819,6 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
         old_data = None
 
     _validate_join_sections(new_data, old_data)
-
     _write_file_atomically(file_path, data.content)
 
     return {"message": "Изменения успешно сохранены"}
@@ -2434,10 +2449,6 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
     if not isinstance(course_data, dict) or "course" not in course_data:
         raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
 
-    # Save course file
-    with open(file_location, "wb") as f:
-        f.write(content)
-
     # Generate course ID from filename (e.g., 'operating-systems-2025.yaml' -> 'operating-systems-2025')
     course_id = file.filename.replace(".yaml", "").replace(".yml", "")
 
@@ -2452,6 +2463,10 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
         while f"{course_id}-{counter}" in existing_ids:
             counter += 1
         course_id = f"{course_id}-{counter}"
+
+    # Save course file after structural and schedule validation.
+    with open(file_location, "wb") as f:
+        f.write(content)
 
     # Add new course to index
     new_entry = {
@@ -2471,3 +2486,232 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
         "course_id": course_id,
         "filename": file.filename
     }
+
+
+@app.get("/admin/courses/{course_id}/groups/{group_id}/schedule/sessions")
+@limiter.limit("60/minute")
+def schedule_sessions(
+    request: Request,
+    course_id: str,
+    group_id: str,
+    days: int = 7,
+    admin: str = Depends(require_admin),
+):
+    """Return upcoming sessions from the course's linked schedule file."""
+    try:
+        course_info = get_course_by_id(course_id)
+        sources = parse_course_schedule(course_id, SCHEDULES_DIR)
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
+    source = sources.get(group_id)
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"Для группы {group_id!r} расписание не настроено.")
+
+    from datetime import datetime, timedelta, timezone
+    timezone_name = str(source.timezone or "Europe/Moscow")
+    try:
+        fixed_offset = re.fullmatch(r"UTC([+-])(\d{1,2})(?::?(\d{2}))?", timezone_name)
+        if fixed_offset:
+            sign = 1 if fixed_offset.group(1) == "+" else -1
+            hours = int(fixed_offset.group(2))
+            minutes = int(fixed_offset.group(3) or "0")
+            local_timezone = timezone(sign * timedelta(hours=hours, minutes=minutes))
+        else:
+            from zoneinfo import ZoneInfo
+            local_timezone = ZoneInfo(timezone_name)
+        local_now = datetime.now(local_timezone)
+    except (KeyError, ValueError):
+        raise HTTPException(status_code=400, detail=f"Неизвестный часовой пояс расписания: {timezone_name}")
+    now = local_now.replace(tzinfo=None)
+    since = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    until = since + timedelta(days=days)
+    sessions = list(source.list_sessions(group_id, since, until))
+    return {
+        "course_id": course_id,
+        "group_id": group_id,
+        "since": since.isoformat(),
+        "until": until.isoformat(),
+        "queue_settings": source.queue_settings,
+        "sessions": [
+            {
+                "slot_id": s.slot_id,
+                "subject": s.subject,
+                "starts_at": s.starts_at.isoformat(),
+                "ends_at": s.ends_at.isoformat(),
+                "auto_open_at": s.auto_open_at.isoformat(),
+                "auto_close_at": s.auto_close_at.isoformat(),
+                "room": s.room,
+                "teacher": s.teacher,
+                "note": s.note,
+                "allowed_lab_ids": s.allowed_lab_ids,  # None=all, []=closed, [...] = only these
+            }
+            for s in sessions
+        ],
+    }
+
+
+class ScheduleManualGroupsRequest(BaseModel):
+    groups: list[str] = Field(default_factory=list)
+
+
+def _schedule_group_sources(course_id: str, course_info: dict) -> tuple[list[dict[str, str]], list[str]]:
+    _, schedule_data = load_schedule_data(course_id, SCHEDULES_DIR)
+    if schedule_data is None:
+        manual = []
+    else:
+        parse_schedule_file(schedule_path_for_course(course_id, SCHEDULES_DIR), course_id)
+        manual = manual_course_groups(schedule_data)
+    invalid_manual_groups = [
+        group["id"] for group in manual if not re.fullmatch(r"\d+", group["id"])
+    ]
+    if invalid_manual_groups:
+        raise ScheduleConfigError(
+            "`manual-groups` в файле расписания допускает только числовые идентификаторы: "
+            + ", ".join(invalid_manual_groups)
+        )
+    groups_by_id = {group["id"]: group for group in manual}
+    warnings = []
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+    info_sheet = course_info.get("google", {}).get("info-sheet")
+    if spreadsheet_id:
+        try:
+            spreadsheet = sheets_client().open_by_key(spreadsheet_id)
+            for sheet in spreadsheet.worksheets():
+                if sheet.title != info_sheet and re.fullmatch(r"\d+", sheet.title):
+                    groups_by_id.setdefault(sheet.title, {"id": sheet.title, "guap_group_id": sheet.title})
+        except Exception as e:
+            logger.exception("Could not load schedule groups from Sheets for course=%s", course_id)
+            warnings.append(f"Не удалось получить группы из Google Sheets: {type(e).__name__}: {e}")
+    else:
+        warnings.append("В конфиге курса не указан Google Sheets spreadsheet; доступны только ручные группы.")
+    return list(groups_by_id.values()), warnings
+
+
+@app.get("/admin/courses/{course_id}/schedule/groups")
+@limiter.limit("60/minute")
+def schedule_groups(
+    request: Request,
+    course_id: str,
+    admin: str = Depends(require_admin),
+):
+    try:
+        course_info = get_course_by_id(course_id)
+        groups, warnings = _schedule_group_sources(course_id, course_info)
+        _, schedule_data = load_schedule_data(course_id, SCHEDULES_DIR)
+        manual_groups = (
+            [group["id"] for group in manual_course_groups(schedule_data)]
+            if schedule_data is not None
+            else []
+        )
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
+    return {
+        "course_id": course_id,
+        "groups": groups,
+        "manual_groups": manual_groups,
+        "warnings": warnings,
+    }
+
+
+@app.put("/admin/courses/{course_id}/schedule/groups")
+@limiter.limit("20/minute")
+def save_schedule_manual_groups(
+    request: Request,
+    course_id: str,
+    data: ScheduleManualGroupsRequest,
+    admin: str = Depends(require_admin),
+):
+    course_info = get_course_by_id(course_id)
+    group_ids = list(dict.fromkeys(group.strip() for group in data.groups if group.strip()))
+    non_numeric_groups = [group_id for group_id in group_ids if not re.fullmatch(r"\d+", group_id)]
+    if non_numeric_groups:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Для расписания допускаются только числовые идентификаторы групп: "
+                + ", ".join(non_numeric_groups)
+            ),
+        )
+    try:
+        file_path = schedule_path_for_course(course_id, SCHEDULES_DIR)
+        yaml_rt = RoundTripYAML()
+        if file_path.exists():
+            with open(file_path, "r", encoding="utf-8") as file:
+                schedule_data = yaml_rt.load(file)
+        else:
+            schedule_data = {"course-id": course_id, "groups": {}}
+        if not isinstance(schedule_data, dict):
+            raise ScheduleConfigError("верхний уровень файла расписания должен быть YAML-объектом")
+        if str(schedule_data.get("course-id", "")).strip() != course_id:
+            raise ScheduleConfigError(
+                f"обязательный course-id в файле расписания должен быть {course_id!r}"
+            )
+        schedule_data["manual-groups"] = group_ids
+        for configured_id, group_config in schedule_data.get("groups", {}).items():
+            if not str(configured_id).isdigit():
+                raise ScheduleConfigError(
+                    f"идентификатор группы {configured_id!r} должен содержать только цифры"
+                )
+            if not isinstance(group_config, dict) or str(group_config.get("group_id", "")) != str(configured_id):
+                raise ScheduleConfigError(
+                    f"группа {configured_id!r} требует совпадающий `group_id`"
+                )
+        from io import StringIO
+        output = StringIO()
+        yaml_rt.dump(schedule_data, output)
+        _write_file_atomically(file_path, output.getvalue())
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
+    except (OSError, yaml.YAMLError) as e:
+        logger.exception("Could not save manual schedule groups for course=%s", course_id)
+        raise HTTPException(status_code=500, detail=f"Не удалось сохранить группы расписания: {e}")
+    return {"course_id": course_id, "manual_groups": group_ids}
+
+
+@app.post("/admin/courses/{course_id}/schedule/refresh-all")
+@limiter.limit("5/minute")
+def schedule_refresh_all(
+    request: Request,
+    course_id: str,
+    admin: str = Depends(require_admin),
+):
+    """Refresh numeric spreadsheet groups and manually configured groups."""
+    try:
+        course_info = get_course_by_id(course_id)
+        groups, warnings = _schedule_group_sources(course_id, course_info)
+        schedule_file_path = schedule_path_for_course(course_id, SCHEDULES_DIR)
+        result = refresh_all_groups(
+            course_id=course_id,
+            schedule_file_path=schedule_file_path,
+            groups=groups,
+            snapshot_path="data/schedule.json",
+        )
+    except ScheduleConfigError as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Schedule refresh failed for course=%s", course_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Не удалось обновить расписание курса: {type(e).__name__}: {e}",
+        )
+
+    result["warnings"] = warnings
+    result["errors"] = {
+        group_id: (
+            f"Группа {group_id!r} отсутствует в источнике расписания: {error}"
+            if "not found" in error.lower() or "missing" in error.lower()
+            else f"Не удалось обновить группу {group_id!r}: {error}"
+        )
+        for group_id, error in result["errors"].items()
+    }
+    logger.info(
+        "Schedule refreshed for course=%s by admin=%s: %d ok, %d errors",
+        course_id,
+        admin,
+        len(result["refreshed"]),
+        len(result["errors"]),
+    )
+    status_code = 200 if not result["errors"] and not warnings else 207
+    return JSONResponse(status_code=status_code, content=result)

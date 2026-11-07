@@ -244,5 +244,29 @@
       "closed": "Submissions are closed: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored.",
       "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
     }
+  },
+  "schedule": {
+    "title": "Schedule",
+    "groupSourcesDescription": "Only Google Sheets tabs with numeric group names are used for schedules. Add a numeric group ID manually if needed; the list is saved in the course config.",
+    "manualGroupInput": "Group ID",
+    "addManualGroup": "Add group",
+    "refreshButton": "Fetch schedule",
+    "refreshing": "Refreshing…",
+    "refreshedOk": "Groups refreshed: {{ok}}, errors: {{err}}",
+    "status": {
+      "ok": "OK",
+      "error": "Error"
+    },
+    "columns": {
+      "group": "Group",
+      "slotsCount": "Slots",
+      "status": "Status",
+      "error": "Error"
+    },
+    "errors": {
+      "loadGroupsFailed": "Failed to load groups",
+      "refreshFailed": "Failed to fetch schedule",
+      "saveGroupsFailed": "Failed to save the group list"
+    }
   }
 }
