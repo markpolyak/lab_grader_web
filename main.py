@@ -21,7 +21,6 @@ from urllib.parse import quote, urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
-from ruamel.yaml import YAML as RoundTripYAML
 
 from grading import (
     LabGrader,
@@ -2634,10 +2633,9 @@ def save_schedule_manual_groups(
         )
     try:
         file_path = schedule_path_for_course(course_id, SCHEDULES_DIR)
-        yaml_rt = RoundTripYAML()
         if file_path.exists():
             with open(file_path, "r", encoding="utf-8") as file:
-                schedule_data = yaml_rt.load(file)
+                schedule_data = yaml.safe_load(file)
         else:
             schedule_data = {"course-id": course_id, "groups": {}}
         if not isinstance(schedule_data, dict):
@@ -2656,10 +2654,13 @@ def save_schedule_manual_groups(
                 raise ScheduleConfigError(
                     f"группа {configured_id!r} требует совпадающий `group_id`"
                 )
-        from io import StringIO
-        output = StringIO()
-        yaml_rt.dump(schedule_data, output)
-        _write_file_atomically(file_path, output.getvalue())
+        schedule_yaml = yaml.safe_dump(
+            schedule_data,
+            allow_unicode=True,
+            sort_keys=False,
+            default_flow_style=False,
+        )
+        _write_file_atomically(file_path, schedule_yaml)
     except ScheduleConfigError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
     except (OSError, yaml.YAMLError) as e:

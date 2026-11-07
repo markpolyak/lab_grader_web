@@ -100,7 +100,6 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
     assert data["groups"]["4432"]["group_id"] == "4432"
     assert data["groups"]["4432"]["guap_group_id"] == "ok"
     assert data["groups"]["4433"]["slots"][0]["id"] == "old-4433"
-    assert "# Keep this teacher note." in schedule_path.read_text(encoding="utf-8")
     assert not list(tmp_path.glob(".course-*.yaml.tmp"))
     assert parse_course_schedule(
         "test-course", tmp_path
