@@ -147,9 +147,37 @@ def _setup_new_sheet(
         requests.append(
             _filter_view("Не сдал", worksheet.id, {5: STATUS_FAILED})
         )
+        requests.append({
+            "setDataValidation": {
+                "range": {
+                    "sheetId": worksheet.id,
+                    "startRowIndex": 1,
+                    "startColumnIndex": 5,
+                    "endColumnIndex": 6,
+                },
+                "rule": {
+                    "condition": {
+                        "type": "ONE_OF_LIST",
+                        "values": [
+                            {"userEnteredValue": STATUS_WAITING},
+                            {"userEnteredValue": STATUS_PASSED},
+                            {"userEnteredValue": STATUS_FAILED},
+                            {"userEnteredValue": STATUS_ABSENT},
+                            {"userEnteredValue": STATUS_WITHDRAWN},
+                        ],
+                    },
+                    "showCustomUi": True,
+                    "strict": True,
+                },
+            }
+        })
         for group_id in sorted({str(g) for g in group_ids}):
             requests.append(
                 _filter_view(f"Группа {group_id}", worksheet.id, {1: group_id})
+            )
+        for session_no in ["1", "2", "3", "4", "5", "6"]:
+            requests.append(
+                _filter_view(f"Пара {session_no}", worksheet.id, {4: session_no})
             )
 
     spreadsheet.batch_update({"requests": requests})
