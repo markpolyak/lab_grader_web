@@ -271,9 +271,10 @@ if not GITHUB_TOKEN:
         "GITHUB_TOKEN должен быть установлен в переменных окружения. "
         "Приложение требует доступ к GitHub API."
     )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Разрешить запросы с любых источников
+    allow_origin_regex=".*",  # Разрешить запросы с любых источников
     allow_credentials=True,
     allow_methods=["*"],  # Разрешить все HTTP-методы
     allow_headers=["*"],  # Разрешить все заголовки

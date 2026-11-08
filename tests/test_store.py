@@ -134,7 +134,7 @@ def test_ensure_sheets_uses_exact_headers_and_protects_data():
     assert history.row_values(1) == HISTORY_HEADERS
     requests = spreadsheet.metadata_requests
     assert any("addProtectedRange" in item for item in requests)
-    assert sum("addFilterView" in item for item in requests) == 4
+    assert sum("addFilterView" in item for item in requests) == 10
 
 
 def test_register_appends_waiting_row_and_blocks_duplicate_waiting_fio():

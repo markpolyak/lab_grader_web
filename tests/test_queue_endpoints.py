@@ -252,8 +252,12 @@ def _body(resp):
 
 
 class TestQueueLogin:
-    def test_login_redirects_to_github(self, deps):
-        resp = main_module.queue_login(_mock_request(), "dev-course", "4431", "1")
+    def test_login_redirects_to_github(self, deps, monkeypatch):
+        monkeypatch.setattr(main_module, "GITHUB_OAUTH_CLIENT_ID", "test")
+        monkeypatch.setattr(main_module, "GITHUB_OAUTH_CLIENT_SECRET", "test")
+        resp = main_module.queue_login(
+            _mock_request(), "dev-course", "4431", "1"
+        )
         assert resp.status_code == 307
         assert "github.com/login/oauth/authorize" in resp.headers["location"]
 
