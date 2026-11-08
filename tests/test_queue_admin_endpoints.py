@@ -781,3 +781,42 @@ def test_update_result_and_remove_entry(endpoint):
     assert client.delete(
         f"/admin/courses/os-2026/queues/{lesson.id}/entries/{waiting.id}"
     ).status_code == 409
+
+
+def test_complete_lesson_exports_and_removes_queue(endpoint, monkeypatch):
+    from unittest.mock import AsyncMock
+    from queues.usecase.queue_history_service import QueueHistoryService
+
+    client, service = endpoint
+    lesson = service.schedules['os-2026'].lessons[0]
+    history = AsyncMock()
+    monkeypatch.setattr(main.app.state, 'queue_history_service',
+                        QueueHistoryService(service, history), raising=False)
+    path = f'/admin/courses/os-2026/queues/{lesson.id}'
+    assert client.post(path + '/complete').status_code == 401
+    authenticate(client)
+    assert client.post(path + '/complete').json() == {'archived': True}
+    history.save.assert_awaited_once()
+    assert client.get(path).status_code == 404
+
+
+def test_complete_lesson_google_failure_keeps_participants(endpoint, monkeypatch):
+    from unittest.mock import AsyncMock
+    from queues.usecase.queue_history_service import QueueHistoryService
+
+    client, service = endpoint
+    lesson = service.schedules['os-2026'].lessons[0]
+    lesson.queue.closed = False
+    lesson.queue.add_entry(Student('Иван', 'Иванов', '', 'ivan'), '1')
+    history = AsyncMock()
+    history.save.side_effect = TimeoutError('offline')
+    monkeypatch.setattr(main.app.state, 'queue_history_service',
+                        QueueHistoryService(service, history), raising=False)
+    authenticate(client)
+    path = f'/admin/courses/os-2026/queues/{lesson.id}'
+    assert client.post(path + '/complete').json()['detail'] == 'ARCHIVE_PENDING'
+    detail = client.get(path).json()
+    assert detail['closed'] and detail['archive_pending']
+    assert len(detail['entries']) == 1
+    history.save.side_effect = None
+    assert client.post(path + '/complete').json() == {'archived': True}

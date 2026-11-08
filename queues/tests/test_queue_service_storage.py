@@ -105,3 +105,62 @@ def test_set_registration_persists_and_is_idempotent(tmp_path):
 
     closed = second.set_registration(lesson.id, closed=True)
     assert closed.version == 1
+
+
+def test_complete_future_lesson_retries_after_restart_and_removes_state(tmp_path):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from queues.usecase.queue_history_service import QueueHistoryService
+
+    async def check():
+        service = build(tmp_path)
+        current = service.schedules['os-2026'].lessons[0]
+        current.queue.closed = False
+        entry = current.queue.add_entry(Student('Иван', 'Иванов', '', 'student'), '1')
+        schedule_id = service.request_archive(current.id)
+        history = AsyncMock()
+        history.save.side_effect = TimeoutError('offline')
+        exporter = QueueHistoryService(service, history)
+        with pytest.raises(TimeoutError):
+            await exporter.save_history(schedule_id, current.id)
+        assert service.get_lesson('os-2026', current.id).queue.entries == [entry]
+        assert current.queue.closed
+        with pytest.raises(Exception, match='сохраняется'):
+            service.set_registration(current.id, closed=False)
+
+        restarted = build(tmp_path)
+        assert restarted.archive_requested(current.id)
+        history.save.side_effect = None
+        notify = AsyncMock()
+        exporter = QueueHistoryService(restarted, history, on_archived=notify)
+        assert await exporter.archive_finished(retry_only=True) == {}
+        assert restarted.get_lesson('os-2026', current.id) is None
+        assert restarted.get_record(current.id) is None
+        notify.assert_awaited_once_with(current.id)
+        stored = restarted.repository.get(current.id)
+        assert stored.archived and not stored.queue.entries
+        assert build(tmp_path).get_lesson('os-2026', current.id) is None
+
+    asyncio.run(check())
+
+
+def test_empty_unsaved_lesson_archive_survives_restart(tmp_path):
+    import asyncio
+    from unittest.mock import AsyncMock
+    from queues.usecase.queue_history_service import QueueHistoryService
+
+    service = build(tmp_path)
+    current = service.schedules['os-2026'].lessons[0]
+    asyncio.run(QueueHistoryService(service, AsyncMock()).save_history(
+        service.schedules['os-2026'].id, current.id))
+    assert build(tmp_path).get_lesson('os-2026', current.id) is None
+
+
+def test_pending_archive_survives_week_change_on_restart(tmp_path):
+    service = build(tmp_path)
+    current = service.schedules['os-2026'].lessons[0]
+    service.request_archive(current.id)
+    restarted = QueueService(FileQueueRepository(tmp_path / 'queue_state'))
+    restarted.load_saved_week(COURSES, SCHEDULE_DIR, week_start=date(2026, 11, 16))
+    assert current.id in {lid for _, lid in restarted.finished_lessons()}
+    assert restarted.archive_requested(current.id)

@@ -38,7 +38,12 @@
     "loginRequired": "Войдите в аккаунт преподавателя.",
     "otherDates": "Занятия на другие даты",
     "dateTimeRequired": "Укажите дату и время начала и окончания.",
-    "dateTimePlaceholder": "ДД.ММ.ГГГГ ЧЧ:ММ"
+    "dateTimePlaceholder": "ДД.ММ.ГГГГ ЧЧ:ММ",
+    "completeLesson": "Завершить занятие",
+    "archiving": "Сохраняем в Google…",
+    "archived": "Занятие сохранено в Google Таблицы и удалено из активных очередей.",
+    "archivePending": "Запись закрыта. Сохранение в Google не завершено; повторная попытка выполняется раз в час.",
+    "retryArchive": "Повторить сохранение"
   },
   "queueDetail": {
     "fullName": "ФИО",
@@ -83,7 +88,8 @@
     },
     "surname": "Фамилия",
     "name": "Имя",
-    "patronymic": "Отчество"
+    "patronymic": "Отчество",
+    "archived": "Занятие завершено. Очередь перенесена в архив."
   },
   "queueLessons": {
     "title": "Занятия курса",

@@ -3,7 +3,7 @@
 
 course:
     name: Операционные системы
-    alt-names: 
+    alt-names:
         - OS
         - Operating systems
         - ОС
@@ -98,7 +98,7 @@ course:
                   - suai-os-2024f
                   - suai-os-2025
                 basefiles:
-                    - 
+                    -
                         repo: k43guap/os-course-task1
                         filename: lab1.sh
             report:
@@ -133,10 +133,10 @@ course:
                   - suai-os-2024f
                   - suai-os-2025
                 basefiles:
-                    - 
+                    -
                         repo: k43guap/os-course-task2
                         filename: lab2.cpp
-                    - 
+                    -
                         repo: k43guap/os-course-task2
                         filename: examples/ex3.cpp
             report:
@@ -173,7 +173,7 @@ course:
                   - suai-os-2024f
                   - suai-os-2025
                 basefiles:
-                    - 
+                    -
                         repo: k43guap/os-course-task3
                         filename: lab3.cpp
             report:
@@ -206,7 +206,7 @@ course:
                   - suai-os-2024f
                   - suai-os-2025
                 basefiles:
-                    - 
+                    -
                         repo: k43guap/os-course-task4
                         filename: lab4.cpp
             report:
@@ -297,5 +297,3 @@ course:
                         min-count: 3
 misc:
     requests-timeout: 5
-    
-    

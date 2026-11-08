@@ -38,7 +38,12 @@
     "loginRequired": "Sign in as a teacher.",
     "otherDates": "Lessons on other dates",
     "dateTimeRequired": "Enter the start and end date and time.",
-    "dateTimePlaceholder": "DD.MM.YYYY HH:mm"
+    "dateTimePlaceholder": "DD.MM.YYYY HH:mm",
+    "completeLesson": "Complete lesson",
+    "archiving": "Saving to Google…",
+    "archived": "Lesson saved to Google Sheets and removed from active queues.",
+    "archivePending": "Registration is closed. Saving to Google is pending; retries run hourly.",
+    "retryArchive": "Retry saving"
   },
   "queueDetail": {
     "fullName": "Full name",
@@ -83,7 +88,8 @@
     },
     "surname": "Surname",
     "name": "First name",
-    "patronymic": "Patronymic"
+    "patronymic": "Patronymic",
+    "archived": "This lesson is complete. The queue has been archived."
   },
   "queueLessons": {
     "title": "Course lessons",

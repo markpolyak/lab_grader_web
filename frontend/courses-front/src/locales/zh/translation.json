@@ -38,7 +38,12 @@
     "loginRequired": "请以教师身份登录。",
     "otherDates": "其他日期的课程",
     "dateTimeRequired": "请填写开始与结束日期及时间。",
-    "dateTimePlaceholder": "DD.MM.YYYY HH:mm"
+    "dateTimePlaceholder": "DD.MM.YYYY HH:mm",
+    "completeLesson": "结束课程",
+    "archiving": "正在保存到 Google…",
+    "archived": "课程已保存到 Google 表格并从活动队列中移除。",
+    "archivePending": "报名已关闭。正在等待保存到 Google，每小时重试一次。",
+    "retryArchive": "重试保存"
   },
   "queueDetail": {
     "fullName": "姓名",
@@ -83,7 +88,8 @@
     },
     "surname": "姓",
     "name": "名",
-    "patronymic": "父称"
+    "patronymic": "父称",
+    "archived": "课程已结束，队列已归档。"
   },
   "queueLessons": {
     "title": "课程课次",
