@@ -246,12 +246,36 @@
       "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
     }
   },
+  "adminQueue": {
+    "button": "Queue",
+    "title": "Queue: {{lab}}",
+    "group": "Group",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "empty": "Queue is empty",
+    "total": "Total: {{count}}",
+    "close": "Close",
+    "columns": {
+      "position": "#",
+      "group": "Group",
+      "name": "Student",
+      "lab": "Lab",
+      "status": "Status"
+    },
+    "errors": {
+      "groupsFailed": "Failed to load groups",
+      "loadFailed": "Failed to load queue"
+    },
+    "buttonToday": "Today's queue",
+    "titleToday": "Queue for {{date}}"
+  },
   "queue": {
     "title": "Defense queue",
     "description": "Join the lab defense queue and track your position.",
     "loading": "Loading queue status…",
     "signInRequired": "Sign in with GitHub to join and view the queue.",
     "signIn": "Sign in with GitHub",
+    "fillFormFirst": "Fill in the form above and click «Register» to join the queue.",
     "alreadyPassed": "This lab has already been passed.",
     "position": "You are in the queue: position {{position}} of {{total}}.",
     "closed": "The queue is closed. Next session: {{nextSession}}.",
@@ -302,7 +326,8 @@
       "SESSION_REQUIRED": "Sign in with GitHub to use the queue.",
       "NO_TEAM": "You are not a member of a team for this lab.",
       "TEAMS_UNAVAILABLE": "Could not load team details.",
-      "SHEETS_UNAVAILABLE": "The Google Sheet is temporarily unavailable."
+      "SHEETS_UNAVAILABLE": "The Google Sheet is temporarily unavailable.",
+      "CI_PENDING": "CI is still running. Please wait and try again."
     }
   },
   "schedule": {

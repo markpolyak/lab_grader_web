@@ -45,6 +45,9 @@ export const getJoinStartUrl = (courseId, labId) =>
 const defenseQueueUrl = (courseId, groupId, labId) =>
   `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/groups/${encodeURIComponent(groupId)}/labs/${encodeURIComponent(labId)}/queue`;
 
+export const getQueueLoginUrl = (courseId, groupId, labId) =>
+  `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/groups/${encodeURIComponent(groupId)}/labs/${encodeURIComponent(labId)}/queue/login`;
+
 const requestDefenseQueue = async (url, options = {}) => {
   let response;
   try {
@@ -325,6 +328,7 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
         "Content-Type": "application/json",
       },
       body: JSON.stringify(formData),
+      credentials: "include",
     }
   );
 

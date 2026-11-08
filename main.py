@@ -134,6 +134,10 @@ from grading.queue.session import (
     parse_queue_session,
     require_queue_session,
     QUEUE_SESSION_MAX_AGE,
+    build_student_session,
+    parse_student_session,
+    STUDENT_SESSION_COOKIE,
+    STUDENT_SESSION_MAX_AGE,
 )
 
 import tempfile
@@ -997,19 +1001,49 @@ def register_student(request: Request, course_id: str, group_id: str, student: S
 
         existing_github = sheet.cell(row_idx, github_col_idx).value
 
+        # Build signed student_session cookie from the registration form data.
+        # The queue reads this cookie instead of requiring a separate GitHub OAuth.
+        student_token = build_student_session(
+            signer,
+            github=student.github,
+            fio=full_name,
+            course_id=course_id,
+            group_id=group_id,
+        )
+
         if not existing_github:
             sheet.update_cell(row_idx, github_col_idx, student.github)
             logger.info(f"Successfully registered GitHub '{student.github}' for student '{full_name}'")
-            return {"status": "registered", "message": "Аккаунт GitHub успешно задан"}
+            response = JSONResponse(content={"status": "registered", "message": "Аккаунт GitHub успешно задан"})
+            response.set_cookie(
+                key=STUDENT_SESSION_COOKIE,
+                value=student_token,
+                httponly=True,
+                samesite="lax",
+                max_age=STUDENT_SESSION_MAX_AGE,
+                path="/",
+                secure=False,
+            )
+            return response
 
         if existing_github == student.github:
             logger.info(f"Student '{full_name}' already registered with GitHub '{student.github}'")
-            return {
+            response = JSONResponse(content={
                 "status": "already_registered",
-                "message": "Этот аккаунт GitHub уже был указан ранее для этого же студента"
-            }
+                "message": "Этот аккаунт GitHub уже был указан ранее для этого же студента",
+            })
+            response.set_cookie(
+                key=STUDENT_SESSION_COOKIE,
+                value=student_token,
+                httponly=True,
+                samesite="lax",
+                max_age=STUDENT_SESSION_MAX_AGE,
+                path="/",
+                secure=False,
+            )
+            return response
 
-        # Конфликт: студент пытается указать другой аккаунт
+        # Conflict: student tries to set a different GitHub account
         logger.warning(f"GitHub conflict for '{full_name}': existing='{existing_github}', attempted='{student.github}'")
         raise HTTPException(
             status_code=409,
@@ -2808,13 +2842,12 @@ def _parse_queue_state(state: str | None) -> dict:
     return payload
 
 
-def _require_queue_session(request, course_id, group_id, lab_id):
-    cookie = request.cookies.get(QUEUE_SESSION_COOKIE)
-    try:
-        username = require_queue_session(signer, cookie, course_id, group_id, lab_id)
-    except QueueError as e:
-        raise HTTPException(status_code=e.http_status, detail=e.code)
-    return username
+def _require_student_session(request, course_id, group_id):
+    cookie = request.cookies.get(STUDENT_SESSION_COOKIE)
+    payload = parse_student_session(signer, cookie)
+    if payload is None or payload.get("course_id") != course_id or payload.get("group_id") != group_id:
+        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
+    return payload["github"], payload.get("fio", "")
 
 
 def _queue_error_to_http(error: QueueError) -> HTTPException:
@@ -2933,15 +2966,21 @@ def queue_login(request: Request, course_id: str, group_id: str, lab_id: str):
 @app.get("/courses/{course_id}/groups/{group_id}/labs/{lab_id}/queue/status")
 @limiter.limit("30/minute")
 def queue_status(request: Request, course_id: str, group_id: str, lab_id: str):
-    """Current queue status for the authenticated student."""
-    course_info, lab_key, lab_config = _resolve_queue_lab(course_id, lab_id)
-    spreadsheet = _open_spreadsheet(course_info)
-    today_str = _ensure_queue_ready(spreadsheet, course_info, course_id)
+    """Current queue status for the authenticated student.
 
-    # Check session
-    cookie = request.cookies.get(QUEUE_SESSION_COOKIE)
-    payload = parse_queue_session(signer, cookie)
-    if payload is None or payload.get("course_id") != course_id or payload.get("group_id") != group_id or payload.get("lab_key") != lab_key:
+    The queue sheet is NOT created unless there is an active class session
+    today. If no session, returns queue_open=False without touching the
+    spreadsheet. Viewing the queue (queue_size, queue list) is public;
+    only personal data (position, CI status) requires student_session.
+    """
+    course_info, lab_key, lab_config = _resolve_queue_lab(course_id, lab_id)
+
+    # Check schedule window first - before any sheet creation
+    session = _queue_active_session(course_id, group_id, lab_key)
+    next_sess = _queue_next_session(course_id, group_id, lab_key)
+
+    if session is None:
+        # No class today - do NOT create the queue sheet
         return {
             "in_queue": False,
             "position": None,
@@ -2953,15 +2992,48 @@ def queue_status(request: Request, course_id: str, group_id: str, lab_id: str):
             "team": None,
             "queue_open": False,
             "session": None,
-            "next_session": None,
+            "next_session": _session_dict(next_sess) if next_sess else None,
+            "session_required": False,
+        }
+
+    # Session is active - create the sheet and get queue size
+    spreadsheet = _open_spreadsheet(course_info)
+    today_str = _ensure_queue_ready(spreadsheet, course_info, course_id)
+
+    worksheet = spreadsheet.worksheet(f"{QUEUE_SHEET_PREFIX}{today_str}")
+    rows = read_queue_rows(worksheet)
+    lab_short_name = lab_config.get("short-name", lab_key)
+    waiting = list_waiting(rows, group_id, lab_short_name)
+
+    # Check student_session cookie
+    student_cookie = request.cookies.get(STUDENT_SESSION_COOKIE)
+    student = parse_student_session(signer, student_cookie)
+    session_required = (
+        student is None
+        or student.get("course_id") != course_id
+        or student.get("group_id") != group_id
+    )
+
+    if session_required:
+        # Queue is open but student hasn't filled the form.
+        # Still return queue_open and queue_size so they can see the queue.
+        return {
+            "in_queue": False,
+            "position": None,
+            "queue_size": len(waiting),
+            "ci_status": "unknown",
+            "can_register": False,
+            "already_passed": False,
+            "is_team_lab": is_team_lab(lab_config),
+            "team": None,
+            "queue_open": True,
+            "session": _session_dict(session),
+            "next_session": _session_dict(next_sess) if next_sess else None,
             "session_required": True,
         }
 
-    username = payload["username"]
-
-    # Check schedule window
-    session = _queue_active_session(course_id, group_id, lab_key)
-    next_sess = _queue_next_session(course_id, group_id, lab_key)
+    username = student["github"]
+    fio_from_cookie = student.get("fio", "")
 
     # Resolve identifier (individual or team)
     fio = None
@@ -2981,33 +3053,24 @@ def queue_status(request: Request, course_id: str, group_id: str, lab_id: str):
                     "members": list(team_result.members),
                 }
         else:
-            # Load student context to get FIO
-            ctx = _load_queue_sheet_context(
-                sheets_client, course_info, group_id, lab_config, username
-            )
-            fio = ctx.fio
+            fio = fio_from_cookie
             identifier = fio
     except QueueError as e:
         return {
             "in_queue": False,
             "position": None,
-            "queue_size": 0,
+            "queue_size": len(waiting),
             "ci_status": "unknown",
             "can_register": False,
             "already_passed": False,
             "is_team_lab": is_team_lab(lab_config),
             "team": None,
-            "queue_open": session is not None,
-            "session": _session_dict(session) if session else None,
+            "queue_open": True,
+            "session": _session_dict(session),
             "next_session": _session_dict(next_sess) if next_sess else None,
             "error": e.code,
         }
 
-    # Check queue
-    worksheet = spreadsheet.worksheet(f"{QUEUE_SHEET_PREFIX}{today_str}")
-    rows = read_queue_rows(worksheet)
-    lab_short_name = lab_config.get("short-name", lab_key)
-    waiting = list_waiting(rows, group_id, lab_short_name)
     entry = find_waiting(rows, group_id, lab_short_name, fio) if fio else None
 
     # Check ALREADY_PASSED
@@ -3082,14 +3145,15 @@ def _session_dict(session) -> dict | None:
 def queue_register(request: Request, course_id: str, group_id: str, lab_id: str):
     """Register the authenticated student in the defense queue."""
     course_info, lab_key, lab_config = _resolve_queue_lab(course_id, lab_id)
-    spreadsheet = _open_spreadsheet(course_info)
-    today_str = _ensure_queue_ready(spreadsheet, course_info, course_id)
-    username = _require_queue_session(request, course_id, group_id, lab_key)
 
-    # Check schedule window
+    # Check schedule window BEFORE creating any sheet
     session = _queue_active_session(course_id, group_id, lab_key)
     if session is None:
         raise HTTPException(status_code=403, detail="QUEUE_CLOSED")
+
+    username, _fio = _require_student_session(request, course_id, group_id)
+    spreadsheet = _open_spreadsheet(course_info)
+    today_str = _ensure_queue_ready(spreadsheet, course_info, course_id)
 
     # Resolve identifier and FIO
     try:
@@ -3166,7 +3230,7 @@ def queue_withdraw(request: Request, course_id: str, group_id: str, lab_id: str)
     course_info, lab_key, lab_config = _resolve_queue_lab(course_id, lab_id)
     spreadsheet = _open_spreadsheet(course_info)
     today_str = _ensure_queue_ready(spreadsheet, course_info, course_id)
-    username = _require_queue_session(request, course_id, group_id, lab_key)
+    username, _fio = _require_student_session(request, course_id, group_id)
 
     # Resolve FIO
     try:
@@ -3214,7 +3278,7 @@ def queue_shift(
     course_info, lab_key, lab_config = _resolve_queue_lab(course_id, lab_id)
     spreadsheet = _open_spreadsheet(course_info)
     today_str = _ensure_queue_ready(spreadsheet, course_info, course_id)
-    username = _require_queue_session(request, course_id, group_id, lab_key)
+    username, _fio = _require_student_session(request, course_id, group_id)
 
     # Resolve FIO
     try:
@@ -3253,22 +3317,16 @@ def queue_shift(
 @app.get("/courses/{course_id}/groups/{group_id}/labs/{lab_id}/queue")
 @limiter.limit("30/minute")
 def queue_list(request: Request, course_id: str, group_id: str, lab_id: str):
-    """List the active queue for a group and lab (all statuses, all groups on the sheet)."""
+    """List the active queue for a group and lab. Public - no session required."""
     course_info, lab_key, lab_config = _resolve_queue_lab(course_id, lab_id)
+
+    # Only create the sheet if there is an active session
+    session = _queue_active_session(course_id, group_id, lab_key)
+    if session is None:
+        return {"queue": [], "size": 0, "is_team_lab": is_team_lab(lab_config), "queue_open": False}
+
     spreadsheet = _open_spreadsheet(course_info)
     today_str = _ensure_queue_ready(spreadsheet, course_info, course_id)
-
-    # Require either queue_session or admin_session
-    cookie = request.cookies.get(QUEUE_SESSION_COOKIE)
-    admin_cookie = request.cookies.get("admin_session")
-    if not cookie and not admin_cookie:
-        raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
-    if admin_cookie:
-        try:
-            signer.unsign(admin_cookie, max_age=3600)
-        except BadSignature:
-            if not cookie:
-                raise HTTPException(status_code=401, detail="SESSION_REQUIRED")
 
     worksheet = spreadsheet.worksheet(f"{QUEUE_SHEET_PREFIX}{today_str}")
     rows = read_queue_rows(worksheet)
@@ -3287,6 +3345,45 @@ def queue_list(request: Request, course_id: str, group_id: str, lab_id: str):
         ],
         "size": len(rows),
         "is_team_lab": is_team_lab(lab_config),
+        "queue_open": True,
+    }
+
+
+# --- Admin: view today's queue (all labs, all groups) ---
+
+@app.get("/admin/courses/{course_id}/queue/today")
+@limiter.limit("30/minute")
+def admin_queue_today(
+    request: Request,
+    course_id: str,
+    admin: str = Depends(require_admin),
+):
+    admin = _ensure_admin_resolved(request, admin)
+    course_info = get_course_by_id(course_id)
+    spreadsheet = _open_spreadsheet(course_info)
+    today_str = _queue_today_str(course_info)
+
+    from gspread.exceptions import WorksheetNotFound
+    try:
+        worksheet = spreadsheet.worksheet(f"{QUEUE_SHEET_PREFIX}{today_str}")
+    except WorksheetNotFound:
+        return {"queue": [], "size": 0, "date": today_str}
+
+    rows = read_queue_rows(worksheet)
+    return {
+        "queue": [
+            {
+                "position": r.position,
+                "group": r.group,
+                "fio": r.fio,
+                "lab": r.lab,
+                "session_no": r.session_no,
+                "status": r.status,
+            }
+            for r in rows
+        ],
+        "size": len(rows),
+        "date": today_str,
     }
 
 

@@ -164,6 +164,11 @@ def _ensure_sheet(
 ):
     worksheet = _get_worksheet(spreadsheet, title)
     if worksheet is None:
+        for ws in spreadsheet.worksheets():
+            if ws.title.startswith(title + "_conflict"):
+                spreadsheet.batch_update({
+                    "requests": [{"deleteSheet": {"sheetId": ws.id}}]
+                })
         worksheet = spreadsheet.add_worksheet(
             title=title,
             rows=100,

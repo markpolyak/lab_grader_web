@@ -20,6 +20,7 @@ import {
   IconButton,
 } from "@mui/material";
 import { BulkGradeDialog } from "./BulkGradeDialog";
+import { QueueViewDialog } from "../QueueView/QueueViewDialog";
 
 // Иконка копирования (два листа) - та же, что на GitHub: Octicons copy-16,
 // встроенная, чтобы не тащить @mui/icons-material ради одного значка.
@@ -119,6 +120,7 @@ export const LabList = ({ courseId, onBack }) => {
 
   // Лаба, для которой открыт диалог массовой проверки (независим от рассылки)
   const [bulkLab, setBulkLab] = useState(null);
+  const [queueLab, setQueueLab] = useState(null);
 
   const showSnackbar = (message, severity = "info") => setSnackbar({ open: true, message, severity });
 
@@ -412,6 +414,14 @@ export const LabList = ({ courseId, onBack }) => {
                       >
                         {t("adminLabs.bulk.button")}
                       </MuiButton>
+                      <MuiButton
+                        size="small"
+                        variant="outlined"
+                        sx={{ ml: 1 }}
+                        onClick={() => setQueueLab(lab)}
+                      >
+                        {t("adminQueue.button")}
+                      </MuiButton>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -570,6 +580,14 @@ export const LabList = ({ courseId, onBack }) => {
           lab={bulkLab}
           onClose={() => setBulkLab(null)}
           onError={(message) => showSnackbar(message, "error")}
+        />
+      )}
+
+      {queueLab && (
+        <QueueViewDialog
+          courseId={courseId}
+          lab={queueLab}
+          onClose={() => setQueueLab(null)}
         />
       )}
 

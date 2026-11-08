@@ -70,3 +70,46 @@ def require_queue_session(
     ):
         raise QueueError("SESSION_REQUIRED", "Нет действующей сессии очереди")
     return payload["username"]
+
+
+STUDENT_SESSION_COOKIE = "student_session"
+STUDENT_SESSION_MAX_AGE = 86400
+
+
+def build_student_session(
+    signer: TimestampSigner,
+    github: str,
+    fio: str,
+    course_id: str,
+    group_id: str,
+) -> str:
+    payload = json.dumps(
+        {
+            "github": github,
+            "fio": fio,
+            "course_id": course_id,
+            "group_id": group_id,
+        },
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    payload_b64 = base64.urlsafe_b64encode(payload).decode("ascii")
+    return signer.sign(payload_b64.encode("ascii")).decode("ascii")
+
+
+def parse_student_session(
+    signer: TimestampSigner,
+    cookie_value: str | None,
+) -> dict | None:
+    if not cookie_value:
+        return None
+    try:
+        payload_b64 = signer.unsign(
+            cookie_value, max_age=STUDENT_SESSION_MAX_AGE
+        ).decode("ascii")
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64.encode("ascii")))
+    except (BadSignature, ValueError, TypeError, KeyError):
+        return None
+    if not isinstance(payload, dict) or not payload.get("github"):
+        return None
+    return payload

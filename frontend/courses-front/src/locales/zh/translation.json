@@ -252,12 +252,36 @@
       "closedAt": "提交已于 {{moment}} 截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。"
     }
   },
+  "adminQueue": {
+    "button": "Queue",
+    "title": "Queue: {{lab}}",
+    "group": "Group",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "empty": "Queue is empty",
+    "total": "Total: {{count}}",
+    "close": "Close",
+    "columns": {
+      "position": "#",
+      "group": "Group",
+      "name": "Student",
+      "lab": "Lab",
+      "status": "Status"
+    },
+    "errors": {
+      "groupsFailed": "Failed to load groups",
+      "loadFailed": "Failed to load queue"
+    },
+    "buttonToday": "今日队列",
+    "titleToday": "{{date}} 的队列"
+  },
   "queue": {
     "title": "实验答辩排队",
     "description": "加入实验答辩队列并查看您的位置。",
     "loading": "正在加载队列状态…",
     "signInRequired": "请使用 GitHub 登录后加入并查看队列。",
     "signIn": "使用 GitHub 登录",
+    "fillFormFirst": "请先填写上方表格并点击「注册」以加入队列。",
     "alreadyPassed": "该实验已通过。",
     "position": "您已排队：第 {{position}} 位，共 {{total}} 位。",
     "closed": "队列已关闭。下一场答辩：{{nextSession}}。",
@@ -308,7 +332,8 @@
       "SESSION_REQUIRED": "请使用 GitHub 登录后使用队列。",
       "NO_TEAM": "您不是该实验团队的成员。",
       "TEAMS_UNAVAILABLE": "无法加载团队信息。",
-      "SHEETS_UNAVAILABLE": "Google 表格暂时不可用。"
+      "SHEETS_UNAVAILABLE": "Google 表格暂时不可用。",
+      "CI_PENDING": "CI 仍在运行，请稍后重试。"
     }
   },
   "schedule": {

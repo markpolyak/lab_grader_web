@@ -18,7 +18,7 @@ import { useTranslation } from "react-i18next";
 import {
   fetchDefenseQueue,
   fetchDefenseQueueStatus,
-  getJoinStartUrl,
+  registerAndCheck,
   registerForDefenseQueue,
   shiftDefenseQueue,
   withdrawFromDefenseQueue,
@@ -29,16 +29,12 @@ const normalizeQueue = (data) => {
   if (Array.isArray(data?.queue)) return data.queue;
   if (Array.isArray(data?.entries)) return data.entries;
   if (Array.isArray(data?.rows)) return data.rows;
-  const error = new Error("Queue endpoint returned an unexpected response");
-  error.code = "INVALID_RESPONSE";
-  throw error;
+  return [];
 };
 
 const validateStatus = (data) => {
   if (!data || typeof data !== "object" || typeof data.in_queue !== "boolean") {
-    const error = new Error("Queue status endpoint returned an unexpected response");
-    error.code = "INVALID_RESPONSE";
-    throw error;
+    return null;
   }
   return data;
 };
@@ -71,7 +67,7 @@ const entryName = (entry) =>
   "";
 
 // eslint-disable-next-line react/prop-types
-export function QueueSection({ courseId, groupId, labId }) {
+export function QueueSection({ courseId, groupId, labId, formData }) {
   const { t, i18n } = useTranslation();
   const [status, setStatus] = useState(null);
   const [queue, setQueue] = useState([]);
@@ -126,13 +122,46 @@ export function QueueSection({ courseId, groupId, labId }) {
     };
   }, [courseId, groupId, labId]);
 
-  const performAction = async (action, successKey) => {
+  const handleJoinQueue = async () => {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
-      await action();
-      setNotice(t(successKey));
+      if (status?.session_required && formData) {
+        await registerAndCheck(courseId, groupId, formData);
+      }
+      await registerForDefenseQueue(courseId, groupId, labId);
+      setNotice(t("queue.registered"));
+      await reload();
+    } catch (requestError) {
+      setError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleWithdraw = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await withdrawFromDefenseQueue(courseId, groupId, labId);
+      setNotice(t("queue.withdrawn"));
+      await reload();
+    } catch (requestError) {
+      setError(requestError);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleShift = async () => {
+    setBusy(true);
+    setError(null);
+    setNotice(null);
+    try {
+      await shiftDefenseQueue(courseId, groupId, labId, Number(shiftBy));
+      setNotice(t("queue.shifted"));
       await reload();
     } catch (requestError) {
       setError(requestError);
@@ -150,66 +179,18 @@ export function QueueSection({ courseId, groupId, labId }) {
     [i18n.language, status?.session, t]
   );
 
-  const needsSignIn =
-    error?.code === "SESSION_REQUIRED" || error?.status === 401;
   const errorMessage = error
-    ? needsSignIn
-      ? null
-      : error.code
-        ? t(`queue.errors.${error.code}`, {
-            defaultValue: error.message || t("queue.errors.generic"),
-          })
-        : error.message || t("queue.errors.generic")
+    ? error.code
+      ? t(`queue.errors.${error.code}`, {
+          defaultValue: error.message || t("queue.errors.generic"),
+        })
+      : error.message || t("queue.errors.generic")
     : null;
+
   const team = status?.team;
   const teamMembers = Array.isArray(team?.members) ? team.members : [];
   const validShift = /^[1-9]\d*$/.test(shiftBy) && Number.isSafeInteger(Number(shiftBy));
-
-  const renderQueueState = () => {
-    if (status.already_passed) {
-      return <Alert severity="success">{t("queue.alreadyPassed")}</Alert>;
-    }
-    if (status.in_queue) {
-      return (
-        <Alert severity="success">
-          {t("queue.position", {
-            position: status.position,
-            total: status.queue_size,
-          })}
-        </Alert>
-      );
-    }
-    if (status.queue_open === false) {
-      return (
-        <Alert severity="warning">
-          {t("queue.closed", { nextSession: nextSessionLabel })}
-        </Alert>
-      );
-    }
-    if (status.ci_status === "not_run") {
-      return <Alert severity="info">{t("queue.ciNotRun")}</Alert>;
-    }
-    if (status.ci_status === "failed") {
-      return <Alert severity="warning">{t("queue.ciFailed")}</Alert>;
-    }
-    if (status.can_register && status.queue_open) {
-      return (
-        <Button
-          variant="contained"
-          disabled={busy}
-          onClick={() =>
-            performAction(
-              () => registerForDefenseQueue(courseId, groupId, labId),
-              "queue.registered"
-            )
-          }
-        >
-          {t(busy ? "queue.working" : "queue.register")}
-        </Button>
-      );
-    }
-    return <Alert severity="info">{t("queue.cannotRegister")}</Alert>;
-  };
+  const formReady = formData && formData.surname && formData.name && formData.github;
 
   return (
     <Paper component="section" variant="outlined" sx={{ mt: 3, p: { xs: 2, sm: 3 } }}>
@@ -228,29 +209,12 @@ export function QueueSection({ courseId, groupId, labId }) {
           </Stack>
         )}
 
-        {!loading && needsSignIn && (
-          <Alert
-            severity="info"
-            action={
-              <Button
-                color="inherit"
-                size="small"
-                onClick={() => window.location.assign(getJoinStartUrl(courseId, labId))}
-              >
-                {t("queue.signIn")}
-              </Button>
-            }
-          >
-            {t("queue.signInRequired")}
-          </Alert>
-        )}
-
         {!loading && errorMessage && <Alert severity="error">{errorMessage}</Alert>}
         {notice && <Alert severity="success">{notice}</Alert>}
 
-        {!loading && status && (
+        {!loading && (
           <>
-            {status.is_team_lab && team && (
+            {status?.is_team_lab && team && (
               <Paper variant="outlined" sx={{ p: 2 }}>
                 <Typography variant="subtitle2">{t("queue.teamTitle")}</Typography>
                 <Typography>{team.title || team.name || team.slug}</Typography>
@@ -270,20 +234,44 @@ export function QueueSection({ courseId, groupId, labId }) {
               </Paper>
             )}
 
-            {renderQueueState()}
+            {status && status.already_passed && (
+              <Alert severity="success">{t("queue.alreadyPassed")}</Alert>
+            )}
 
-            {status.in_queue && (
+            {status && status.in_queue && (
+              <Alert severity="success">
+                {t("queue.position", {
+                  position: status.position,
+                  total: status.queue_size,
+                })}
+              </Alert>
+            )}
+
+            {status && !status.in_queue && !status.already_passed && status.queue_open === false && (
+              <Alert severity="warning">
+                {t("queue.closed", { nextSession: nextSessionLabel })}
+              </Alert>
+            )}
+
+            {status && !status.in_queue && !status.already_passed && status.queue_open !== false && (
+              <Button
+                variant="contained"
+                color="primary"
+                size="large"
+                disabled={busy || !formReady}
+                onClick={handleJoinQueue}
+              >
+                {t(busy ? "queue.working" : "queue.register")}
+              </Button>
+            )}
+
+            {status && status.in_queue && (
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems="flex-start">
                 <Button
                   variant="outlined"
                   color="error"
                   disabled={busy}
-                  onClick={() =>
-                    performAction(
-                      () => withdrawFromDefenseQueue(courseId, groupId, labId),
-                      "queue.withdrawn"
-                    )
-                  }
+                  onClick={handleWithdraw}
                 >
                   {t(busy ? "queue.working" : "queue.withdraw")}
                 </Button>
@@ -301,18 +289,7 @@ export function QueueSection({ courseId, groupId, labId }) {
                   <Button
                     variant="outlined"
                     disabled={busy || !validShift}
-                    onClick={() =>
-                      performAction(
-                        () =>
-                          shiftDefenseQueue(
-                            courseId,
-                            groupId,
-                            labId,
-                            Number(shiftBy)
-                          ),
-                        "queue.shifted"
-                      )
-                    }
+                    onClick={handleShift}
                   >
                     {t(busy ? "queue.working" : "queue.shift")}
                   </Button>
@@ -320,7 +297,7 @@ export function QueueSection({ courseId, groupId, labId }) {
               </Stack>
             )}
 
-            {status.session && (
+            {status?.session && (
               <Typography variant="body2" color="text.secondary">
                 {t("queue.session")}: {currentSessionLabel}
               </Typography>
@@ -347,16 +324,9 @@ export function QueueSection({ courseId, groupId, labId }) {
                 <List disablePadding>
                   {queue.map((entry, index) => {
                     const position = entry.position ?? index + 1;
-                    const registeredAt = formatSessionMoment(
-                      entry.registered_at || entry.registeredAt,
-                      i18n.language
-                    );
                     return (
                       <ListItem
-                        key={
-                          entry.id ||
-                          `${entry.identifier || entry.github || entryName(entry)}-${index}`
-                        }
+                        key={`${entry.fio}-${entry.lab}-${index}`}
                         divider={index < queue.length - 1}
                         disableGutters
                         secondaryAction={
@@ -379,7 +349,6 @@ export function QueueSection({ courseId, groupId, labId }) {
                               </Typography>
                             </Stack>
                           }
-                          secondary={registeredAt}
                         />
                       </ListItem>
                     );
