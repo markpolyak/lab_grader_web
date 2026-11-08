@@ -72,12 +72,11 @@ class ScheduleSource(ABC):
     Two responsibilities:
       1. `list_sessions(group_id, since, until)` — read the schedule and
          yield ScheduledSession objects whose starts_at falls in [since, until).
-         Used by the queue builder and the "is queue open now?" check.
-      2. `fetch_raw()` (optional) — for sources that can pull fresh data
-         from an external system (GUAP website). Called by the admin
-         "refresh schedule" endpoint; returns raw lesson objects that
-         `to_yaml_sessions` then converts into the YAML structure saved
-         to schedules/<course_id>.yaml.
+         Used by the queue builder and the "is queue open now?" check. External
+         sources such as GUAP may fetch current data for each request.
+      2. `fetch_raw()` (optional) — pull data from an external system for the
+         admin "refresh schedule" endpoint; `to_yaml_sessions` converts it into
+         the YAML structure saved to schedules/<course_id>.yaml.
 
     Manual sources don't have an external system to pull from, so they
     don't implement `fetch_raw` — calling it raises NotImplementedError,

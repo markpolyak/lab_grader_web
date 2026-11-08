@@ -12,110 +12,83 @@ from grading.schedule import (
 from grading.schedule import guap as guap_module
 
 
-def test_guap_fetch_raw_requests_only_requested_groups(monkeypatch):
-    class FakeFetcher:
-        def __init__(self, ttl):
-            assert ttl == 0
-            self.index_requests = 0
-            self.group_requests = []
+def test_guap_fetch_raw_requests_only_the_selected_group_without_cache(monkeypatch):
+    calls = []
 
-        def index(self):
-            self.index_requests += 1
-            return "group-directory"
-
-        def by_group(self, group_id):
-            self.group_requests.append(group_id)
-            return f"group-{group_id}"
-
-    fetchers = []
-
-    def create_fetcher(**kwargs):
-        fetcher = FakeFetcher(**kwargs)
-        fetchers.append(fetcher)
-        return fetcher
-
-    monkeypatch.setattr(guap_module, "Fetcher", create_fetcher)
-    monkeypatch.setattr(
-        guap_module,
-        "parse_directories",
-        lambda _html: {"groups": {42: "4432", 43: "4433"}},
-    )
-    monkeypatch.setattr(guap_module, "parse_lessons", lambda html: [html])
-
-    source = guap_module.GuapScheduleSource()
-    assert source.fetch_raw("4432") == ["group-42"]
-    assert source.fetch_raw("4433") == ["group-43"]
-    assert len(fetchers) == 1
-    assert fetchers[0].index_requests == 1
-    assert fetchers[0].group_requests == [42, 43]
-
-
-def test_guap_list_sessions_fetches_only_matching_course_subject(monkeypatch):
     class FakeFetcher:
         def __init__(self, ttl):
             assert ttl == 0
 
         def index(self):
-            return "group-directory"
+            calls.append(("index",))
+            return "directory html"
 
         def by_group(self, group_id):
-            assert group_id == 42
-            return "requested-group"
-
-    lessons = [
-        SimpleNamespace(
-            kind="ЛР",
-            day="Понедельник",
-            slot=4,
-            subject="Операционные системы",
-            room="23-09",
-            teachers=["Иванов"],
-        ),
-        SimpleNamespace(
-            kind="ЛР",
-            day="Понедельник",
-            slot=3,
-            subject="Проектирование баз данных",
-            room=None,
-            teachers=[],
-        ),
-        SimpleNamespace(
-            kind="Лекция",
-            day="Понедельник",
-            slot=2,
-            subject="Операционные системы",
-            room=None,
-            teachers=[],
-        ),
-    ]
+            calls.append(("group", group_id))
+            return "group html"
 
     monkeypatch.setattr(guap_module, "Fetcher", FakeFetcher)
     monkeypatch.setattr(
         guap_module,
         "parse_directories",
-        lambda _html: {"groups": {42: "4432"}},
+        lambda _html: {"groups": {42: "М433"}},
     )
-    monkeypatch.setattr(guap_module, "parse_lessons", lambda _html: lessons)
+    monkeypatch.setattr(
+        guap_module, "parse_lessons", lambda html: [f"parsed {html}"]
+    )
 
+    source = guap_module.GuapScheduleSource(course_name="Test Course")
+
+    assert source.fetch_raw("М433") == ["parsed group html"]
+    assert calls == [("index",), ("group", 42)]
+
+
+def test_guap_sessions_filter_live_group_lessons_by_course():
     source = guap_module.GuapScheduleSource(
+        group_code="М433",
         course_id="test-course",
-        course_name="  ОПЕРАЦИОННЫЕ   СИСТЕМЫ ",
+        course_name="  TEST   Course ",
     )
+    source.fetch_raw = lambda group_code: [
+        SimpleNamespace(
+            day="Понедельник",
+            slot=1,
+            kind="ЛР",
+            subject="Test Course",
+            room="Room 1",
+            teachers=["Teacher"],
+        ),
+        SimpleNamespace(
+            day="Понедельник",
+            slot=2,
+            kind="ЛР",
+            subject="Another Course",
+            room=None,
+            teachers=[],
+        ),
+        SimpleNamespace(
+            day="Понедельник",
+            slot=3,
+            kind="Лекция",
+            subject="Test Course",
+            room=None,
+            teachers=[],
+        ),
+    ]
+
     sessions = list(
         source.list_sessions(
-            "4432",
+            "М433",
             datetime(2026, 11, 9),
             datetime(2026, 11, 10),
         )
     )
 
     assert len(sessions) == 1
-    assert sessions[0].course_id == "test-course"
-    assert sessions[0].group_id == "4432"
-    assert sessions[0].subject == "Операционные системы"
-    assert sessions[0].room == "23-09"
-    assert sessions[0].teacher == "Иванов"
-    assert sessions[0].starts_at == datetime(2026, 11, 9, 14, 40)
+    assert sessions[0].group_id == "М433"
+    assert sessions[0].subject == "Test Course"
+    assert sessions[0].room == "Room 1"
+    assert sessions[0].teacher == "Teacher"
 
 
 def _write_schedule_config(path):
@@ -162,14 +135,15 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
 ):
     schedule_path = tmp_path / "test-course.yaml"
     _write_schedule_config(schedule_path)
+    captured = {}
 
     class FakeGuapScheduleSource:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
 
         def fetch_raw(self, group_code):
             if group_code == "missing":
-                raise RuntimeError("group missing from snapshot")
+                raise RuntimeError("group missing from GUAP")
             return ["raw lesson"]
 
         def to_yaml_sessions(self, raw_lessons):
@@ -180,6 +154,7 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
                     "recurrence": {"day": "monday", "week": "all"},
                     "start": "12:00",
                     "end": "13:00",
+                    "subject": "Test Course",
                 }
             ]
 
@@ -193,12 +168,14 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
         "test-course",
         schedule_file_path=schedule_path,
         groups=groups,
+        course_name="Test Course",
     )
 
     assert result["refreshed"] == {"4432": 1}
     assert result["errors"] == {
-        "4433": "RuntimeError: group missing from snapshot"
+        "4433": "RuntimeError: group missing from GUAP"
     }
+    assert captured["course_name"] == "Test Course"
     data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
     assert data["groups"]["4432"]["slots"][0]["id"] == "fresh-slot"
     assert data["groups"]["4432"]["corrections"] == [
@@ -270,8 +247,8 @@ def test_refresh_creates_initial_schedule_yaml(tmp_path, monkeypatch):
     schedule_path = schedule_dir / "test-course.yaml"
 
     class FakeGuapScheduleSource:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            assert kwargs["course_name"] == "Test Course"
 
         def fetch_raw(self, _group_code):
             return ["lesson"]
@@ -283,6 +260,7 @@ def test_refresh_creates_initial_schedule_yaml(tmp_path, monkeypatch):
                     "recurrence": {"day": "monday", "week": "all"},
                     "start": "10:00",
                     "end": "11:00",
+                    "subject": "Test Course",
                 }
             ]
 
@@ -291,6 +269,7 @@ def test_refresh_creates_initial_schedule_yaml(tmp_path, monkeypatch):
         "test-course",
         schedule_path,
         [{"id": "4432", "guap_group_id": "4432"}],
+        course_name="Test Course",
     )
     assert result["refreshed"] == {"4432": 1}
     data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
@@ -400,3 +379,19 @@ def test_schedule_yaml_requires_course_and_group_identifiers(tmp_path):
         assert "`group_id` is required" in str(error)
     else:
         raise AssertionError("Schedule group without group_id should be rejected")
+
+
+def test_schedule_yaml_accepts_alphanumeric_group_ids(tmp_path):
+    schedule_path = tmp_path / "test-course.yaml"
+    schedule_path.write_text(
+        """course-id: test-course
+source: guap
+groups:
+  М433:
+    group_id: М433
+    slots: []
+""",
+        encoding="utf-8",
+    )
+
+    assert parse_schedule_file(schedule_path, "test-course").keys() == {"М433"}

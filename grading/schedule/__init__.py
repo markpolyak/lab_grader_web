@@ -32,7 +32,7 @@ for _candidate in _CANDIDATE_PARSER_PATHS:
 from .base import ScheduleSource, ScheduledSession, ScheduleError, ScheduleConfigError
 from .registry import register_source, get_source_class, known_sources
 from .manual import ManualScheduleSource, WEEKDAYS, _validate_group
-from .guap import GuapScheduleSource, normalize_subject
+from .guap import GuapScheduleSource
 
 # Importing these modules triggers @register_source decorators.
 # New sources added to the project should be imported here.
@@ -115,8 +115,8 @@ def parse_schedule_file(path: str | Path, course_id: str | None = None) -> dict[
             raise ScheduleConfigError(
                 f"{where}: `group_id: {configured_id!r}` must match its groups key"
             )
-        if not str(group_id).isdigit():
-            raise ScheduleConfigError(f"{where}: group IDs must contain only digits")
+        if group_id is None or not str(group_id).strip():
+            raise ScheduleConfigError(f"{where}: group IDs must be non-empty")
         merged_config = {**defaults, **group_cfg}
         _validate_group(str(group_id), merged_config, where)
         sources[str(group_id)] = ManualScheduleSource(
@@ -226,12 +226,7 @@ def refresh_all_groups(
     groups: list[dict[str, str]],
     course_name: str | None = None,
 ) -> dict[str, object]:
-    """Fetch selected groups directly and refresh their schedule YAML.
-
-    If ``course_name`` is set, retain only sessions with an exact subject
-    match (case-insensitive, whitespace-normalized). If it is empty or omitted,
-    keep all fetched sessions.
-    """
+    """Fetch selected groups from GUAP and update their course-filtered slots."""
     from .guap import GuapScheduleSource, normalize_subject
 
     import os
@@ -269,14 +264,12 @@ def refresh_all_groups(
     not_found: list[str] = []
     skipped: list[str] = []
     normalized_course_name = normalize_subject(course_name) or None
-    source = GuapScheduleSource(
-        course_id=course_id,
-    )
+    source = GuapScheduleSource(course_id=course_id, course_name=course_name)
     for group in groups:
         group_id = group["id"]
         guap_group_id = group.get("guap_group_id") or group_id
-        if not str(group_id).isdigit():
-            errors[group_id] = "group_id must contain only digits"
+        if not str(group_id).strip():
+            errors[group_id] = "group_id must be non-empty"
             continue
         group_config = schedule_groups.get(group_id)
         if group_config is None:

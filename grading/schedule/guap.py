@@ -1,28 +1,11 @@
-"""GUAP (guap.ru/rasp) schedule source.
-
-This source is special: it has two halves.
-  1. `fetch_raw(group_code)` — used by the admin "refresh schedule" endpoint.
-     Fetches the GUAP group directory once and then requests only that group's
-     timetable. It does not build or read the full-semester schedule snapshot.
-  2. `to_yaml_sessions(raw_lessons)` — converts those Lesson objects into
-     the YAML `slots:` structure that gets written back to
-     schedules/<course_id>.yaml under the appropriate group.
-
-After a refresh, the YAML file is the source of truth — `ManualScheduleSource`
-serves manually configured schedules. For `source: guap`, `list_sessions`
-fetches just the requested group and filters by the course name on each
-request, without reading a full-semester snapshot.
-
-The parser lives at https://github.com/markpolyak/suai-schedule-parser
-and is wired in as a git submodule under vendor/suai-schedule-parser/.
-The validate / check_hypothesis / plan modules are intentionally NOT imported.
-"""
+"""Fetch group-specific GUAP schedules and expose matching lab sessions."""
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 from typing import Iterable
 
 from suai_rasp.fetch import Fetcher
+from suai_rasp.model import LESSON_TIMES
 from suai_rasp.parse import parse_directories, parse_lessons
 
 from .base import ScheduleSource, ScheduledSession, ScheduleConfigError
@@ -45,37 +28,26 @@ ISO_TO_YAML_DAY = {
 ISO_TO_SHORT_DAY = {0: 'mon', 1: 'tue', 2: 'wed', 3: 'thu',
                     4: 'fri', 5: 'sat', 6: 'sun'}
 
-# Standard GUAP slot numbers -> (start, end) times. Used as a fallback when
-# the parser doesn't give us explicit times (the slot number is the stable
-# identifier GUAP uses).
+# Standard GUAP slot numbers -> (start, end), kept in sync with the parser.
 GUAP_SLOTS = {
-    1: (time(9, 0),   time(10, 30)),
-    2: (time(10, 40), time(12, 10)),
-    3: (time(13, 0),  time(14, 30)),
-    4: (time(14, 40), time(16, 10)),
-    5: (time(16, 20), time(17, 50)),
-    6: (time(18, 0),  time(19, 30)),
-    7: (time(19, 40), time(21, 10)),
+    slot: (time.fromisoformat(start), time.fromisoformat(end))
+    for slot, (start, end) in LESSON_TIMES.items()
 }
 
 DEFAULT_LAB_KINDS = ("ЛР", "Лабораторная", "Лабораторное занятие")
-
-
-def normalize_subject(value: object) -> str:
-    return " ".join(str(value or "").casefold().split())
+def normalize_subject(value: str | None) -> str:
+    """Normalize whitespace and case for exact course-title matching."""
+    return " ".join(str(value or "").split()).casefold()
 
 
 @register_source('guap')
 class GuapScheduleSource(ScheduleSource):
-    """Fetch GUAP schedules for one group, optionally limited to a course.
+    """Fetch one group's timetable from GUAP and select this course's labs.
 
     Usage:
 
         src = GuapScheduleSource(course_name="Операционные системы")
-        raw = src.fetch_raw("4432")            # fetch only this group's lessons
-        yaml_slots = src.to_yaml_sessions(raw)  # list of dicts for YAML
-
-    `list_sessions` fetches directly from the parser at request time.
+        sessions = list(src.list_sessions("4432", since, until))
     """
 
     def __init__(
@@ -93,25 +65,14 @@ class GuapScheduleSource(ScheduleSource):
         self._course_name = normalize_subject(course_name)
         self._auto_open_minutes = auto_open_minutes
         self._auto_close_minutes = auto_close_minutes
-        self._fetcher = None
-        self._group_directory = None
+        self._fetcher: Fetcher | None = None
+        self._group_directory: dict[int, str] | None = None
 
     # ------------------------------------------------------------------
     # Public API for the admin refresh endpoint and live schedule requests
     # ------------------------------------------------------------------
     def fetch_raw(self, group_code: str | None = None) -> list:
-        """Fetch only one group's timetable directly from GUAP.
-
-        The directory page maps the displayed group name (e.g. "4432") to
-        GUAP's internal group ID. The timetable request then uses that ID,
-        avoiding a full-semester dump across every department.
-
-        Returns a list of parsed Lesson objects for this group.
-
-        The parser's HTTP cache is bypassed so this fetch requests current GUAP
-        data. The Fetcher instance and directory lookup are reused when this
-        source refreshes multiple groups.
-        """
+        """Fetch just one group's timetable directly from GUAP."""
         gc = group_code or self._group_code
         if not gc:
             raise ScheduleConfigError(
@@ -128,17 +89,18 @@ class GuapScheduleSource(ScheduleSource):
                     f"Failed to load GUAP group directory: {type(e).__name__}: {e}"
                 )
 
-        normalized_group = " ".join(str(gc).casefold().split())
         group_ids = [
             group_id
             for group_id, name in self._group_directory.items()
-            if " ".join(str(name).casefold().split()) == normalized_group
+            if normalize_subject(name) == normalize_subject(gc)
         ]
         if not group_ids:
-            raise ScheduleConfigError(f"Group {gc!r} not found in GUAP directory")
+            raise ScheduleConfigError(
+                f"Group {gc!r} not found in GUAP directory. Verify the code "
+                "on https://guap.ru/rasp."
+            )
         if len(group_ids) > 1:
             raise ScheduleConfigError(f"Group {gc!r} is ambiguous in GUAP directory")
-
         try:
             return parse_lessons(self._fetcher.by_group(group_ids[0]))
         except Exception as e:
@@ -200,12 +162,14 @@ class GuapScheduleSource(ScheduleSource):
                 'end': str(end_t.isoformat()),
                 'subject': str(getattr(lesson, 'subject', '') or ''),
                 'room': str(getattr(lesson, 'room', '') or ''),
-                'teacher': str(getattr(lesson, 'teacher', '') or ''),
+                'teacher': ", ".join(
+                    str(teacher) for teacher in getattr(lesson, 'teachers', [])
+                ),
             })
         return out
 
     # ------------------------------------------------------------------
-    # ScheduleSource.list_sessions — used only for tests / direct reads
+    # ScheduleSource.list_sessions — live, group-specific GUAP requests
     # ------------------------------------------------------------------
     def list_sessions(
         self,
@@ -213,7 +177,6 @@ class GuapScheduleSource(ScheduleSource):
         since: datetime,
         until: datetime,
     ) -> Iterable[ScheduledSession]:
-        """Fetch this group's timetable and return only this course's sessions."""
         lessons = self.fetch_raw(self._group_code or group_id)
         day = since.date()
         last = until.date()

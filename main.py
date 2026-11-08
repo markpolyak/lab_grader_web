@@ -823,6 +823,12 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
     return {"message": "Изменения успешно сохранены"}
 
 
+def _is_group_sheet_title(title: str, info_sheet: str | list[str] | None) -> bool:
+    if isinstance(info_sheet, list):
+        return not title.startswith(tuple(info_sheet))
+    return title != info_sheet and re.fullmatch(r"\d+", title) is not None
+
+
 @app.get("/courses/{course_id}/groups")
 @limiter.limit("10/minute")
 def get_course_groups(request: Request, course_id: str):
@@ -838,7 +844,11 @@ def get_course_groups(request: Request, course_id: str):
 
     try:
         spreadsheet = client.open_by_key(spreadsheet_id)
-        sheet_names = [sheet.title for sheet in spreadsheet.worksheets() if sheet.title != info_sheet]
+        sheet_names = [
+            sheet.title
+            for sheet in spreadsheet.worksheets()
+            if _is_group_sheet_title(sheet.title, info_sheet)
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch sheets: {str(e)}")
 
@@ -2524,8 +2534,8 @@ def schedule_sessions(
     source_name = group_config.get("source", schedule_defaults.get("source"))
     if source_name is None:
         source_name = "manual" if group_config else "guap"
-    if not re.fullmatch(r"\d+", group_id):
-        raise HTTPException(status_code=400, detail="Идентификатор группы должен содержать только цифры.")
+    if not group_id.strip():
+        raise HTTPException(status_code=400, detail="Идентификатор группы не может быть пустым.")
 
     source = None
     if source_name != "guap":
@@ -2611,13 +2621,12 @@ def schedule_sessions(
                 status_code=502,
                 detail=f"Не удалось получить расписание из GUAP: {e}",
             )
+        queue_settings = group_config.get(
+            "queue_settings", schedule_defaults.get("queue_settings", {})
+        )
     else:
         sessions = list(source.list_sessions(group_id, since, until))
-    queue_settings = (
-        source.queue_settings
-        if source is not None
-        else group_config.get("queue_settings", {})
-    )
+        queue_settings = source.queue_settings
     if not isinstance(queue_settings, dict):
         raise HTTPException(
             status_code=400,
@@ -2658,14 +2667,6 @@ def _schedule_group_sources(course_id: str, course_info: dict) -> tuple[list[dic
     else:
         parse_schedule_file(schedule_path_for_course(course_id, SCHEDULES_DIR), course_id)
         manual = manual_course_groups(schedule_data)
-    invalid_manual_groups = [
-        group["id"] for group in manual if not re.fullmatch(r"\d+", group["id"])
-    ]
-    if invalid_manual_groups:
-        raise ScheduleConfigError(
-            "`manual-groups` в файле расписания допускает только числовые идентификаторы: "
-            + ", ".join(invalid_manual_groups)
-        )
     groups_by_id = {group["id"]: group for group in manual}
     warnings = []
     spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
@@ -2674,7 +2675,7 @@ def _schedule_group_sources(course_id: str, course_info: dict) -> tuple[list[dic
         try:
             spreadsheet = sheets_client().open_by_key(spreadsheet_id)
             for sheet in spreadsheet.worksheets():
-                if sheet.title != info_sheet and re.fullmatch(r"\d+", sheet.title):
+                if _is_group_sheet_title(sheet.title, info_sheet):
                     groups_by_id.setdefault(sheet.title, {"id": sheet.title, "guap_group_id": sheet.title})
         except Exception as e:
             logger.exception("Could not load schedule groups from Sheets for course=%s", course_id)
@@ -2720,15 +2721,6 @@ def save_schedule_manual_groups(
 ):
     course_info = get_course_by_id(course_id)
     group_ids = list(dict.fromkeys(group.strip() for group in data.groups if group.strip()))
-    non_numeric_groups = [group_id for group_id in group_ids if not re.fullmatch(r"\d+", group_id)]
-    if non_numeric_groups:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Для расписания допускаются только числовые идентификаторы групп: "
-                + ", ".join(non_numeric_groups)
-            ),
-        )
     try:
         file_path = schedule_path_for_course(course_id, SCHEDULES_DIR)
         if file_path.exists():
@@ -2744,9 +2736,9 @@ def save_schedule_manual_groups(
             )
         schedule_data["manual-groups"] = group_ids
         for configured_id, group_config in schedule_data.get("groups", {}).items():
-            if not str(configured_id).isdigit():
+            if not str(configured_id).strip():
                 raise ScheduleConfigError(
-                    f"идентификатор группы {configured_id!r} должен содержать только цифры"
+                    "идентификатор группы должен быть непустым"
                 )
             if not isinstance(group_config, dict) or str(group_config.get("group_id", "")) != str(configured_id):
                 raise ScheduleConfigError(
@@ -2774,7 +2766,7 @@ def schedule_refresh_all(
     course_id: str,
     admin: str = Depends(require_admin),
 ):
-    """Refresh numeric spreadsheet groups and manually configured groups."""
+    """Fetch spreadsheet groups and manually configured groups from GUAP."""
     try:
         course_info = get_course_by_id(course_id)
         groups, warnings = _schedule_group_sources(course_id, course_info)

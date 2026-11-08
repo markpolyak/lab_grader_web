@@ -58,10 +58,14 @@ groups:
         def worksheets(self):
             return [
                 FakeSheet("4433"),
+                FakeSheet("М433"),
                 FakeSheet("Example"),
                 FakeSheet("Queue"),
+                FakeSheet("Очередь-08.11.2026"),
                 FakeSheet("History"),
+                FakeSheet("История"),
                 FakeSheet("Info"),
+                FakeSheet("Info 2026"),
             ]
 
     class FakeSheetsClient:
@@ -94,6 +98,58 @@ def test_schedule_groups_endpoint_merges_sheet_and_manual_groups(schedule_admin_
     }
 
 
+def test_course_groups_endpoint_returns_only_numeric_group_sheets(schedule_admin_client):
+    client, _, _ = schedule_admin_client
+    response = client.get("/courses/test-course/groups")
+
+    assert response.status_code == 200
+    assert response.json() == ["4433"]
+
+
+def test_course_groups_endpoint_supports_prefixes_and_alphanumeric_names(
+    schedule_admin_client,
+):
+    client, _, _ = schedule_admin_client
+    course_info = main_module.get_course_by_id("test-course")
+    course_info["google"]["info-sheet"] = [
+        "Info",
+        "Example",
+        "Queue",
+        "History",
+        "Очередь",
+        "История",
+    ]
+
+    response = client.get("/courses/test-course/groups")
+
+    assert response.status_code == 200
+    assert response.json() == ["4433", "М433"]
+
+
+def test_schedule_groups_endpoint_supports_prefixes_and_alphanumeric_names(
+    schedule_admin_client,
+):
+    client, _, _ = schedule_admin_client
+    course_info = main_module.get_course_by_id("test-course")
+    course_info["google"]["info-sheet"] = [
+        "Info",
+        "Example",
+        "Queue",
+        "History",
+        "Очередь",
+        "История",
+    ]
+
+    response = client.get("/admin/courses/test-course/schedule/groups")
+
+    assert response.status_code == 200
+    assert response.json()["groups"] == [
+        {"id": "4432", "guap_group_id": "4432"},
+        {"id": "4433", "guap_group_id": "4433"},
+        {"id": "М433", "guap_group_id": "М433"},
+    ]
+
+
 def test_save_manual_groups_updates_schedule_yaml(schedule_admin_client):
     client, _, schedule_path = schedule_admin_client
     response = client.put(
@@ -107,15 +163,18 @@ def test_save_manual_groups_updates_schedule_yaml(schedule_admin_client):
     assert saved["manual-groups"] == ["4434", "4435"]
 
 
-def test_save_manual_groups_rejects_non_numeric_ids(schedule_admin_client):
-    client, _, _ = schedule_admin_client
+def test_save_manual_groups_accepts_alphanumeric_ids(schedule_admin_client):
+    client, _, schedule_path = schedule_admin_client
     response = client.put(
         "/admin/courses/test-course/schedule/groups",
-        json={"groups": ["Example"]},
+        json={"groups": ["М433"]},
     )
 
-    assert response.status_code == 400
-    assert "только числовые" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json()["manual_groups"] == ["М433"]
+    assert yaml.safe_load(schedule_path.read_text(encoding="utf-8"))["manual-groups"] == [
+        "М433"
+    ]
 
 
 @pytest.mark.parametrize("has_schedule_file", [True, False])
@@ -137,16 +196,16 @@ def test_schedule_sessions_fetches_guap_group_and_course_on_demand(
 
     monkeypatch.setattr(main_module, "GuapScheduleSource", FakeGuapScheduleSource)
     response = client.get(
-        "/admin/courses/test-course/groups/4433/schedule/sessions"
+        "/admin/courses/test-course/groups/М433/schedule/sessions"
     )
 
     assert response.status_code == 200
     assert response.json()["course_id"] == "test-course"
-    assert response.json()["group_id"] == "4433"
+    assert response.json()["group_id"] == "М433"
     assert "since" in response.json()
-    assert captured["group_code"] == "4433"
+    assert captured["group_code"] == "М433"
     assert captured["course_name"] == "Test Course"
-    assert captured["query"][0] == "4433"
+    assert captured["query"][0] == "М433"
 
 
 def test_schedule_sessions_keeps_manual_yaml_source(schedule_admin_client, monkeypatch):
@@ -161,9 +220,7 @@ def test_schedule_sessions_keeps_manual_yaml_source(schedule_admin_client, monke
     def fail_if_guap_is_requested(**_kwargs):
         raise AssertionError("manual schedules must not call the GUAP parser")
 
-    monkeypatch.setattr(
-        main_module, "GuapScheduleSource", fail_if_guap_is_requested
-    )
+    monkeypatch.setattr(main_module, "GuapScheduleSource", fail_if_guap_is_requested)
     response = client.get(
         "/admin/courses/test-course/groups/4432/schedule/sessions"
     )
@@ -216,10 +273,10 @@ def test_refresh_all_creates_schedule_file_on_first_request(
             return [
                 {
                     "id": "first-slot",
-                    "subject": "Test Course",
                     "recurrence": {"day": "monday", "week": "all"},
                     "start": "10:00",
                     "end": "11:00",
+                    "subject": "Test Course",
                 }
             ]
 
