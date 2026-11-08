@@ -42,6 +42,69 @@ export const fetchJoinLab = async (courseId, labId) => {
 export const getJoinStartUrl = (courseId, labId) =>
   `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}/start`;
 
+const defenseQueueUrl = (courseId, groupId, labId) =>
+  `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/groups/${encodeURIComponent(groupId)}/labs/${encodeURIComponent(labId)}/queue`;
+
+const requestDefenseQueue = async (url, options = {}) => {
+  let response;
+  try {
+    response = await fetch(url, { credentials: "include", ...options });
+  } catch (cause) {
+    const error = new Error("Queue request failed", { cause });
+    error.code = "unknown";
+    throw error;
+  }
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    // Error responses may have an empty body.
+  }
+
+  if (!response.ok) {
+    const detail = data && data.detail;
+    const error = new Error(
+      typeof detail === "string" && !/^[A-Z][A-Z_]*$/.test(detail)
+        ? detail
+        : "Queue request failed"
+    );
+    error.status = response.status;
+    error.code =
+      typeof detail === "string" && /^[A-Z][A-Z_]*$/.test(detail)
+        ? detail
+        : response.status === 401
+          ? "SESSION_REQUIRED"
+          : "unknown";
+    throw error;
+  }
+
+  return data;
+};
+
+export const fetchDefenseQueueStatus = (courseId, groupId, labId) =>
+  requestDefenseQueue(`${defenseQueueUrl(courseId, groupId, labId)}/status`);
+
+export const fetchDefenseQueue = (courseId, groupId, labId) =>
+  requestDefenseQueue(defenseQueueUrl(courseId, groupId, labId));
+
+export const registerForDefenseQueue = (courseId, groupId, labId) =>
+  requestDefenseQueue(`${defenseQueueUrl(courseId, groupId, labId)}/register`, {
+    method: "POST",
+  });
+
+export const withdrawFromDefenseQueue = (courseId, groupId, labId) =>
+  requestDefenseQueue(`${defenseQueueUrl(courseId, groupId, labId)}/withdraw`, {
+    method: "POST",
+  });
+
+export const shiftDefenseQueue = (courseId, groupId, labId, delta) =>
+  requestDefenseQueue(`${defenseQueueUrl(courseId, groupId, labId)}/shift`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ delta }),
+  });
+
 
 // --- Секретная ссылка /j/{token} (docs/SECRET_JOIN_LINKS_PLAN.md §7, §10) ---
 //
@@ -348,5 +411,4 @@ export async function gradeLab(courseId, groupId, labId, github) {
 
   return data;
 }
-
 

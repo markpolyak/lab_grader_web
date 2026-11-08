@@ -6,6 +6,7 @@ import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import { ButtonBack } from "../course-list/styled";
 import { Breadcrumb } from "../breadcrumb";
+import { QueueSection } from "./QueueSection";
 
 export const RegistrationForm = ({ courseId, groupId, labId, onBack }) => {
   const [formState, setFormState] = useState({
@@ -222,6 +223,7 @@ const handleSubmit = async () => {
           )}
         </div>
       )}
+      <QueueSection courseId={courseId} groupId={groupId} labId={labId} />
     </MainContainer>
   );
 };
