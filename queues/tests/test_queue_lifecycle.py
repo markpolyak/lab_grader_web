@@ -160,26 +160,29 @@ def test_refresh_during_external_save_then_archive_and_restart(state, manual, tm
     assert restarted.get_lesson('os', lesson.id) is None
 
 
-def test_end_of_day_expiry_is_archived_as_terminal_history(state, monkeypatch):
+def test_archive_clears_local_state_after_end_of_day_expiry(state, monkeypatch):
     service, schedule, lesson = state
     entry = service.join(lesson.id, eligible(), now=at('15:10'))
     monkeypatch.setattr('queues.usecase.queue_service._now',
                         lambda: at('00:00') + timedelta(days=1))
+    service.reconcile()
+    assert service.repository.get(lesson.id).entry_metadata[entry.id].status == EntryStatus.EXPIRED
     asyncio.run(QueueHistoryService(service, AsyncMock()).save_history(schedule.id, lesson.id))
     record = service.repository.get(lesson.id)
     assert record.archived
-    assert record.entry_metadata[entry.id].status == EntryStatus.EXPIRED
+    assert record.queue.entries == []
+    assert record.entry_metadata == {}
     items, _ = service.history('os')
-    assert items[0]['status'] == EntryStatus.EXPIRED
+    assert items == []
 
 
-def test_automatic_archiving_waits_until_service_deadline(state, monkeypatch):
+@pytest.mark.parametrize('clock,finished', [
+    ('15:10', False), ('16:39:59', False), ('16:40', True), ('17:00', True),
+])
+def test_archive_candidates_use_lesson_end(state, monkeypatch, clock, finished):
     service, schedule, lesson = state
-    monkeypatch.setattr('queues.usecase.queue_service._now', lambda: at('17:00'))
-    assert service.finished_lessons() == []
-    monkeypatch.setattr('queues.usecase.queue_service._now',
-                        lambda: at('00:00') + timedelta(days=1))
-    assert service.finished_lessons() == [(schedule.id, lesson.id)]
+    monkeypatch.setattr('queues.usecase.queue_service._now', lambda: at(clock))
+    assert service.finished_lessons() == ([(schedule.id, lesson.id)] if finished else [])
 
 
 def test_expiry_write_failure_can_be_retried(state, monkeypatch):

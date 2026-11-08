@@ -30,6 +30,7 @@ class QueueRecord:
     registration_mode: RegistrationMode = RegistrationMode.AUTOMATIC
     manual: bool = False
     cancelled: bool = False
+    archive_requested: bool = False
     archived: bool = False
     original_starts_at: datetime | None = None
     original_ends_at: datetime | None = None

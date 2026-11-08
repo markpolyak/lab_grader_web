@@ -219,7 +219,13 @@ class QueueService:
                 for lesson_id, candidate in lessons.items():
                     if lesson_id in self._archived_lesson_ids:
                         continue
+                    stored = self.repository.get(lesson_id)
+                    if stored is not None and stored.archived:
+                        continue
                     lesson = self._lessons.get(lesson_id)
+                    if lesson is not None and lesson.queue._archiving:
+                        schedule.lessons.append(lesson)
+                        continue
                     if lesson is None:
                         lesson = candidate
                         self._lessons[lesson_id] = lesson
@@ -243,20 +249,22 @@ class QueueService:
                 # Manual and rescheduled lessons may have no source entry in
                 # this week; restore them from the repository after a restart.
                 for record in self.repository.list_by_course(course_id):
-                    if record.archived:
+                    if not (record.manual or record.archive_requested or record.original_starts_at is not None) or record.id in lessons:
                         continue
-                    if not (record.manual or record.original_starts_at is not None) or record.id in lessons:
-                        continue
-                    if record.id in self._archived_lesson_ids:
+                    if record.archived or record.id in self._archived_lesson_ids:
                         continue
                     if not record.manual and not _is_queue_lesson(record.lesson_kind):
                         continue
                     if record.lesson_starts_at is None or record.lesson_ends_at is None:
                         continue
                     in_week = week_start <= record.lesson_starts_at.astimezone(ZoneInfo("Europe/Moscow")).date() < week_end
-                    if not record.manual and not in_week:
+                    if not record.manual and not record.archive_requested and not in_week:
                         continue
                     lesson = self._lessons.get(record.id)
+                    if lesson is not None and lesson.queue._archiving:
+                        if in_week:
+                            schedule.lessons.append(lesson)
+                        continue
                     if lesson is None:
                         lesson = Lesson(
                             id=record.id,
@@ -270,9 +278,7 @@ class QueueService:
                             original_starts_at=record.original_starts_at,
                         )
                         self._lessons[record.id] = lesson
-                    elif lesson.queue._archiving:
-                        record = self._records[record.id]
-                    else:
+                    elif not lesson.queue._archiving:
                         lesson.queue = record.queue
                         lesson.starts_at = record.lesson_starts_at
                         lesson.ends_at = record.lesson_ends_at
@@ -283,7 +289,7 @@ class QueueService:
                         lesson.kind = record.lesson_kind if _is_queue_lesson(record.lesson_kind) else "Практическое занятие"
                     if in_week:
                         schedule.lessons.append(lesson)
-                    if record.manual:
+                    if record.manual or record.archive_requested:
                         # Keep arbitrary-date manual lessons manageable and
                         # available to the history service after a restart.
                         lesson_date = lesson.starts_at.astimezone(ZoneInfo("Europe/Moscow")).date()
@@ -350,14 +356,15 @@ class QueueService:
                 raise RuntimeError("Архивирование занятия не начато")
             record = self._records.get(lesson_id)
             if record is not None:
-                candidate = deepcopy(record)
-                candidate.archived = True
-                candidate.queue.closed = True
-                candidate.queue._archiving = False
+                tombstone = deepcopy(record)
+                tombstone.archived = True
+                tombstone.archive_requested = False
+                tombstone.queue.entries.clear()
+                tombstone.entry_metadata.clear()
                 try:
-                    self.repository.save(candidate, expected_version=record.version)
+                    self.repository.save(tombstone, expected_version=record.version)
                 except QueueNotFoundError:
-                    self.repository.create(candidate)
+                    self.repository.create(tombstone)
                 self._records.pop(lesson_id, None)
             lesson.queue._archiving = False
             if self._archive_week is not None:
@@ -377,11 +384,32 @@ class QueueService:
             return [
                 (schedule.id, lesson.id)
                 for schedule in self._schedules.values() for lesson in schedule.lessons
-                if lesson.id in self._lessons
-                and (self._records[lesson.id].service_deadline() <= now
-                     if lesson.id in self._records else lesson.ends_at <= now)
+                if lesson.id in self._lessons and (lesson.ends_at <= now or self.archive_requested(lesson.id))
                 and not lesson.queue._archiving
             ]
+
+    def archive_requested(self, lesson_id) -> bool:
+        record = self._records.get(lesson_id)
+        return record is not None and record.archive_requested
+
+    def request_archive(self, lesson_id):
+        with self._lock:
+            lesson = self._lessons[lesson_id]
+            record = self._records[lesson_id]
+            if lesson.queue._archiving:
+                raise RuntimeError("Очередь уже сохраняется")
+            schedule = next(s for s in self._schedules.values()
+                            if any(item.id == lesson_id for item in s.lessons))
+            record.archive_requested = True
+            lesson.queue.closed = True
+            self.save_lesson(lesson_id)
+            return schedule.id
+
+    @staticmethod
+    def _ensure_mutable(record):
+        if record.archive_requested or record.queue._archiving:
+            raise InvalidStateError("Занятие сохраняется в историю")
+
     def set_registration(self, lesson_id, *, closed: bool) -> QueueRecord:
         """Открыть или закрыть запись в очередь (write-through)."""
         with self._lock:
@@ -389,7 +417,7 @@ class QueueService:
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
                 raise KeyError(f"Занятие {lesson_id} не найдено")
-            self._assert_mutable(lesson_id)
+            self._ensure_mutable(record)
             closed = bool(closed)
             if lesson.cancelled and not closed:
                 raise InvalidStateError("Отменённое занятие нельзя открыть для записи")
@@ -545,6 +573,7 @@ class QueueService:
             if lesson is None or record is None:
                 raise EntryNotFoundError(lesson_id)
 
+            self._ensure_mutable(record)
             candidate = deepcopy(record)
             candidate.lesson_starts_at = starts_at or lesson.starts_at
             candidate.lesson_ends_at = ends_at or lesson.ends_at
@@ -632,6 +661,7 @@ class QueueService:
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
                 raise EntryNotFoundError(entry_id)
+            self._ensure_mutable(record)
             ensure_entry_metadata(record)
             entry = next(
                 (item for item in lesson.queue.entries if item.id == entry_id), None
@@ -656,6 +686,7 @@ class QueueService:
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
                 raise EntryNotFoundError(entry_id)
+            self._ensure_mutable(record)
             ensure_entry_metadata(record)
             entry = next(
                 (item for item in lesson.queue.entries if item.id == entry_id), None
@@ -703,6 +734,7 @@ class QueueService:
             if existing is not None:
                 raise AlreadyQueuedError(existing[1].id)
 
+            self._ensure_mutable(record)
             ensure_entry_metadata(record)
             active_ids = {
                 entry.id
@@ -738,7 +770,7 @@ class QueueService:
                     continue
                 if entry.student.github.strip().casefold() != query:
                     raise EntryNotOwnedError()
-                self._assert_mutable(record.id)
+                self._ensure_mutable(record)
                 ensure_entry_metadata(record)
                 metadata = record.entry_metadata[entry.id]
                 if metadata.status != EntryStatus.WAITING:
@@ -760,6 +792,7 @@ class QueueService:
                 raise EntryNotFoundError(lesson_id)
             if lesson.cancelled:
                 raise InvalidStateError("Занятие отменено")
+            self._ensure_mutable(record)
             ensure_entry_metadata(record)
             waiting = [
                 entry
@@ -786,6 +819,7 @@ class QueueService:
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
                 raise EntryNotFoundError(entry_id)
+            self._ensure_mutable(record)
             ensure_entry_metadata(record)
             entry = next(
                 (item for item in lesson.queue.entries if item.id == entry_id), None

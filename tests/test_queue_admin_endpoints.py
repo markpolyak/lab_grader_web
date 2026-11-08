@@ -798,19 +798,40 @@ def test_update_result_and_remove_entry(endpoint):
     ).status_code == 409
 
 
-@pytest.mark.parametrize('action', ['registration', 'call-next', 'update', 'delete'])
-def test_archive_blocks_admin_http_mutations(endpoint, action):
+def test_complete_lesson_exports_and_removes_queue(endpoint, monkeypatch):
+    from unittest.mock import AsyncMock
+    from queues.usecase.queue_history_service import QueueHistoryService
+
     client, service = endpoint
-    authenticate(client)
-    schedule = service.schedules['os-2026']
-    lesson = schedule.lessons[0]
-    service.begin_archive(schedule.id, lesson.id)
+    lesson = service.schedules['os-2026'].lessons[0]
+    history = AsyncMock()
+    monkeypatch.setattr(main.app.state, 'queue_history_service',
+                        QueueHistoryService(service, history), raising=False)
     path = f'/admin/courses/os-2026/queues/{lesson.id}'
-    calls = {
-        'registration': lambda: client.put(path + '/registration', json={'closed': False}),
-        'call-next': lambda: client.post(path + '/call-next'),
-        'update': lambda: client.patch(path, json={'cancelled': True}),
-        'delete': lambda: client.delete(path),
-    }
-    assert calls[action]().status_code == 409
-    assert lesson.queue._archiving
+    assert client.post(path + '/complete').status_code == 401
+    authenticate(client)
+    assert client.post(path + '/complete').json() == {'archived': True}
+    history.save.assert_awaited_once()
+    assert client.get(path).status_code == 404
+
+
+def test_complete_lesson_google_failure_keeps_participants(endpoint, monkeypatch):
+    from unittest.mock import AsyncMock
+    from queues.usecase.queue_history_service import QueueHistoryService
+
+    client, service = endpoint
+    lesson = service.schedules['os-2026'].lessons[0]
+    lesson.queue.closed = False
+    lesson.queue.add_entry(Student('Иван', 'Иванов', '', 'ivan'), '1')
+    history = AsyncMock()
+    history.save.side_effect = TimeoutError('offline')
+    monkeypatch.setattr(main.app.state, 'queue_history_service',
+                        QueueHistoryService(service, history), raising=False)
+    authenticate(client)
+    path = f'/admin/courses/os-2026/queues/{lesson.id}'
+    assert client.post(path + '/complete').json()['detail'] == 'ARCHIVE_PENDING'
+    detail = client.get(path).json()
+    assert detail['closed'] and detail['archive_pending']
+    assert len(detail['entries']) == 1
+    history.save.side_effect = None
+    assert client.post(path + '/complete').json() == {'archived': True}

@@ -201,11 +201,14 @@ async def lifespan(app: FastAPI):
         for course_id, course in iter_course_configs()
         if (spreadsheet_id := course.get("google", {}).get("queue-history-spreadsheet"))
     }
-    queue_service = QueueService(
-        FileQueueRepository(),
-        opens_before_minutes=int(os.getenv("QUEUE_OPENS_BEFORE_MINUTES", "15")),
-    )
-    history_service = QueueHistoryService(queue_service, history, history_by_course=history_by_course)
+    queue_service = QueueService(FileQueueRepository())
+    async def notify_archived(lesson_id):
+        await websocketService.send_event(lesson_id, {
+            "type": "queue.archived", "queue_id": str(lesson_id),
+        })
+
+    history_service = QueueHistoryService(queue_service, history, history_by_course=history_by_course,
+                                          on_archived=notify_archived)
     app.state.queue_history_service = history_service
     week_start = os.getenv("QUEUE_WEEK_START")
 
@@ -1003,6 +1006,26 @@ async def admin_set_queue_registration(
             "type": "queue.updated", "queue_id": str(lesson.id),
         })
     return registration_response(lesson, record)
+
+
+@app.post("/admin/courses/{course_id}/queues/{queue_id}/complete")
+@limiter.limit("60/minute")
+async def admin_complete_queue(request: Request, course_id: str, queue_id: uuid.UUID,
+                               admin: str = Depends(require_admin)):
+    service, _ = _get_current_schedule(request, course_id)
+    if service.get_lesson(course_id, queue_id) is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+    try:
+        schedule_id = await asyncio.to_thread(service.request_archive, queue_id)
+    except RuntimeError:
+        raise HTTPException(status_code=409, detail="ARCHIVE_IN_PROGRESS")
+    await websocketService.send_event(queue_id, {"type": "queue.updated", "queue_id": str(queue_id)})
+    try:
+        await request.app.state.queue_history_service.save_history(schedule_id, queue_id)
+    except Exception:
+        logger.exception("Не удалось завершить занятие %s", queue_id)
+        raise HTTPException(status_code=503, detail="ARCHIVE_PENDING")
+    return {"archived": True}
 
 
 @app.post(

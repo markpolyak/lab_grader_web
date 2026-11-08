@@ -115,6 +115,7 @@ def queue_detail(
             finished.append(queue_entry(entry, meta))
 
     return AdminQueueDetailResponse(
+        archive_pending=record.archive_requested if record is not None else False,
         queue_id=lesson.id,
         course_id=schedule.course_id,
         lesson=queue_lesson(lesson),
