@@ -78,7 +78,7 @@
 
 ### Для студентов
 
-1. **Выбор курса и группы** — навигация через интуитивный интерфейс
+1. **Выбор курса и действия** — после выбора курса доступны проверка лабораторной работы (выбор группы и лабораторной) и «Запись в очередь» (занятия недели, участники очереди и запись через всплывающую форму)
 2. **Регистрация** — ввод ФИО и GitHub никнейма с валидацией
 3. **Отправка работы на проверку** — автоматический запуск процесса оценивания
 4. **Получение результата** — мгновенная обратная связь о статусе проверки
@@ -90,6 +90,7 @@
 3. **Загрузка новых курсов** — импорт конфигураций через веб-интерфейс
 4. **Аутентификация** — защищенный доступ к административным функциям
 5. **Массовая проверка лабораторных** — проверка всей группы одной кнопкой (см. «Массовая проверка лабораторной»)
+6. **Очереди занятий** — выбор курса и занятия, список студентов с ФИО, GitHub и работой, открытие/закрытие записи, отмена и перенос занятия; навигация на главную и выход из аккаунта
 
 ### Процесс проверки работы
 
@@ -132,13 +133,17 @@ lab_grader_web/
 │   ├── teams.py                 # Командные лабораторные
 │   ├── join_links.py            # Секретные ссылки и окна доступности
 │   └── course_index.py          # Чтение courses/index.yaml
+├── queues/                      # Очередь на защиту (начальный каркас)
+│   ├── domain/                  # Student, QueueEntry, Queue, Lesson, Schedule
+│   ├── usecase/                 # Заготовка QueueService
+│   └── event/                   # WebSocketService: подписки и рассылка; эндпоинт /ws в main.py
 ├── courses/                     # Конфигурации курсов (index.yaml + YAML курсов, logos/)
 ├── tests/                       # pytest
 ├── scripts/                     # join-link.py, switch-branch.sh
 ├── docs/                        # Документация (DEVELOPMENT.md — локальная разработка)
 ├── frontend/courses-front/      # React-приложение
 │   └── src/
-│       ├── components/          # course-list, group-list, lab-list, registration-form,
+│       ├── components/          # course-list, course-actions, language-switcher, group-list, lab-list, registration-form,
 │       │                        # breadcrumb, JoinLab, admin (каждый: index.jsx + styled.js)
 │       ├── api/                 # Базовый URL API
 │       ├── locales/             # Переводы (en, ru, zh)
@@ -185,6 +190,12 @@ lab_grader_web/
 | POST | `/admin/login` | Вход в админ-панель |
 | GET | `/admin/check-auth` | Проверка аутентификации |
 | POST | `/admin/logout` | Выход из системы |
+| GET | `/admin/courses/{course_id}/queues` | Занятия недели, перенесённые с этой недели и созданные вручную на любые даты |
+| POST | `/admin/courses/{course_id}/queues` | Создать занятие на любую дату для одной или нескольких групп |
+| POST | `/admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}/finish` | Завершить запись вызванного студента; `outcome: "absent"` — неявка |
+| GET | `/admin/courses/{course_id}/queues/{queue_id}` | Очередь с ФИО, GitHub, работой и местом студента |
+| PUT | `/admin/courses/{course_id}/queues/{queue_id}/registration` | Открыть/закрыть запись: `closed` |
+| PATCH | `/admin/courses/{course_id}/queues/{queue_id}` | Отменить/восстановить (`cancelled`), перенести (`lesson_starts_at`, `lesson_ends_at`, ISO 8601 с часовым поясом) |
 | DELETE | `/courses/{course_id}` | Удаление курса |
 | GET | `/courses/{course_id}/edit` | Получение YAML конфигурации |
 | PUT | `/courses/{course_id}/edit` | Сохранение изменений курса |
@@ -641,7 +652,7 @@ cd frontend/courses-front && npm test
 
 ## Лицензия
 
-MIT License (Copyright 2025 Matvey)
+MIT License (Copyright 2025 Matvey, Copyright 2025-2026 Mark Polyak)
 
 ## Технические характеристики
 

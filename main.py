@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Response, HTTPException, Depends
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, WebSocket, WebSocketDisconnect, Query
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -13,10 +13,12 @@ from dotenv import load_dotenv
 from itsdangerous import TimestampSigner, BadSignature
 import re
 import json
+import uuid
 import base64
 import logging
 import threading
-from datetime import datetime
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 from urllib.parse import quote, urlencode
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
@@ -77,7 +79,70 @@ from grading.course_index import (
     iter_course_configs as _iter_course_configs,
     load_course_index as _load_course_index,
 )
+from grading.queue_eligibility import (
+    LabNotFoundError,
+    LabNotPassedError,
+    SheetsUnavailableError,
+    StudentNotFoundError,
+    resolve_eligible_lab,
+    resolve_student,
+)
 import tempfile
+from queues.api.presenters import (
+    lesson_queue_response,
+    entry_action_response,
+    entry_removed_response,
+    history_response,
+    queue_create_response,
+    queue_deleted_response,
+    queue_detail,
+    queues_response,
+    queue_update_response,
+    registration_response,
+    student_queue_entry,
+    student_queue_state,
+    waiting_position,
+)
+from queues.api.schemas import (
+    LessonQueueResponse as StudentLessonQueueResponse,
+    AdminQueueDetailResponse,
+    AdminQueuesResponse,
+    QueueCreateRequest,
+    QueueCreateResponse,
+    QueueDeletedResponse,
+    QueueEntryActionResponse,
+    QueueEntryRemovedResponse,
+    QueueFinishRequest,
+    QueueHistoryResponse,
+    QueueJoinRequest,
+    QueueLeaveRequest,
+    QueueLeaveResponse,
+    QueueRegistrationRequest,
+    QueueRegistrationResponse,
+    QueueUpdateRequest,
+    QueueUpdateResponse,
+    StudentQueueStateResponse,
+)
+from queues.domain.err import (
+    AlreadyQueuedError,
+    EntryNotFoundError,
+    EntryNotOwnedError,
+    GroupNotAllowedError,
+    InvalidStateError,
+    QueueClosedError,
+    QueueEmptyError,
+    QueueNotEmptyError,
+    QueueNotDeletableError,
+)
+from queues.event.websocket import websocketService
+from queues.parser.parser import ScheduleParser
+from queues.repositories.storage.file import FileQueueRepository
+from queues.usecase.queue_service import QueueService
+from queues.usecase.queue_history_service import QueueHistoryService
+from queues.repositories.storage.google import GoogleRepo
+from apscheduler.events import EVENT_JOB_EXECUTED
+from contextlib import asynccontextmanager
+import asyncio
 
 # Configure logging to both file and console
 LOG_DIR = os.getenv("LOG_DIR", "logs")
@@ -122,7 +187,93 @@ logger = logging.getLogger(__name__)
 logger.info(f"Logging initialized. Log file: {log_file}")
 
 load_dotenv()
-app = FastAPI()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    schedule_dir = os.getenv("SCHEDULE_DIR", "schedule")
+    history_sheet = os.getenv("QUEUE_HISTORY_SPREADSHEET_ID", "").strip()
+    history = GoogleRepo(
+        sheets_client, history_sheet,
+    ) if history_sheet else None
+    history_by_course = {
+        course_id: GoogleRepo(sheets_client, spreadsheet_id)
+        for course_id, course in iter_course_configs()
+        if (spreadsheet_id := course.get("google", {}).get("queue-history-spreadsheet"))
+    }
+    queue_service = QueueService(FileQueueRepository())
+    async def notify_archived(lesson_id):
+        await websocketService.send_event(lesson_id, {
+            "type": "queue.archived", "queue_id": str(lesson_id),
+        })
+
+    history_service = QueueHistoryService(queue_service, history, history_by_course=history_by_course,
+                                          on_archived=notify_archived)
+    app.state.queue_history_service = history_service
+    week_start = os.getenv("QUEUE_WEEK_START")
+
+    def load_queue_schedules():
+        queue_service.load_saved_week(
+            dict(iter_course_configs()), schedule_dir,
+            week_start=date.fromisoformat(week_start) if week_start else None,
+        )
+
+    def sync_queue_schedules():
+        try:
+            load_queue_schedules()
+        except Exception:
+            logger.exception("Не удалось обновить занятия и очереди; прежнее состояние сохранено")
+        try:
+            queue_service.reconcile()
+        except Exception:
+            logger.exception("Не удалось сверить состояние очередей")
+
+    sync_queue_schedules()
+    app.state.queue_service = queue_service
+    parser = ScheduleParser(schedule_dir)
+
+    def after_schedule_refresh(event):
+        if event.job_id == "schedule-refresh":
+            sync_queue_schedules()
+
+    parser.scheduler.add_listener(after_schedule_refresh, EVENT_JOB_EXECUTED)
+    # Local synchronization is independent of network parsing and user requests.
+    # Monday 00:00 Moscow is included, and failed reads retry the next minute.
+    parser.scheduler.add_job(
+        sync_queue_schedules, "cron", minute="*", timezone="Europe/Moscow",
+        id="queue-schedule-sync", max_instances=1, coalesce=True,
+        misfire_grace_time=60,
+    )
+    if history is not None or history_by_course:
+        loop = asyncio.get_running_loop()
+
+        def archive_queues(retry_only=False):
+            queue_service.reconcile()
+            asyncio.run_coroutine_threadsafe(
+                history_service.archive_finished(retry_only=retry_only), loop,
+            ).result()
+
+        parser.scheduler.add_job(
+            archive_queues, "cron", hour=0, minute=0, timezone="Europe/Moscow",
+            id="queue-history-daily", max_instances=1, coalesce=True,
+            misfire_grace_time=3600,
+        )
+        parser.scheduler.add_job(
+            archive_queues, "interval", hours=1, kwargs={"retry_only": True},
+            id="queue-history-retry", max_instances=1, coalesce=True,
+        )
+    configs = parser.load_configs(os.getenv("SCHEDULE_CONFIG", "schedule/index.yaml"))
+    try:
+        parser.start(configs)
+        if not parser.scheduler.running:
+            # Even an empty parsing configuration must advance local weeks.
+            parser.scheduler.start()
+        yield
+    finally:
+        await asyncio.to_thread(parser.shutdown)
+
+
+app = FastAPI(lifespan=lifespan)
 COURSES_DIR = "courses"
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 
@@ -218,6 +369,9 @@ signer = TimestampSigner(SECRET_KEY)
 
 # Course index management
 INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
+# One backend process owns course configuration writes, just as it owns queues.
+# Serialize read/validate/write across edits, index updates and uploads.
+_course_config_lock = threading.RLock()
 
 def load_course_index():
     """Load and validate course index file"""
@@ -656,6 +810,662 @@ def get_course(request: Request, course_id: str):
         "priority": course_info["_meta"]["priority"],
     }
 
+class LessonQueueResponse(BaseModel):
+    closed: bool
+    entries_count: int
+
+
+class CourseLessonResponse(BaseModel):
+    id: uuid.UUID
+    starts_at: datetime
+    ends_at: datetime
+    groups: list[str]
+    kind: str
+    room: str | None
+    cancelled: bool = False
+    original_starts_at: datetime | None = None
+    queue: LessonQueueResponse
+
+
+class CourseLessonsResponse(BaseModel):
+    schedule_id: uuid.UUID
+    course_id: str
+    course_name: str
+    week_start: date
+    week_end: date
+    lessons: list[CourseLessonResponse]
+
+
+def _course_lessons_response(schedule) -> CourseLessonsResponse:
+    return CourseLessonsResponse(
+        schedule_id=schedule.id,
+        course_id=schedule.course_id,
+        course_name=schedule.course_name,
+        week_start=schedule.week_start,
+        week_end=schedule.week_start + timedelta(days=6),
+        lessons=[
+            CourseLessonResponse(
+                id=lesson.id,
+                starts_at=lesson.starts_at,
+                ends_at=lesson.ends_at,
+                groups=list(lesson.groups),
+                kind=lesson.kind,
+                room=lesson.room,
+                cancelled=lesson.cancelled,
+                original_starts_at=lesson.original_starts_at,
+                queue=LessonQueueResponse(
+                    closed=lesson.queue.closed,
+                    entries_count=len(lesson.queue.entries),
+                ),
+            )
+            for lesson in sorted(
+                schedule.lessons,
+                key=lambda item: (item.starts_at, item.groups, item.kind),
+            )
+        ],
+    )
+
+
+@app.get("/courses/{course_id}/lessons", response_model=CourseLessonsResponse)
+@limiter.limit("100/minute")
+def get_course_lessons(request: Request, course_id: str):
+    """Занятия курса с понедельника по воскресенье текущей московской недели.
+
+    QUEUE_WEEK_START фиксирует неделю для локального тестирования. Читаются
+    только локальные выгрузки; этот запрос не обращается к Google или сайту вуза.
+    """
+    _, schedule = _get_current_schedule(request, course_id)
+
+    return _course_lessons_response(schedule)
+
+
+def _get_queue_service(request: Request):
+    service = getattr(request.app.state, "queue_service", None)
+    if service is None:
+        raise HTTPException(status_code=503, detail="Сервис очередей ещё не готов")
+    return service
+
+
+def _open_spreadsheet(course_info: dict):
+    spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
+    if not spreadsheet_id:
+        raise HTTPException(status_code=503, detail="SHEETS_UNAVAILABLE")
+    try:
+        return sheets_client().open_by_key(spreadsheet_id)
+    except Exception:
+        logger.exception("Не удалось открыть таблицу курса")
+        raise HTTPException(status_code=503, detail="SHEETS_UNAVAILABLE")
+
+
+def _get_current_schedule(request: Request, course_id: str):
+    """Расписание текущей московской недели с подгрузкой выгрузки при смене недели.
+
+    Общая точка для публичного /lessons и админских маршрутов очередей, чтобы
+    переход через понедельник вёл себя одинаково.
+    """
+    get_course_by_id(course_id)
+    service = _get_queue_service(request)
+
+    today = datetime.now(ZoneInfo("Europe/Moscow")).date()
+    configured_week = os.getenv("QUEUE_WEEK_START")
+    week_start = date.fromisoformat(configured_week) if configured_week else today - timedelta(days=today.weekday())
+    schedule = service.schedules.get(course_id)
+    if schedule is None:
+        raise HTTPException(status_code=404, detail="Расписание очередей для этого курса не настроено")
+
+    # A server may cross Monday before the next scheduled refresh. Reuse the
+    # saved export immediately, retaining existing lesson queues in the service.
+    if schedule.week_start != week_start:
+        try:
+            service.load_saved_week(
+                dict(iter_course_configs()), os.getenv("SCHEDULE_DIR", "schedule"),
+                week_start=week_start,
+            )
+        except Exception:
+            logger.exception("Не удалось загрузить занятия текущей недели")
+            raise HTTPException(status_code=503, detail="Расписание текущей недели временно недоступно")
+        schedule = service.schedules.get(course_id)
+        if schedule is None:
+            raise HTTPException(status_code=404, detail="Расписание очередей для этого курса не настроено")
+
+    service.reconcile()
+    return service, schedule
+
+
+@app.get("/admin/courses/{course_id}/queues", response_model=AdminQueuesResponse)
+@limiter.limit("60/minute")
+def admin_list_queues(
+    request: Request,
+    course_id: str,
+    group_id: str | None = None,
+    lesson_date: date | None = Query(None, alias="date"),
+    admin: str = Depends(require_admin),
+):
+    """Очереди занятий курса на текущую московскую неделю.
+
+    Только чтение: записи в Google Sheets не выполняются, персональные данные
+    студентов в ответ не попадают. ``queue_id`` совпадает с id занятия, пока
+    очередь живёт внутри Lesson.
+    """
+    service, schedule = _get_current_schedule(request, course_id)
+
+    lessons = service.admin_lessons(course_id, schedule.week_start)
+    if group_id is not None:
+        lessons = [lesson for lesson in lessons if group_id in lesson.groups]
+    if lesson_date is not None:
+        lessons = [lesson for lesson in lessons if lesson.starts_at.date() == lesson_date]
+    lessons.sort(key=lambda item: (item.starts_at, item.groups, item.kind))
+
+    return queues_response(schedule, lessons)
+
+
+@app.get("/admin/courses/{course_id}/queues/{queue_id}", response_model=AdminQueueDetailResponse)
+@limiter.limit("60/minute")
+def admin_get_queue(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    admin: str = Depends(require_admin),
+):
+    """Снимок одной очереди: ожидающие, вызванные и итоги (только чтение)."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = service.get_lesson(course_id, queue_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    record = service.get_record(lesson.id)
+    return queue_detail(schedule, lesson, record)
+
+
+@app.put(
+    "/admin/courses/{course_id}/queues/{queue_id}/registration",
+    response_model=QueueRegistrationResponse,
+)
+@limiter.limit("60/minute")
+async def admin_set_queue_registration(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    body: QueueRegistrationRequest,
+    admin: str = Depends(require_admin),
+):
+    """Открыть или закрыть запись в очередь вручную."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = service.get_lesson(course_id, queue_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    was_closed = lesson.queue.closed
+    try:
+        record = await asyncio.to_thread(service.set_registration, lesson.id, closed=body.closed)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="LESSON_CANCELLED")
+
+    if was_closed != lesson.queue.closed:
+        await websocketService.send_event(lesson.id, {
+            "type": "queue.updated", "queue_id": str(lesson.id),
+        })
+    return registration_response(lesson, record)
+
+
+@app.post("/admin/courses/{course_id}/queues/{queue_id}/complete")
+@limiter.limit("60/minute")
+async def admin_complete_queue(request: Request, course_id: str, queue_id: uuid.UUID,
+                               admin: str = Depends(require_admin)):
+    service, _ = _get_current_schedule(request, course_id)
+    if service.get_lesson(course_id, queue_id) is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+    try:
+        schedule_id = await asyncio.to_thread(service.request_archive, queue_id)
+    except RuntimeError:
+        raise HTTPException(status_code=409, detail="ARCHIVE_IN_PROGRESS")
+    await websocketService.send_event(queue_id, {"type": "queue.updated", "queue_id": str(queue_id)})
+    try:
+        await request.app.state.queue_history_service.save_history(schedule_id, queue_id)
+    except Exception:
+        logger.exception("Не удалось завершить занятие %s", queue_id)
+        raise HTTPException(status_code=503, detail="ARCHIVE_PENDING")
+    return {"archived": True}
+
+
+@app.post(
+    "/admin/courses/{course_id}/queues",
+    response_model=QueueCreateResponse,
+    status_code=201,
+)
+@limiter.limit("30/minute")
+async def admin_create_queue(
+    request: Request,
+    course_id: str,
+    body: QueueCreateRequest,
+    admin: str = Depends(require_admin),
+):
+    """Создать внештатную очередь для занятия вне расписания."""
+    service, schedule = _get_current_schedule(request, course_id)
+    try:
+        record = await asyncio.to_thread(service.create_manual,
+            course_id,
+            schedule.course_name,
+            week_start=schedule.week_start,
+            group_ids=body.group_ids,
+            starts_at=body.lesson_starts_at,
+            ends_at=body.lesson_ends_at,
+            registration_opens_at=body.registration_opens_at,
+            registration_closes_at=body.registration_closes_at,
+            service_until=body.service_until,
+            closed=body.closed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    await websocketService.send_event(record.id, {
+        "type": "queue.updated", "queue_id": str(record.id),
+    })
+    return queue_create_response(record)
+
+
+@app.patch(
+    "/admin/courses/{course_id}/queues/{queue_id}",
+    response_model=QueueUpdateResponse,
+)
+@limiter.limit("60/minute")
+async def admin_update_queue(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    body: QueueUpdateRequest,
+    admin: str = Depends(require_admin),
+):
+    """Обновить время занятия и окно записи очереди."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = service.get_lesson(course_id, queue_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+    if not body.model_dump(exclude_none=True):
+        raise HTTPException(status_code=422, detail="NO_FIELDS")
+
+    try:
+        record = await asyncio.to_thread(service.update_queue,
+            lesson.id,
+            cancelled=body.cancelled,
+            starts_at=body.lesson_starts_at,
+            ends_at=body.lesson_ends_at,
+            registration_opens_at=body.registration_opens_at,
+            registration_closes_at=body.registration_closes_at,
+            service_until=body.service_until,
+        )
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
+    return queue_update_response(record)
+
+
+@app.delete(
+    "/admin/courses/{course_id}/queues/{queue_id}",
+    response_model=QueueDeletedResponse,
+)
+@limiter.limit("60/minute")
+async def admin_delete_queue(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    admin: str = Depends(require_admin),
+):
+    """Удалить пустую внештатную очередь."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = service.get_lesson(course_id, queue_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        await asyncio.to_thread(service.delete_queue, lesson.id)
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+    except QueueNotDeletableError:
+        raise HTTPException(status_code=409, detail="QUEUE_NOT_DELETABLE")
+    except QueueNotEmptyError:
+        raise HTTPException(status_code=409, detail="QUEUE_NOT_EMPTY")
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.deleted", "queue_id": str(lesson.id),
+    })
+    return queue_deleted_response()
+
+
+@app.post(
+    "/admin/courses/{course_id}/queues/{queue_id}/call-next",
+    response_model=QueueEntryActionResponse,
+)
+@limiter.limit("60/minute")
+async def admin_call_next(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    admin: str = Depends(require_admin),
+):
+    """Вызвать следующего ожидающего."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = service.get_lesson(course_id, queue_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        entry = await asyncio.to_thread(service.call_next, lesson.id)
+    except QueueEmptyError:
+        raise HTTPException(status_code=409, detail="QUEUE_EMPTY")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="LESSON_CANCELLED")
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    record = service.get_record(lesson.id)
+    metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
+    return entry_action_response(
+        entry, metadata, record.version if record is not None else 0
+    )
+
+
+@app.post(
+    "/admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}/finish",
+    response_model=QueueEntryActionResponse,
+)
+@limiter.limit("60/minute")
+async def admin_finish_entry(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    body: QueueFinishRequest,
+    admin: str = Depends(require_admin),
+):
+    """Отметить результат защиты вызванного студента."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = service.get_lesson(course_id, queue_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        entry = await asyncio.to_thread(service.finish, lesson.id, entry_id, body.outcome)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+
+    record = service.get_record(lesson.id)
+    metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
+    return entry_action_response(
+        entry, metadata, record.version if record is not None else 0
+    )
+
+
+@app.patch(
+    "/admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}/result",
+    response_model=QueueEntryActionResponse,
+)
+@limiter.limit("60/minute")
+async def admin_update_result(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    body: QueueFinishRequest,
+    admin: str = Depends(require_admin),
+):
+    """Исправить результат завершённой защиты."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = service.get_lesson(course_id, queue_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        entry = await asyncio.to_thread(service.update_result, lesson.id, entry_id, body.outcome)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+
+    record = service.get_record(lesson.id)
+    metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
+    return entry_action_response(
+        entry, metadata, record.version if record is not None else 0
+    )
+
+
+@app.delete(
+    "/admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}",
+    response_model=QueueEntryRemovedResponse,
+)
+@limiter.limit("60/minute")
+async def admin_remove_entry(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    admin: str = Depends(require_admin),
+):
+    """Убрать активную запись из очереди, сохранив её в истории."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = service.get_lesson(course_id, queue_id)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        await asyncio.to_thread(service.remove_entry, lesson.id, entry_id)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
+    return entry_removed_response()
+
+
+@app.get("/courses/{course_id}/lessons/{lesson_id}/queue", response_model=StudentLessonQueueResponse)
+@limiter.limit("100/minute")
+def get_lesson_queue(request: Request, course_id: str, lesson_id: uuid.UUID):
+    """Участники занятия без GitHub-логинов, результатов и завершённых записей."""
+    course_info = get_course_by_id(course_id)
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == lesson_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="LESSON_NOT_FOUND")
+    labs = []
+    for lab_id in course_info.get("labs", {}):
+        resolved = find_public_lab_config(course_info, str(lab_id))
+        if resolved is not None:
+            key, lab = resolved
+            labs.append({"id": key, "name": lab.get("short-name", key)})
+    return lesson_queue_response(schedule, lesson, service.get_record(lesson.id), labs)
+
+
+@app.get("/courses/{course_id}/queue", response_model=StudentQueueStateResponse)
+@limiter.limit("60/minute")
+def get_student_queue(
+    request: Request,
+    course_id: str,
+    github: str = Query(..., min_length=1),
+    group_id: str = Query(..., min_length=1),
+):
+    """Состояние студента: его активная запись и место в очереди."""
+    course_info = get_course_by_id(course_id)
+    service, _ = _get_current_schedule(request, course_id)
+    spreadsheet = _open_spreadsheet(course_info)
+
+    try:
+        student = resolve_student(course_info, spreadsheet, group_id, github)
+    except SheetsUnavailableError:
+        raise HTTPException(status_code=503, detail="SHEETS_UNAVAILABLE")
+    except StudentNotFoundError:
+        raise HTTPException(status_code=403, detail="STUDENT_NOT_FOUND")
+
+    found = service.active_entry(course_id, student.student.github)
+    if found is None:
+        return student_queue_state(
+            github=student.student.github,
+            group_id=student.group_id,
+            full_name=student.full_name,
+            entry=None,
+        )
+
+    record, entry = found
+    metadata = record.entry_metadata.get(entry.id)
+    position = waiting_position(record, entry.id)
+    return student_queue_state(
+        github=student.student.github,
+        group_id=student.group_id,
+        full_name=student.full_name,
+        entry=student_queue_entry(
+            entry, metadata, lesson_id=record.id, position=position
+        ),
+    )
+
+
+@app.post(
+    "/courses/{course_id}/queue/join",
+    response_model=StudentQueueStateResponse,
+    status_code=201,
+)
+@limiter.limit("30/minute")
+async def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
+    """Встать в очередь на занятие."""
+    course_info = get_course_by_id(course_id)
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next(
+        (item for item in schedule.lessons if item.id == body.lesson_id), None
+    )
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="LESSON_NOT_FOUND")
+
+    spreadsheet = await asyncio.to_thread(_open_spreadsheet, course_info)
+    try:
+        eligible = await asyncio.to_thread(resolve_eligible_lab,
+            course_info, spreadsheet, body.github, body.lab_id, lesson.groups
+        )
+    except SheetsUnavailableError:
+        raise HTTPException(status_code=503, detail="SHEETS_UNAVAILABLE")
+    except StudentNotFoundError:
+        raise HTTPException(status_code=403, detail="STUDENT_NOT_FOUND")
+    except LabNotFoundError:
+        raise HTTPException(status_code=404, detail="LAB_NOT_FOUND")
+    except LabNotPassedError:
+        raise HTTPException(status_code=403, detail="LAB_NOT_PASSED")
+
+    if body.submitted_full_name is not None:
+        submitted_name = " ".join(body.submitted_full_name.split()).casefold().replace("ё", "е")
+        actual_name = " ".join(eligible.full_name.split()).casefold().replace("ё", "е")
+        if submitted_name != actual_name:
+            raise HTTPException(status_code=403, detail="STUDENT_NAME_MISMATCH")
+
+    try:
+        entry = await asyncio.to_thread(service.join, lesson.id, eligible)
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+    except QueueClosedError:
+        raise HTTPException(status_code=409, detail="QUEUE_CLOSED")
+    except GroupNotAllowedError:
+        raise HTTPException(status_code=403, detail="GROUP_NOT_ALLOWED")
+    except AlreadyQueuedError:
+        raise HTTPException(status_code=409, detail="ALREADY_QUEUED")
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="LESSON_NOT_FOUND")
+
+    record = service.get_record(lesson.id)
+    metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    position = waiting_position(record, entry.id) if record is not None else None
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
+    return student_queue_state(
+        github=eligible.student.github,
+        group_id=eligible.group_id,
+        full_name=eligible.full_name,
+        entry=student_queue_entry(
+            entry, metadata, lesson_id=lesson.id, position=position
+        ),
+    )
+
+
+@app.post("/courses/{course_id}/queue/leave", response_model=QueueLeaveResponse)
+@limiter.limit("30/minute")
+async def leave_queue(request: Request, course_id: str, body: QueueLeaveRequest):
+    """Выйти из своей ожидающей записи."""
+    service, _ = _get_current_schedule(request, course_id)
+    active = service.active_entry(course_id, body.github)
+    try:
+        await asyncio.to_thread(service.leave, course_id, body.entry_id, body.github)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
+    except EntryNotOwnedError:
+        raise HTTPException(status_code=403, detail="FORBIDDEN")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+    if active is not None:
+        await websocketService.send_event(active[0].id, {
+            "type": "queue.updated", "queue_id": str(active[0].id),
+        })
+    return {"left": True}
+
+
+@app.get(
+    "/admin/courses/{course_id}/queue-history",
+    response_model=QueueHistoryResponse,
+)
+@limiter.limit("60/minute")
+def admin_queue_history(
+    request: Request,
+    course_id: str,
+    group_id: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    limit: int = Query(50, ge=1, le=200),
+    cursor: str | None = None,
+    admin: str = Depends(require_admin),
+):
+    """История завершённых и отменённых записей курса."""
+    get_course_by_id(course_id)
+    service = _get_queue_service(request)
+
+    offset = 0
+    if cursor is not None:
+        try:
+            offset = int(cursor)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="INVALID_CURSOR")
+        if offset < 0:
+            raise HTTPException(status_code=422, detail="INVALID_CURSOR")
+
+    items, next_offset = service.history(
+        course_id,
+        group_id=group_id,
+        date_from=date_from,
+        date_to=date_to,
+        offset=offset,
+        limit=limit,
+    )
+    return history_response(
+        items, str(next_offset) if next_offset is not None else None
+    )
+
+
 @app.delete("/courses/{course_id}")
 @limiter.limit("20/minute")
 def delete_course(request: Request, course_id: str, admin: str = Depends(require_admin)):
@@ -663,28 +1473,25 @@ def delete_course(request: Request, course_id: str, admin: str = Depends(require
     Mark course as hidden in index (soft delete)
     The course file is preserved in repository
     """
-    index_data = load_course_index()
-
-    # Find course in index
-    course_found = False
-    for entry in index_data.get("courses", []):
-        if entry.get("id") == course_id:
-            entry["status"] = "hidden"
-            course_found = True
-            break
-
-    if not course_found:
-        raise HTTPException(status_code=404, detail="Курс не найден")
-
-    # Save updated index
-    with open(INDEX_FILE, "w", encoding="utf-8") as f:
-        yaml.dump(index_data, f, allow_unicode=True, sort_keys=False)
+    with _course_config_lock:
+        index_data = load_course_index()
+        for entry in index_data.get("courses", []):
+            if entry.get("id") == course_id:
+                entry["status"] = "hidden"
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Курс не найден")
+        _write_file_atomically(
+            INDEX_FILE, yaml.safe_dump(index_data, allow_unicode=True, sort_keys=False),
+        )
 
     return {"message": "Курс успешно скрыт (файл сохранен в репозитории)"}
 
 
 class EditCourseRequest(BaseModel):
     content: str
+    # Optional for existing API clients; the web editor always sends its base.
+    original_content: str | None = None
 
 
 @app.get("/courses/{course_id}/edit")
@@ -759,7 +1566,7 @@ def _validate_join_sections(new_data, old_data) -> None:
             )
 
 
-def _write_file_atomically(file_path: str, content: str) -> None:
+def _write_file_atomically(file_path: str, content: str | bytes) -> None:
     """
     Записать файл целиком или не записать вовсе.
 
@@ -771,8 +1578,8 @@ def _write_file_atomically(file_path: str, content: str) -> None:
     directory = os.path.dirname(os.path.abspath(file_path))
     tmp_fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".course-", suffix=".yaml.tmp")
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_file:
-            tmp_file.write(content)
+        with os.fdopen(tmp_fd, "wb") as tmp_file:
+            tmp_file.write(content.encode("utf-8") if isinstance(content, str) else content)
             tmp_file.flush()
             os.fsync(tmp_file.fileno())
         os.replace(tmp_path, file_path)
@@ -786,25 +1593,27 @@ def _write_file_atomically(file_path: str, content: str) -> None:
 @limiter.limit("20/minute")
 def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, admin: str = Depends(require_admin)):
     """Сохранить изменения в YAML файле курса"""
-    course_info = get_course_by_id(course_id)
-    filename = course_info["_meta"]["filename"]
-
-    file_path = os.path.join(COURSES_DIR, filename)
-
     try:
         new_data = yaml.safe_load(data.content)
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка в YAML формате: {str(e)}")
 
-    try:
+    with _course_config_lock:
+        course_info = get_course_by_id(course_id)
+        file_path = os.path.join(COURSES_DIR, course_info["_meta"]["filename"])
         with open(file_path, "r", encoding="utf-8") as file:
-            old_data = yaml.safe_load(file.read())
-    except (OSError, yaml.YAMLError):
-        old_data = None
-
-    _validate_join_sections(new_data, old_data)
-
-    _write_file_atomically(file_path, data.content)
+            old_content = file.read()
+        if data.original_content is not None and data.original_content != old_content:
+            raise HTTPException(
+                status_code=409,
+                detail="Конфигурация курса уже изменена. Откройте редактор заново перед сохранением.",
+            )
+        try:
+            old_data = yaml.safe_load(old_content)
+        except yaml.YAMLError:
+            old_data = None
+        _validate_join_sections(new_data, old_data)
+        _write_file_atomically(file_path, data.content)
 
     return {"message": "Изменения успешно сохранены"}
 
@@ -2419,11 +3228,6 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
     if not file.filename.endswith(".yaml") and not file.filename.endswith(".yml"):
         raise HTTPException(status_code=400, detail="Только YAML файлы разрешены")
 
-    file_location = os.path.join(COURSES_DIR, file.filename)
-
-    if os.path.exists(file_location):
-        raise HTTPException(status_code=400, detail="Файл с таким именем уже существует")
-
     content = await file.read()
     try:
         course_data = yaml.safe_load(content)
@@ -2434,40 +3238,102 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
     if not isinstance(course_data, dict) or "course" not in course_data:
         raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
 
-    # Save course file
-    with open(file_location, "wb") as f:
-        f.write(content)
+    return await asyncio.to_thread(_store_uploaded_course, file.filename, content)
 
-    # Generate course ID from filename (e.g., 'operating-systems-2025.yaml' -> 'operating-systems-2025')
-    course_id = file.filename.replace(".yaml", "").replace(".yml", "")
 
-    # Update index
-    index_data = load_course_index()
-
-    # Check if ID already exists
-    existing_ids = {entry.get("id") for entry in index_data.get("courses", [])}
-    if course_id in existing_ids:
-        # If ID exists, try appending a number
-        counter = 2
-        while f"{course_id}-{counter}" in existing_ids:
-            counter += 1
-        course_id = f"{course_id}-{counter}"
-
-    # Add new course to index
-    new_entry = {
-        "id": course_id,
-        "file": file.filename,
-        "status": "active",
-        "priority": 0
-    }
-    index_data["courses"].append(new_entry)
-
-    # Save updated index
-    with open(INDEX_FILE, "w", encoding="utf-8") as f:
-        yaml.dump(index_data, f, allow_unicode=True, sort_keys=False)
+def _store_uploaded_course(filename: str, content: bytes) -> dict:
+    """Publish a complete course before adding it to the atomically saved index."""
+    with _course_config_lock:
+        file_location = os.path.join(COURSES_DIR, filename)
+        if os.path.exists(file_location):
+            raise HTTPException(status_code=400, detail="Файл с таким именем уже существует")
+        index_data = load_course_index()
+        course_id = filename.replace(".yaml", "").replace(".yml", "")
+        existing_ids = {entry.get("id") for entry in index_data.get("courses", [])}
+        if course_id in existing_ids:
+            counter = 2
+            while f"{course_id}-{counter}" in existing_ids:
+                counter += 1
+            course_id = f"{course_id}-{counter}"
+        index_data["courses"].append({
+            "id": course_id, "file": filename, "status": "active", "priority": 0,
+        })
+        _write_file_atomically(file_location, content)
+        try:
+            _write_file_atomically(
+                INDEX_FILE, yaml.safe_dump(index_data, allow_unicode=True, sort_keys=False),
+            )
+        except BaseException:
+            # This file was created by this command and has never been indexed.
+            # Keep a failed upload retryable without leaving an orphan behind.
+            try:
+                os.unlink(file_location)
+            except OSError:
+                logger.exception("Не удалось убрать файл неуспешной загрузки курса %s", filename)
+            raise
 
     return {
         "detail": "Курс успешно загружен и добавлен в индекс",
         "course_id": course_id,
-        "filename": file.filename
+        "filename": filename
     }
+
+
+@app.websocket("/ws")
+async def websocket_endpoint(ws: WebSocket) -> None:
+    connection_id = await websocketService.connect(ws)
+    try:
+        await _read_ws(ws, connection_id)
+    except WebSocketDisconnect:
+        logger.info("WebSocket disconnected: connection_id=%s", connection_id)
+    finally:
+        websocketService.disconnect(connection_id)
+
+
+async def _read_ws(ws: WebSocket, connection_id: uuid.UUID) -> None:
+    while True:
+        message = await ws.receive()
+        if message["type"] == "websocket.disconnect":
+            raise WebSocketDisconnect(
+                code=message.get("code", 1000),
+                reason=message.get("reason", ""),
+            )
+
+        text = message.get("text")
+        if text is None:
+            await ws.send_json({"type": "error", "message": "Expected text JSON object"})
+            continue
+
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            await ws.send_json({"type": "error", "message": "Invalid JSON"})
+            continue
+
+        if not isinstance(data, dict):
+            await ws.send_json({"type": "error", "message": "Expected an object"})
+            continue
+
+        action = data.get("action")
+        if action in ("subscribe", "unsubscribe"):
+            event_id = await _get_event_ws(ws, data)
+            if event_id is None:
+                continue
+            if action == "subscribe":
+                websocketService.subscribe(connection_id, event_id)
+                await ws.send_json({"type": "subscribed", "event_id": str(event_id)})
+            else:
+                websocketService.unsubscribe(connection_id, event_id)
+        elif action == "ping":
+            await ws.send_json({"type": "pong"})
+        else:
+            logger.warning("Unknown WS action: %s from conn=%s", action, connection_id)
+            await ws.send_json({"type": "error", "message": "Unknown action"})
+
+
+async def _get_event_ws(ws: WebSocket, data: dict) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(str(data.get("event_id")))
+    except ValueError:
+        await ws.send_json({"type": "error", "message": "Invalid event UUID"})
+        return None

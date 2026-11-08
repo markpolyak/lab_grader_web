@@ -7,6 +7,10 @@ on:
       - 'fix/**'     # Auto-build for all fix branches
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 env:
   DOCKER_REGISTRY: ghcr.io
   API_BASE_URL: https://labgrader.markpolyak.ru/api/v1
@@ -31,7 +35,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.DOCKER_REGISTRY }}/markpolyak/lab_grader_${{ matrix.service }}
+            ${{ env.DOCKER_REGISTRY }}/${{ github.repository_owner }}/lab_grader_${{ matrix.service }}
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}

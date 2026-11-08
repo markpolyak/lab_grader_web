@@ -10,7 +10,7 @@ export function GroupListWrapper() {
       onSelectGroup={(groupId) =>
         navigate(`/course/${courseId}/group/${groupId}`)
       }
-      onBack={() => navigate("/")}
+      onBack={() => navigate(`/course/${courseId}`)}
     />
   );
 }

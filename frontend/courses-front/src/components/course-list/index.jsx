@@ -2,7 +2,6 @@ import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import CodeMirror from "@uiw/react-codemirror";
 import { yaml } from "@codemirror/lang-yaml";
-import { Select, MenuItem } from "@mui/material";
 import { useTranslation } from "react-i18next";
 import {
   Button,
@@ -22,6 +21,7 @@ import {
   FixedAdminButton,
 } from "./styled";
 import { fetchCourseDetails, fetchCourses } from "../../api";
+import { LanguageSwitcher } from "../language-switcher";
 import { colors } from "../../../theme";
 import {
   Snackbar,
@@ -33,7 +33,7 @@ import {
 } from "@mui/material";
 
 export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const navigate = useNavigate();
 
   const [courses, setCourses] = useState([]);
@@ -142,7 +142,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ content: editContent }),
+        body: JSON.stringify({ content: editContent, original_content: originalContent }),
       });
 
       if (response.ok) {
@@ -198,54 +198,10 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   };
 
 
-  const languages = [
-    { code: "ru", label: "Русский" },
-    { code: "en", label: "English" },
-    { code: "zh", label: "中文" },
-  ];
-
   return (
     <MainContainer style={{ position: "relative" }}>
       {/* Выпадающий список выбора языка */}
-      <Select
-        value={i18n.language}
-        onChange={(e) => i18n.changeLanguage(e.target.value)}
-        style={{
-          position: "fixed",
-          top: 16,
-          right: 16,
-          zIndex: 3200,
-          minWidth: 120,
-          backgroundColor: "#555",
-          color: "#fff",
-        }}
-        variant="outlined"
-        size="small"
-        sx={{
-          ".MuiOutlinedInput-notchedOutline": { borderColor: "#555" },
-          "&.Mui-focused .MuiOutlinedInput-notchedOutline": {
-            borderColor: "#888",
-          },
-          ".MuiSvgIcon-root": { color: "#fff" },
-        }}
-        MenuProps={{
-          disablePortal: true,
-          sx: {
-            zIndex: 3200,
-          },
-          PaperProps: {
-            sx: {
-              zIndex: 3200,
-            },
-          },
-        }}
-      >
-        {languages.map(({ code, label }) => (
-          <MenuItem key={code} value={code}>
-            {label}
-          </MenuItem>
-        ))}
-      </Select>
+      <LanguageSwitcher />
 
       {/* Переключатель статусов курсов - компактный, в углу */}
       <ButtonGroup
@@ -456,9 +412,9 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
             >
               <SelectButton
                 onClick={() => onSelectCourse(course.id)}
-                style={{ backgroundColor: colors.selected }}
+                style={{ backgroundColor: colors.selected, ...(isAdmin ? { width: "auto" } : {}) }}
               >
-                {t("select")}
+                {isAdmin ? t("adminQueues.lessons") : t("select")}
               </SelectButton>
 
               <Button onClick={() => handleExpand(course.id)}>

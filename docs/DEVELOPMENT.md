@@ -88,7 +88,7 @@ course:
     name: Тестовый курс
     semester: Осень 2026
     university: ГУАП
-    timezone: UTC+3
+    timezone: Europe/Moscow
     github:
         organization: <ваша-организация>
     google:
@@ -97,13 +97,13 @@ course:
         task-id-column: 0
         student-name-column: 1
         lab-column-offset: 1
-labs:
-    "1":
-        github-prefix: lab1
-        short-name: ЛР1
-    "2":
-        github-prefix: lab2
-        short-name: ЛР2
+    labs:
+        "1":
+            github-prefix: lab1
+            short-name: ЛР1
+        "2":
+            github-prefix: lab2
+            short-name: ЛР2
 ```
 
 и добавьте его в `courses/index.yaml`:
@@ -121,11 +121,12 @@ labs:
 
 Скопируйте `.env.example` в `.env` и заполните:
 
-```bash
+```dotenv
 GITHUB_TOKEN=ghp_...
 ADMIN_LOGIN=admin
 ADMIN_PASSWORD=admin
-SECRET_KEY=<python -c "import secrets; print(secrets.token_hex(32))">
+# Сгенерировать отдельно: python -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY=replace-with-random-secret
 CREDENTIALS_FILE=credentials.json
 
 GITHUB_OAUTH_CLIENT_ID=...
@@ -137,6 +138,12 @@ FRONTEND_URL=http://localhost:8080   # или http://localhost:5173 для npm r
 
 ### Docker
 
+Если `credentials.json` находится в корне и используется dev-compose с
+`.:/app`, в `.env` заменить путь на `CREDENTIALS_FILE=/app/credentials.json`.
+Для запуска Python из корня оставить `CREDENTIALS_FILE=credentials.json`.
+Путь `/app/google-credentials/credentials.json` из `.env.example` предназначен
+для production-монтирования каталога `google-credentials`.
+
 ```bash
 docker compose up --build
 # Frontend: http://localhost:8080, backend: http://localhost:8000
@@ -144,6 +151,8 @@ docker compose up --build
 
 Каталог репозитория смонтирован в контейнер backend, поэтому `credentials.json`,
 `.env` и `courses/` берутся из рабочей копии.
+Каталоги logs, schedule и queue_state перекрыты отдельными постоянными томами.
+Запускать один backend-worker; несколько процессов не поддерживаются.
 
 ### Без Docker
 
@@ -168,10 +177,31 @@ npm run dev            # http://localhost:5173
 
 ```bash
 ADMIN_LOGIN=test ADMIN_PASSWORD=test SECRET_KEY=test GITHUB_TOKEN=dummy \
-    pytest tests/ -v
+    .venv/bin/python -m pytest tests/ queues/tests/ -v
 
-cd frontend/courses-front && npm test
+cd frontend/courses-front
+npm run lint
+npm test
+npm run build
 ```
 
 Те же тесты запускает CI (`.github/workflows/tests.yml`) на каждый push и
 pull request.
+
+## 8. Очередь на защиту
+
+Краткий запуск, маршруты и проверка сохранности приведены в
+[README команды sensei-mcp](hackathon/sensei-mcp/README.md).
+Для воспроизведения сохранённой недели без сети источника задать
+`QUEUE_WEEK_START=2026-11-09` и `SCHEDULE_CONFIG=schedule/offline.yaml`.
+Для настоящей недели убрать QUEUE_WEEK_START.
+
+Допуск студента читает Google-таблицу курса. Отдельная таблица списка участников
+истории подключается через `course.google.queue-history-spreadsheet` либо
+`QUEUE_HISTORY_SPREADSHEET_ID`. Каноническая история результатов хранится в
+`QUEUE_STATE_DIR` и доступна через admin API. Она не удаляется после выгрузки.
+
+Два ADR: [хранение](hackathon/sensei-mcp/001-queue-storage.md) и
+[расписание](hackathon/sensei-mcp/002-schedule.md).
+Как отправить решение из приватного checkout в публичный форк и открыть PR
+в `hackathon/queue`: [SUBMISSION](hackathon/sensei-mcp/SUBMISSION.md).
