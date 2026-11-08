@@ -548,27 +548,45 @@ def set_status(
 
 
 
-def _read_history_keys_for_date(
+def _history_row_key(
+    target_date: date,
+    group: str,
+    fio: str,
+    lab: str,
+    session_no: str,
+) -> tuple[str, str, str, str, str]:
+    return (target_date.isoformat(), group, fio, lab, session_no)
+
+
+def _read_history_counts_for_date(
     history_worksheet,
     target_date: date,
-) -> set[tuple[str, str, str]]:
-    """Existing ``(group, fio, lab)`` triples in history for *target_date*."""
+) -> dict[tuple[str, str, str, str, str], int]:
+    """Count history rows by date, student, lab, and session."""
     values = history_worksheet.get_all_values()
-    keys: set[tuple[str, str, str]] = set()
+    counts: dict[tuple[str, str, str, str, str], int] = {}
     for row in values[1:]:
         if len(row) < 5:
             continue
-        if row[0].strip() == target_date.isoformat():
-            keys.add((row[2].strip(), row[3].strip(), row[4].strip()))
-    return keys
+        if row[0].strip() != target_date.isoformat():
+            continue
+        key = _history_row_key(
+            target_date,
+            row[2].strip(),
+            row[3].strip(),
+            row[4].strip(),
+            row[5].strip() if len(row) > 5 else "",
+        )
+        counts[key] = counts.get(key, 0) + 1
+    return counts
 
 
 def snapshot_sheet(spreadsheet, sheet_name: str) -> int:
     """Atomically append a day's rows to history and delete its queue tab.
 
-    Idempotent: rows already present in history (matched by
-    ``(group, fio, lab)``) are skipped, so a retry after a partial
-    failure does not duplicate data.
+    Idempotent: existing history rows are matched as a multiset by
+    ``(date, group, fio, lab, session)``. Repeated registrations are retained,
+    while a retry after a partial failure does not duplicate rows.
 
     The append and delete are sent as a single ``batch_update`` call
     (two requests: ``appendCells`` + ``deleteSheet``) so they are atomic
@@ -587,12 +605,20 @@ def snapshot_sheet(spreadsheet, sheet_name: str) -> int:
 
         rows = read_queue_rows(worksheet)
         history = ensure_history_sheet(spreadsheet)
-        existing_keys = _read_history_keys_for_date(history, sheet_date)
+        existing_counts = _read_history_counts_for_date(history, sheet_date)
+        seen_counts: dict[tuple[str, str, str, str, str], int] = {}
 
         new_rows: list[tuple[str, str, str, str, str, str, str]] = []
         for row in rows:
-            key = (row.group, row.fio, row.lab)
-            if key in existing_keys:
+            key = _history_row_key(
+                sheet_date,
+                row.group,
+                row.fio,
+                row.lab,
+                str(row.session_no or ""),
+            )
+            seen_counts[key] = seen_counts.get(key, 0) + 1
+            if seen_counts[key] <= existing_counts.get(key, 0):
                 continue
             final_status = (
                 STATUS_NOT_REACHED if row.status == STATUS_WAITING else row.status
@@ -608,7 +634,6 @@ def snapshot_sheet(spreadsheet, sheet_name: str) -> int:
                     final_status,                   # 6: Статус
                 )
             )
-            existing_keys.add(key)
 
         requests: list[dict] = []
         if new_rows:

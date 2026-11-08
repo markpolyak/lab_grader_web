@@ -264,6 +264,52 @@ def test_snapshot_is_idempotent_and_skips_already_moved_rows():
     assert "Очередь-2026-11-07" not in spreadsheet.sheets
 
 
+def test_snapshot_preserves_repeated_registrations_and_is_idempotent():
+    spreadsheet = FakeSpreadsheet()
+    _add_queue(
+        spreadsheet,
+        [
+            ("4431", "Иванов", "ЛР1", STATUS_WITHDRAWN, 1),
+            ("4431", "Иванов", "ЛР1", STATUS_WAITING, 1),
+        ],
+        title="Очередь-2026-11-07",
+    )
+    history = ensure_history_sheet(spreadsheet)
+
+    assert snapshot_sheet(spreadsheet, "Очередь-2026-11-07") == 2
+    assert [
+        row[6] for row in history.get_all_values()[1:]
+    ] == [STATUS_WITHDRAWN, STATUS_NOT_REACHED]
+
+    _add_queue(
+        spreadsheet,
+        [
+            ("4431", "Иванов", "ЛР1", STATUS_WITHDRAWN, 1),
+            ("4431", "Иванов", "ЛР1", STATUS_WAITING, 1),
+        ],
+        title="Очередь-2026-11-07",
+    )
+    assert snapshot_sheet(spreadsheet, "Очередь-2026-11-07") == 0
+    assert len(history.get_all_values()) == 3
+
+    partially_copied = FakeSpreadsheet()
+    _add_queue(
+        partially_copied,
+        [
+            ("4431", "Иванов", "ЛР1", STATUS_WITHDRAWN, 1),
+            ("4431", "Иванов", "ЛР1", STATUS_WAITING, 1),
+        ],
+        title="Очередь-2026-11-07",
+    )
+    partial_history = ensure_history_sheet(partially_copied)
+    partial_history.append_row(
+        ["2026-11-07", "1", "4431", "Иванов", "ЛР1", "", STATUS_NOT_REACHED]
+    )
+
+    assert snapshot_sheet(partially_copied, "Очередь-2026-11-07") == 1
+    assert len(partial_history.get_all_values()) == 3
+
+
 def test_snapshot_ignores_non_queue_tabs_and_future_dates():
     spreadsheet = FakeSpreadsheet()
     spreadsheet.sheets["Info"] = FakeWorksheet("Info", 1)

@@ -20,8 +20,8 @@
  *
  * Контракт с backend (backend должен делать то же самое и теми же правилами):
  *   - формат строки истории: Дата | ПОЗИЦИЯ | ГРУППА | ФИО | ЛР | Пар№ | Статус;
- *   - ключ строки: Дата | ПОЗИЦИЯ | ГРУППА | ФИО | ЛР (повторная запись студента
- *     на ту же ЛР в тот же день имеет другую ПОЗИЦИЮ и не считается дублем);
+ *   - при повторном запуске строки сверяются как мультимножество по Дате,
+ *     ГРУППЕ, ФИО, ЛР и Пар№; повторные записи сохраняются отдельно;
  *   - перед копированием проверять и брать аренду copy_lease на листе autoclose_status;
  *   - значения служебного листа autoclose_status (ключ | значение):
  *       пишет скрипт:  installed_at, last_run, last_success, last_error,
@@ -139,21 +139,26 @@ function closeDay() {
 function closeSheet_(ss, sheet, dateStr) {
   const history = ensureHistorySheet_(ss);
   const rows = readQueueRows_(sheet, dateStr);
+  let copied = 0;
 
   if (rows.length > 0) {
-    const existing = readHistoryKeys_(history, dateStr);
+    const existingCounts = readHistoryCounts_(history, dateStr);
+    const seenCounts = {};
     rows.forEach(r => {
       const key = rowKey_(r);
-      if (existing[key]) return;           // уже скопировано раньше (повторный запуск)
+      seenCounts[key] = (seenCounts[key] || 0) + 1;
+      if (seenCounts[key] <= (existingCounts[key] || 0)) return;
       history.appendRow(r);
-      existing[key] = true;
+      copied += 1;
     });
     SpreadsheetApp.flush();
 
     // контроль полноты: каждая строка очереди обязана быть в истории
-    const after = readHistoryKeys_(history, dateStr);
-    rows.forEach(r => {
-      if (!after[rowKey_(r)]) throw new Error('строка не попала в историю: ' + rowKey_(r));
+    const after = readHistoryCounts_(history, dateStr);
+    Object.keys(seenCounts).forEach(key => {
+      if ((after[key] || 0) < seenCounts[key]) {
+        throw new Error('строки не попали в историю: ' + key);
+      }
     });
   }
 
@@ -162,7 +167,7 @@ function closeSheet_(ss, sheet, dateStr) {
     throw new Error('лист изменился во время закрытия, повтор при следующем запуске');
   }
   ss.deleteSheet(sheet);
-  return rows.length;
+  return copied;
 }
 
 /** Строки очереди -> строки истории (формат листа «История_очереди»). */
@@ -184,18 +189,20 @@ function readQueueRows_(sheet, dateStr) {
 }
 
 function rowKey_(r) {
-  return [r[0], r[1], r[2], r[3], r[4]].map(v => String(v).trim()).join('|');
+  return JSON.stringify([r[0], r[2], r[3], r[4], r[5]]
+    .map(v => String(v).trim()));
 }
 
-function readHistoryKeys_(history, dateStr) {
-  const keys = {};
+function readHistoryCounts_(history, dateStr) {
+  const counts = {};
   const last = history.getLastRow();
-  if (last < 2) return keys;
+  if (last < 2) return counts;
   history.getRange(2, 1, last - 1, 7).getValues().forEach(r => {
     if (cellDate_(r[0]) !== dateStr) return;
-    keys[rowKey_([dateStr, r[1], r[2], r[3], r[4]])] = true;
+    const key = rowKey_([cellDate_(r[0]), ...r.slice(1)]);
+    counts[key] = (counts[key] || 0) + 1;
   });
-  return keys;
+  return counts;
 }
 
 /** Дата из ячейки истории: Таблицы могли превратить строку в настоящую дату. */
