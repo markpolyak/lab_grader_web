@@ -108,6 +108,7 @@ class QueueEntryRemovedResponse(BaseModel):
 
 class QueueJoinRequest(BaseModel):
     github: str = Field(..., min_length=1)
+    full_name: str | None = Field(default=None, min_length=1)
     lesson_id: uuid.UUID
     lab_id: str = Field(..., min_length=1)
 
@@ -141,6 +142,30 @@ class StudentQueueStateResponse(BaseModel):
     group_id: str
     full_name: str
     entry: StudentQueueEntryResponse | None = None
+
+
+class QueueParticipantResponse(BaseModel):
+    id: uuid.UUID
+    full_name: str
+    lab_name: str | None = None
+    position: int | None = None
+
+
+class QueueLabResponse(BaseModel):
+    id: str
+    name: str
+
+
+class LessonQueueResponse(BaseModel):
+    queue_id: uuid.UUID
+    course_id: str
+    course_name: str
+    lesson: AdminQueueLessonResponse
+    closed: bool
+    version: int
+    waiting: list[QueueParticipantResponse]
+    called: list[QueueParticipantResponse]
+    labs: list[QueueLabResponse]
 
 
 class QueueEntryActionResponse(BaseModel):

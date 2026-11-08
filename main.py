@@ -89,6 +89,7 @@ from grading.queue_eligibility import (
 )
 import tempfile
 from queues.api.presenters import (
+    lesson_queue_response,
     entry_action_response,
     entry_removed_response,
     history_response,
@@ -103,6 +104,7 @@ from queues.api.presenters import (
     waiting_position,
 )
 from queues.api.schemas import (
+    LessonQueueResponse as StudentLessonQueueResponse,
     AdminQueueDetailResponse,
     AdminQueuesResponse,
     QueueCreateRequest,
@@ -1202,6 +1204,24 @@ def admin_remove_entry(
     return entry_removed_response()
 
 
+@app.get("/courses/{course_id}/lessons/{lesson_id}/queue", response_model=StudentLessonQueueResponse)
+@limiter.limit("100/minute")
+def get_lesson_queue(request: Request, course_id: str, lesson_id: uuid.UUID):
+    """Участники занятия без GitHub-логинов, результатов и завершённых записей."""
+    course_info = get_course_by_id(course_id)
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == lesson_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="LESSON_NOT_FOUND")
+    labs = []
+    for lab_id in course_info.get("labs", {}):
+        resolved = find_public_lab_config(course_info, str(lab_id))
+        if resolved is not None:
+            key, lab = resolved
+            labs.append({"id": key, "name": lab.get("short-name", key)})
+    return lesson_queue_response(schedule, lesson, service.get_record(lesson.id), labs)
+
+
 @app.get("/courses/{course_id}/queue", response_model=StudentQueueStateResponse)
 @limiter.limit("60/minute")
 def get_student_queue(
@@ -1273,6 +1293,12 @@ def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
         raise HTTPException(status_code=404, detail="LAB_NOT_FOUND")
     except LabNotPassedError:
         raise HTTPException(status_code=403, detail="LAB_NOT_PASSED")
+
+    if body.full_name is not None:
+        submitted_name = " ".join(body.full_name.split()).casefold().replace("ё", "е")
+        actual_name = " ".join(eligible.full_name.split()).casefold().replace("ё", "е")
+        if submitted_name != actual_name:
+            raise HTTPException(status_code=403, detail="STUDENT_NAME_MISMATCH")
 
     try:
         entry = service.join(lesson.id, eligible)

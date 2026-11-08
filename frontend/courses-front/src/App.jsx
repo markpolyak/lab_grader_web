@@ -5,6 +5,7 @@ import { ProtectedRoute } from "./components/admin/ProtectedRoute";
 import { CourseListWrapper } from "./components/course-list/courseListWrapper";
 import { CourseActionsWrapper } from "./components/course-actions/courseActionsWrapper";
 import { QueueLessonsWrapper } from "./components/queue-lessons/queueLessonsWrapper";
+import { QueueDetailWrapper } from "./components/queue-detail/queueDetailWrapper";
 import { GroupListWrapper } from "./components/group-list/groupListWrapper";
 import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
@@ -35,6 +36,7 @@ function App() {
         <Route path="/" element={<CourseListWrapper />} />
         <Route path="/course/:courseId" element={<CourseActionsWrapper />} />
         <Route path="/course/:courseId/queue" element={<QueueLessonsWrapper />} />
+        <Route path="/course/:courseId/queue/:lessonId" element={<QueueDetailWrapper />} />
         <Route path="/course/:courseId/groups" element={<GroupListWrapper />} />
         <Route
           path="/course/:courseId/group/:groupId"

@@ -78,6 +78,63 @@ def test_state_requires_group_id(endpoint):
     assert client.get("/courses/os-2026/queue?github=student").status_code == 422
 
 
+def test_public_lesson_queue_has_fifo_names_without_private_admin_fields(endpoint):
+    client, service = endpoint
+    lesson = open_first_lesson(service)
+    for name, github in [("Первый", "private-first"), ("Второй", "private-second")]:
+        service.join(lesson.id, EligibleStudentLab(
+            student=Student(name, "Студент", "", github),
+            full_name=f"Студент {name}", group_id="4431", lab_id="1", lab_name="ЛР1",
+        ))
+    first = service.call_next(lesson.id)
+    response = client.get(f"/courses/os-2026/lessons/{lesson.id}/queue")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["course_name"] == "Операционные системы"
+    assert data["closed"] is False
+    assert data["labs"] == [{"id": "1", "name": "ЛР1"}]
+    assert data["waiting"][0]["full_name"] == "Студент Второй"
+    assert data["waiting"][0]["position"] == 1
+    assert data["called"][0]["id"] == str(first.id)
+    assert "private-first" not in response.text and "private-second" not in response.text
+    assert "finished" not in data
+    assert "result" not in data["called"][0]
+    service.finish(lesson.id, first.id, "defended")
+    data = client.get(f"/courses/os-2026/lessons/{lesson.id}/queue").json()
+    assert data["called"] == []
+    assert len(data["waiting"]) == 1
+
+
+def test_public_lesson_queue_rejects_unknown_lesson_and_course(endpoint):
+    client, service = endpoint
+    lesson = open_first_lesson(service)
+    assert client.get(f"/courses/os-2026/lessons/{uuid4()}/queue").status_code == 404
+    assert client.get(f"/courses/missing/lessons/{lesson.id}/queue").status_code == 404
+
+
+def test_public_lesson_queue_omits_unpublished_labs(endpoint, monkeypatch):
+    client, service = endpoint
+    lesson = open_first_lesson(service)
+    monkeypatch.setattr(main, "find_public_lab_config", lambda *args: None)
+    data = client.get(f"/courses/os-2026/lessons/{lesson.id}/queue").json()
+    assert data["labs"] == []
+
+
+def test_join_checks_submitted_full_name_against_sheet(endpoint):
+    client, service = endpoint
+    lesson = open_first_lesson(service)
+    payload = {"github": "student", "lesson_id": str(lesson.id), "lab_id": "1", "full_name": "Другой Студент"}
+    response = client.post("/courses/os-2026/queue/join", json=payload)
+    assert response.status_code == 403
+    assert response.json()["detail"] == "STUDENT_NAME_MISMATCH"
+    assert lesson.queue.entries == []
+    payload["full_name"] = "  ИВАНОВ    Иван  "
+    response = client.post("/courses/os-2026/queue/join", json=payload)
+    assert response.status_code == 201
+    assert response.json()["full_name"] == "Иванов Иван"
+    assert len(lesson.queue.entries) == 1
+
+
 def test_state_without_active_entry(endpoint):
     client, _ = endpoint
     response = client.get("/courses/os-2026/queue?github=student&group_id=4431")

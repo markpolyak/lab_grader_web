@@ -26,6 +26,8 @@ from .schemas import (
     QueueUpdateResponse,
     StudentQueueEntryResponse,
     StudentQueueStateResponse,
+    LessonQueueResponse,
+    QueueParticipantResponse,
 )
 
 
@@ -126,6 +128,25 @@ def registration_response(
         queue_id=lesson.id,
         closed=lesson.queue.closed,
         version=record.version,
+    )
+
+
+def lesson_queue_response(schedule: Schedule, lesson: Lesson, record: QueueRecord | None, labs) -> LessonQueueResponse:
+    detail = queue_detail(schedule, lesson, record)
+
+    def participant(entry):
+        return QueueParticipantResponse(
+            id=entry.id, full_name=entry.full_name,
+            lab_name=entry.lab_name, position=entry.position,
+        )
+
+    return LessonQueueResponse(
+        queue_id=lesson.id, course_id=schedule.course_id,
+        course_name=schedule.course_name, lesson=detail.lesson,
+        closed=detail.closed, version=detail.version,
+        waiting=[participant(entry) for entry in detail.waiting],
+        called=[participant(entry) for entry in detail.called],
+        labs=labs,
     )
 
 

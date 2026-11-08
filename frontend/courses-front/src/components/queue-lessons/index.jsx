@@ -101,7 +101,6 @@ export function QueueLessons({ courseId, onBack }) {
                 ),
               })}
             </Description>
-            <Description>{t("queueLessons.selectionUnavailable")}</Description>
             {schedule.lessons.length === 0 ? (
               <Status role="status">{t("queueLessons.empty")}</Status>
             ) : (
@@ -124,7 +123,7 @@ export function QueueLessons({ courseId, onBack }) {
                       <Detail>{t("queueLessons.groups")}: {lesson.groups.join(", ") || "—"}</Detail>
                       {lesson.room && <Detail>{t("queueLessons.room")}: {lesson.room}</Detail>}
                     </LessonDetails>
-                    <SelectLessonButton type="button" disabled>
+                    <SelectLessonButton type="button" onClick={() => navigate(`/course/${courseId}/queue/${lesson.id}`)}>
                       {t("select")}
                     </SelectLessonButton>
                   </LessonCard>
