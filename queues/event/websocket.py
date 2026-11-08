@@ -1,5 +1,6 @@
 import logging
 import uuid
+import asyncio
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -10,6 +11,7 @@ class WebSocketService:
     def __init__(self) -> None:
         self.connect_ids: dict[uuid.UUID, WebSocket] = {}
         self.events: dict[uuid.UUID, set[uuid.UUID]] = {}
+        self._send_locks: dict[uuid.UUID, asyncio.Lock] = {}
 
     async def connect(
         self,
@@ -20,6 +22,7 @@ class WebSocketService:
         connect_id = uuid.uuid4()
 
         self.connect_ids[connect_id] = ws
+        self._send_locks[connect_id] = asyncio.Lock()
         return connect_id
 
     def disconnect(
@@ -27,6 +30,7 @@ class WebSocketService:
         connect_id: uuid.UUID,
     ) -> None:
         self.connect_ids.pop(connect_id, None)
+        self._send_locks.pop(connect_id, None)
         for event_id, ids in list(self.events.items()):
             ids.discard(connect_id)
             if not ids:
@@ -70,8 +74,12 @@ class WebSocketService:
             if ws is None:
                 continue
             try:
-                await ws.send_json(data)
-            except (WebSocketDisconnect, OSError):
+                lock = self._send_locks.get(connect_id)
+                if lock is None:
+                    continue
+                async with lock:
+                    await asyncio.wait_for(ws.send_json(data), timeout=5)
+            except (WebSocketDisconnect, OSError, TimeoutError, RuntimeError):
                 logger.warning(
                     "Failed to send to connection_id=%s",
                     connect_id,

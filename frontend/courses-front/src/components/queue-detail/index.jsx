@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueueEvents } from "../../hooks/useQueueEvents";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Alert } from "@mui/material";
@@ -23,6 +24,10 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
   const [attempt, setAttempt] = useState(0);
   const [revision, setRevision] = useState(0);
   const [ownEntryId, setOwnEntryId] = useState(null);
+  useQueueEvents(lessonId, (event) => {
+    if (event.type === "queue.deleted") setSnapshot(null);
+    setAttempt((value) => value + 1);
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -37,7 +42,7 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
       } catch (cause) {
         if (!controller.signal.aborted) setError(queueErrorKey(cause));
       } finally {
-        if (!controller.signal.aborted) timer = setTimeout(load, 10000);
+        if (!controller.signal.aborted) timer = setTimeout(load, 60000);
       }
     }
     load();

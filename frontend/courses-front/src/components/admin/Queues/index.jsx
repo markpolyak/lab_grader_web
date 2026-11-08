@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useQueueEvents } from "../../../hooks/useQueueEvents";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Alert, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
@@ -37,6 +38,10 @@ function QueueView({ courseId, queueId }) {
   const [starts, setStarts] = useState("");
   const [ends, setEnds] = useState("");
   const [creating, setCreating] = useState(false);
+  useQueueEvents(queueId, (event) => {
+    if (event.type === "queue.deleted") setData(null);
+    setRefresh((value) => value + 1);
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -56,7 +61,7 @@ function QueueView({ courseId, queueId }) {
           else setError(cause.status === 404 ? t("adminQueues.notFound") : t("adminQueues.loadFailed"));
         }
       } finally {
-        if (!controller.signal.aborted) timer = setTimeout(load, 10000);
+        if (!controller.signal.aborted) timer = setTimeout(load, queueId ? 60000 : 10000);
       }
     }
     load();

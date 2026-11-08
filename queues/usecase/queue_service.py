@@ -36,7 +36,6 @@ from ..repositories.mappers import (
 )
 from ..repositories.storage.inmemory import InMemoryQueueRepository
 
-
 ACTIVE_STATUSES = frozenset({EntryStatus.WAITING, EntryStatus.CALLED})
 TERMINAL_STATUSES = frozenset(
     {EntryStatus.FINISHED, EntryStatus.WITHDRAWN, EntryStatus.EXPIRED}
@@ -313,6 +312,7 @@ class QueueService:
                     lesson for lesson in schedule.lessons if lesson.id != lesson_id
                 ]
 
+
     def finished_lessons(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
         now = datetime.now(ZoneInfo("Europe/Moscow"))
         with self._lock:
@@ -555,6 +555,7 @@ class QueueService:
                 schedule.lessons[:] = [
                     item for item in schedule.lessons if item.id != lesson_id
                 ]
+
 
     def remove_entry(self, lesson_id, entry_id, *, now=None) -> QueueEntry:
         """Убрать активную запись преподавателем; она остаётся в истории."""

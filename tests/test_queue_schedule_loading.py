@@ -163,3 +163,19 @@ def test_history_jobs_are_wired_to_async_service(tmp_path, monkeypatch):
             assert item.id not in service._lessons
 
     asyncio.run(check())
+
+
+def test_background_sync_does_not_publish_socket_events(tmp_path, monkeypatch):
+    monkeypatch.setenv("SCHEDULE_DIR", str(tmp_path))
+    monkeypatch.setattr(main, "iter_course_configs", lambda: iter([]))
+    monkeypatch.setattr(main, "ScheduleParser", Mock(return_value=Mock()))
+    sender = AsyncMock()
+    monkeypatch.setattr(main.websocketService, "send_event", sender)
+
+    async def check():
+        from uuid import uuid4
+        app = SimpleNamespace(state=SimpleNamespace())
+        async with main.lifespan(app):
+            await asyncio.to_thread(app.state.queue_service.generate_week, {}, [])
+            sender.assert_not_awaited()
+    asyncio.run(check())
