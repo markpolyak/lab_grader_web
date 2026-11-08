@@ -967,7 +967,7 @@ def admin_get_queue(
     response_model=QueueRegistrationResponse,
 )
 @limiter.limit("60/minute")
-def admin_set_queue_registration(
+async def admin_set_queue_registration(
     request: Request,
     course_id: str,
     queue_id: uuid.UUID,
@@ -980,14 +980,19 @@ def admin_set_queue_registration(
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
+    was_closed = lesson.queue.closed
     try:
-        record = service.set_registration(lesson.id, closed=body.closed)
+        record = await asyncio.to_thread(service.set_registration, lesson.id, closed=body.closed)
     except KeyError:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
     except InvalidStateError:
         raise HTTPException(status_code=409, detail="LESSON_CANCELLED")
 
+    if was_closed != lesson.queue.closed:
+        await websocketService.send_event(lesson.id, {
+            "type": "queue.updated", "queue_id": str(lesson.id),
+        })
     return registration_response(lesson, record)
 
 
@@ -997,7 +1002,7 @@ def admin_set_queue_registration(
     status_code=201,
 )
 @limiter.limit("30/minute")
-def admin_create_queue(
+async def admin_create_queue(
     request: Request,
     course_id: str,
     body: QueueCreateRequest,
@@ -1006,7 +1011,7 @@ def admin_create_queue(
     """Создать внештатную очередь для занятия вне расписания."""
     service, schedule = _get_current_schedule(request, course_id)
     try:
-        record = service.create_manual(
+        record = await asyncio.to_thread(service.create_manual,
             course_id,
             schedule.course_name,
             week_start=schedule.week_start,
@@ -1020,6 +1025,9 @@ def admin_create_queue(
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    await websocketService.send_event(record.id, {
+        "type": "queue.updated", "queue_id": str(record.id),
+    })
     return queue_create_response(record)
 
 
@@ -1028,7 +1036,7 @@ def admin_create_queue(
     response_model=QueueUpdateResponse,
 )
 @limiter.limit("60/minute")
-def admin_update_queue(
+async def admin_update_queue(
     request: Request,
     course_id: str,
     queue_id: uuid.UUID,
@@ -1044,7 +1052,7 @@ def admin_update_queue(
         raise HTTPException(status_code=422, detail="NO_FIELDS")
 
     try:
-        record = service.update_queue(
+        record = await asyncio.to_thread(service.update_queue,
             lesson.id,
             cancelled=body.cancelled,
             starts_at=body.lesson_starts_at,
@@ -1057,6 +1065,9 @@ def admin_update_queue(
         raise HTTPException(status_code=404, detail="Очередь не найдена")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
     return queue_update_response(record)
 
 
@@ -1065,7 +1076,7 @@ def admin_update_queue(
     response_model=QueueDeletedResponse,
 )
 @limiter.limit("60/minute")
-def admin_delete_queue(
+async def admin_delete_queue(
     request: Request,
     course_id: str,
     queue_id: uuid.UUID,
@@ -1078,13 +1089,16 @@ def admin_delete_queue(
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
     try:
-        service.delete_queue(lesson.id)
+        await asyncio.to_thread(service.delete_queue, lesson.id)
     except EntryNotFoundError:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
     except QueueNotDeletableError:
         raise HTTPException(status_code=409, detail="QUEUE_NOT_DELETABLE")
     except QueueNotEmptyError:
         raise HTTPException(status_code=409, detail="QUEUE_NOT_EMPTY")
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.deleted", "queue_id": str(lesson.id),
+    })
     return queue_deleted_response()
 
 
@@ -1093,7 +1107,7 @@ def admin_delete_queue(
     response_model=QueueEntryActionResponse,
 )
 @limiter.limit("60/minute")
-def admin_call_next(
+async def admin_call_next(
     request: Request,
     course_id: str,
     queue_id: uuid.UUID,
@@ -1106,7 +1120,7 @@ def admin_call_next(
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
     try:
-        entry = service.call_next(lesson.id)
+        entry = await asyncio.to_thread(service.call_next, lesson.id)
     except QueueEmptyError:
         raise HTTPException(status_code=409, detail="QUEUE_EMPTY")
     except InvalidStateError:
@@ -1116,6 +1130,9 @@ def admin_call_next(
 
     record = service.get_record(lesson.id)
     metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
     return entry_action_response(
         entry, metadata, record.version if record is not None else 0
     )
@@ -1126,7 +1143,7 @@ def admin_call_next(
     response_model=QueueEntryActionResponse,
 )
 @limiter.limit("60/minute")
-def admin_finish_entry(
+async def admin_finish_entry(
     request: Request,
     course_id: str,
     queue_id: uuid.UUID,
@@ -1141,7 +1158,7 @@ def admin_finish_entry(
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
     try:
-        entry = service.finish(lesson.id, entry_id, body.outcome)
+        entry = await asyncio.to_thread(service.finish, lesson.id, entry_id, body.outcome)
     except EntryNotFoundError:
         raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
     except InvalidStateError:
@@ -1149,6 +1166,9 @@ def admin_finish_entry(
 
     record = service.get_record(lesson.id)
     metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
     return entry_action_response(
         entry, metadata, record.version if record is not None else 0
     )
@@ -1159,7 +1179,7 @@ def admin_finish_entry(
     response_model=QueueEntryActionResponse,
 )
 @limiter.limit("60/minute")
-def admin_update_result(
+async def admin_update_result(
     request: Request,
     course_id: str,
     queue_id: uuid.UUID,
@@ -1174,7 +1194,7 @@ def admin_update_result(
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
     try:
-        entry = service.update_result(lesson.id, entry_id, body.outcome)
+        entry = await asyncio.to_thread(service.update_result, lesson.id, entry_id, body.outcome)
     except EntryNotFoundError:
         raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
     except InvalidStateError:
@@ -1182,6 +1202,9 @@ def admin_update_result(
 
     record = service.get_record(lesson.id)
     metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
     return entry_action_response(
         entry, metadata, record.version if record is not None else 0
     )
@@ -1192,7 +1215,7 @@ def admin_update_result(
     response_model=QueueEntryRemovedResponse,
 )
 @limiter.limit("60/minute")
-def admin_remove_entry(
+async def admin_remove_entry(
     request: Request,
     course_id: str,
     queue_id: uuid.UUID,
@@ -1206,11 +1229,14 @@ def admin_remove_entry(
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
     try:
-        service.remove_entry(lesson.id, entry_id)
+        await asyncio.to_thread(service.remove_entry, lesson.id, entry_id)
     except EntryNotFoundError:
         raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
     except InvalidStateError:
         raise HTTPException(status_code=409, detail="INVALID_STATE")
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
     return entry_removed_response()
 
 
@@ -1280,7 +1306,7 @@ def get_student_queue(
     status_code=201,
 )
 @limiter.limit("30/minute")
-def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
+async def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
     """Встать в очередь на занятие."""
     course_info = get_course_by_id(course_id)
     service, schedule = _get_current_schedule(request, course_id)
@@ -1290,9 +1316,9 @@ def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
     if lesson is None:
         raise HTTPException(status_code=404, detail="LESSON_NOT_FOUND")
 
-    spreadsheet = _open_spreadsheet(course_info)
+    spreadsheet = await asyncio.to_thread(_open_spreadsheet, course_info)
     try:
-        eligible = resolve_eligible_lab(
+        eligible = await asyncio.to_thread(resolve_eligible_lab,
             course_info, spreadsheet, body.github, body.lab_id, lesson.groups
         )
     except SheetsUnavailableError:
@@ -1311,7 +1337,7 @@ def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
             raise HTTPException(status_code=403, detail="STUDENT_NAME_MISMATCH")
 
     try:
-        entry = service.join(lesson.id, eligible)
+        entry = await asyncio.to_thread(service.join, lesson.id, eligible)
     except QueueClosedError:
         raise HTTPException(status_code=409, detail="QUEUE_CLOSED")
     except GroupNotAllowedError:
@@ -1324,6 +1350,9 @@ def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
     record = service.get_record(lesson.id)
     metadata = record.entry_metadata.get(entry.id) if record is not None else None
     position = waiting_position(record, entry.id) if record is not None else None
+    await websocketService.send_event(lesson.id, {
+        "type": "queue.updated", "queue_id": str(lesson.id),
+    })
     return student_queue_state(
         github=eligible.student.github,
         group_id=eligible.group_id,
@@ -1336,17 +1365,22 @@ def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
 
 @app.post("/courses/{course_id}/queue/leave", response_model=QueueLeaveResponse)
 @limiter.limit("30/minute")
-def leave_queue(request: Request, course_id: str, body: QueueLeaveRequest):
+async def leave_queue(request: Request, course_id: str, body: QueueLeaveRequest):
     """Выйти из своей ожидающей записи."""
     service, _ = _get_current_schedule(request, course_id)
+    active = service.active_entry(course_id, body.github)
     try:
-        service.leave(course_id, body.entry_id, body.github)
+        await asyncio.to_thread(service.leave, course_id, body.entry_id, body.github)
     except EntryNotFoundError:
         raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
     except EntryNotOwnedError:
         raise HTTPException(status_code=403, detail="FORBIDDEN")
     except InvalidStateError:
         raise HTTPException(status_code=409, detail="INVALID_STATE")
+    if active is not None:
+        await websocketService.send_event(active[0].id, {
+            "type": "queue.updated", "queue_id": str(active[0].id),
+        })
     return {"left": True}
 
 
@@ -3250,6 +3284,7 @@ async def _read_ws(ws: WebSocket, connection_id: uuid.UUID) -> None:
                 continue
             if action == "subscribe":
                 websocketService.subscribe(connection_id, event_id)
+                await ws.send_json({"type": "subscribed", "event_id": str(event_id)})
             else:
                 websocketService.unsubscribe(connection_id, event_id)
         elif action == "ping":
