@@ -878,6 +878,12 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
     return {"message": "Изменения успешно сохранены"}
 
 
+def _is_group_sheet_title(title: str, info_sheet: str | list[str] | None) -> bool:
+    if isinstance(info_sheet, list):
+        return not title.startswith(tuple(info_sheet))
+    return title != info_sheet and re.fullmatch(r"\d+", title) is not None
+
+
 @app.get("/courses/{course_id}/groups")
 @limiter.limit("10/minute")
 def get_course_groups(request: Request, course_id: str):
@@ -893,7 +899,11 @@ def get_course_groups(request: Request, course_id: str):
 
     try:
         spreadsheet = client.open_by_key(spreadsheet_id)
-        sheet_names = [sheet.title for sheet in spreadsheet.worksheets() if sheet.title != info_sheet]
+        sheet_names = [
+            sheet.title
+            for sheet in spreadsheet.worksheets()
+            if _is_group_sheet_title(sheet.title, info_sheet)
+        ]
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to fetch sheets: {str(e)}")
 
@@ -2664,7 +2674,7 @@ def _schedule_group_sources(course_id: str, course_info: dict) -> tuple[list[dic
         try:
             spreadsheet = sheets_client().open_by_key(spreadsheet_id)
             for sheet in spreadsheet.worksheets():
-                if sheet.title != info_sheet and re.fullmatch(r"\d+", sheet.title):
+                if _is_group_sheet_title(sheet.title, info_sheet):
                     groups_by_id.setdefault(sheet.title, {"id": sheet.title, "guap_group_id": sheet.title})
         except Exception as e:
             logger.exception("Could not load schedule groups from Sheets for course=%s", course_id)
