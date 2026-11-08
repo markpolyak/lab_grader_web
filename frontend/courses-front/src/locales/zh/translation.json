@@ -8,6 +8,7 @@
   "save": "保存",
   "fullscreen": "全屏",
   "collapse": "折叠",
+  "back": "返回",
   "semester": "学期",
   "information": "信息",
   "email": "电子邮件",
@@ -47,6 +48,9 @@
     "provisioningFork": "fork",
     "updateButton": "更新学生仓库",
     "disabledReason": "仅当 repo-provisioning 为 fork 且已设置 template-repo 时可用",
+    "schedule": {
+      "button": "课程表"
+    },
     "dryRun": {
       "title": "预览更新分发",
       "summary": "将有 {{count}} 个学生仓库收到更新提议",
@@ -248,8 +252,93 @@
       "closedAt": "提交已于 {{moment}} 截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。"
     }
   },
+  "adminQueue": {
+    "button": "Queue",
+    "title": "Queue: {{lab}}",
+    "group": "Group",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "empty": "Queue is empty",
+    "total": "Total: {{count}}",
+    "close": "Close",
+    "columns": {
+      "position": "#",
+      "group": "Group",
+      "name": "Student",
+      "lab": "Lab",
+      "status": "Status"
+    },
+    "errors": {
+      "groupsFailed": "Failed to load groups",
+      "loadFailed": "Failed to load queue"
+    },
+    "buttonToday": "今日队列",
+    "titleToday": "{{date}} 的队列"
+  },
+  "queue": {
+    "title": "实验答辩排队",
+    "description": "加入实验答辩队列并查看您的位置。",
+    "loading": "正在加载队列状态…",
+    "signInRequired": "请使用 GitHub 登录后加入并查看队列。",
+    "signIn": "使用 GitHub 登录",
+    "fillFormFirst": "请先填写上方表格并点击「注册」以加入队列。",
+    "alreadyPassed": "该实验已通过。",
+    "position": "您已排队：第 {{position}} 位，共 {{total}} 位。",
+    "closed": "队列已关闭。下一场答辩：{{nextSession}}。",
+    "noNextSession": "暂未安排",
+    "ciNotRun": "CI 尚未运行。请将代码推送到仓库，然后返回此页面。",
+    "ciFailed": "CI 未通过。请修复代码并等待检查完成。",
+    "register": "加入队列",
+    "working": "请稍候…",
+    "registered": "您已加入队列。",
+    "withdraw": "退出队列",
+    "withdrawn": "您已退出队列。",
+    "shiftBy": "向后移动位数",
+    "shift": "向后移动",
+    "shifted": "您的队列位置已更新。",
+    "session": "下一场答辩",
+    "listTitle": "您所在小组的队列",
+    "refresh": "刷新",
+    "empty": "目前还没有人排队。",
+    "cannotRegister": "目前无法加入队列。",
+    "teamTitle": "您的团队",
+    "teamMembers": "成员",
+    "unnamedEntry": "学生",
+    "statuses": {
+      "ждёт": "等待中",
+      "сдал": "已通过",
+      "не_сдал": "未通过",
+      "нет": "缺席",
+      "отозван": "已退出",
+      "waiting": "等待中",
+      "passed": "已通过",
+      "failed": "未通过",
+      "absent": "缺席",
+      "withdrawn": "已退出"
+    },
+    "errors": {
+      "generic": "无法完成队列请求，请重试。",
+      "INVALID_RESPONSE": "服务器返回了意外的队列响应，请刷新页面。",
+      "ALREADY_IN_QUEUE": "您已经在队列中。",
+      "NOT_IN_QUEUE": "未找到您的队列记录。",
+      "CI_NOT_PASSED": "CI 未通过，请修复代码后重试。",
+      "CI_NOT_RUN": "CI 尚未运行，请将代码推送到仓库。",
+      "CI_CHECK_FAILED": "无法检查 CI 结果。",
+      "ALREADY_PASSED": "该实验已通过。",
+      "QUEUE_CLOSED": "当前已停止加入队列。",
+      "INVALID_SHIFT": "请输入有效的后移位数。",
+      "NOT_WAITING": "此队列记录无法再修改。",
+      "NOT_IN_GROUP": "您只能加入自己小组的队列。",
+      "SESSION_REQUIRED": "请使用 GitHub 登录后使用队列。",
+      "NO_TEAM": "您不是该实验团队的成员。",
+      "TEAMS_UNAVAILABLE": "无法加载团队信息。",
+      "SHEETS_UNAVAILABLE": "Google 表格暂时不可用。",
+      "CI_PENDING": "CI 仍在运行，请稍后重试。"
+    }
+  },
   "schedule": {
     "title": "课程表",
+    "loading": "加载中…",
     "groupSourcesDescription": "课程表仅使用名称为数字的 Google Sheets 工作表。如有需要，可手动添加数字小组编号；列表会保存在课程配置中。",
     "manualGroupInput": "小组编号",
     "addManualGroup": "添加小组",
@@ -264,12 +353,124 @@
       "group": "小组",
       "slotsCount": "时段数",
       "status": "状态",
-      "error": "错误"
+      "error": "错误",
+      "corrections": "修正",
+      "source": "来源"
     },
     "errors": {
       "loadGroupsFailed": "无法加载小组列表",
       "refreshFailed": "获取课程表失败",
       "saveGroupsFailed": "无法保存小组列表"
+    },
+    "editor": {
+      "title": "课程表编辑器",
+      "loading": "加载中…",
+      "loadFailed": "无法加载课程表文件",
+      "saveFailed": "无法保存课程表文件",
+      "saved": "课程表已保存",
+      "saving": "保存中…",
+      "placeholder": "课程表 YAML 配置…",
+      "errors": {
+        "startRequired": "每个时段必须填写开始时间",
+        "endRequired": "每个时段必须填写结束时间"
+      }
+    },
+    "corrections": {
+      "title": "课程表修正 — 小组 {{groupId}}",
+      "listTitle": "修正列表",
+      "addTitle": "添加修正",
+      "editTitle": "编辑修正",
+      "addButton": "添加修正",
+      "saveChanges": "保存修改",
+      "saving": "保存中…",
+      "loading": "加载修正…",
+      "empty": "暂无修正。点击「添加修正」创建。",
+      "close": "关闭",
+      "types": {
+        "remove": "取消课时",
+        "add": "额外课时"
+      },
+      "columns": {
+        "id": "ID",
+        "date": "日期",
+        "type": "类型",
+        "details": "详情",
+        "actions": "操作"
+      },
+      "fields": {
+        "id": "修正 ID",
+        "date": "日期",
+        "type": "修正类型",
+        "slotId": "时段 ID (来自课程表)",
+        "labs": "实验 (逗号分隔)",
+        "labsHint": "留空 = 取消整个时段。指定实验仅取消这些实验。",
+        "newSlotId": "新时段 ID",
+        "recurrenceDay": "星期 (重复)",
+        "recurrenceDayHint": "单次课时留空，填写下方「日期」。",
+        "recurrenceWeek": "周奇偶",
+        "dateOnce": "日期 (单次课时)",
+        "dateOnceHint": "若为单次课时（无重复），请在此填写具体日期。有重复规则则留空。",
+        "start": "开始",
+        "end": "结束",
+        "subject": "科目",
+        "room": "教室",
+        "teacher": "教师"
+      },
+      "details": {
+        "removeSlot": "移除时段",
+        "wholeSlot": "整个时段",
+        "addSlot": "添加时段",
+        "recurrence": "重复: {{day}}, {{week}}"
+      },
+      "errors": {
+        "loadFailed": "无法加载修正",
+        "saveFailed": "无法保存修正",
+        "requiredFields": "请填写 ID 和日期",
+        "slotRequired": "请指定时段 ID (取消) 或 ID/时间 (添加)",
+        "startBeforeEnd": "开始时间必须早于结束时间",
+        "removeSlotIdRequired": "remove_slots: slot_id 必填",
+        "removeSlotLabsArray": "remove_slots: labs 必须是数组或 null",
+        "addSlotIdRequired": "add_slots: id 必填",
+        "addSlotStartRequired": "add_slots: start 必填",
+        "addSlotEndRequired": "add_slots: end 必填",
+        "addSlotStartFormat": "add_slots: start 必须是 HH:MM 或 HH:MM:SS",
+        "addSlotEndFormat": "add_slots: end 必须是 HH:MM 或 HH:MM:SS",
+        "addSlotEndBeforeStart": "add_slots: end 必须晚于 start",
+        "addSlotRecurrenceObject": "add_slots: recurrence 必须是对象",
+        "addSlotRecurrenceDay": "add_slots: recurrence day 无效",
+        "addSlotRecurrenceWeek": "add_slots: recurrence.week 必须是 all/odd/even",
+        "addSlotLabsArray": "add_slots: labs 必须是数组或 null"
+      },
+      "actions": {
+        "edit": "编辑",
+        "delete": "删除"
+      }
+    },
+    "source": {
+      "title": "课程表来源",
+      "defaultSource": "默认来源",
+      "defaultSourceLabel": "新小组的默认来源",
+      "defaultSourceHint": "当小组未指定来源时使用",
+      "groupSources": "各小组来源",
+      "columns": {
+        "group": "小组",
+        "currentSource": "当前来源",
+        "guapGroupId": "GUAP 代码",
+        "newSource": "新来源"
+      },
+      "types": {
+        "guap": "GUAP (自动)",
+        "manual": "手动"
+      },
+      "saveChanges": "保存修改",
+      "saving": "保存中…",
+      "loading": "加载中…",
+      "empty": "无小组",
+      "hint": "GUAP — 通过「获取课程表」更新时段。手动 — 仅在 YAML 中编辑时段。切换到手动会保留当前时段作为基础。切换到 GUAP — 下次刷新时将覆盖。",
+      "errors": {
+        "loadFailed": "无法加载来源",
+        "saveFailed": "无法保存来源"
+      }
     }
   }
 }

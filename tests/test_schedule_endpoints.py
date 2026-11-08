@@ -327,3 +327,160 @@ def test_schedule_groups_endpoint_requires_admin():
     )
 
     assert response.status_code == 401
+
+
+def test_edit_schedule_get_returns_yaml_content(schedule_admin_client):
+    client, _, schedule_path = schedule_admin_client
+    response = client.get("/admin/courses/test-course/schedule/edit")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "filename" in data
+    assert "content" in data
+    assert "course-id: test-course" in data["content"]
+    assert "weekly-session" in data["content"]
+
+
+def test_edit_schedule_get_creates_default_when_missing(schedule_admin_client, tmp_path):
+    client, _, schedule_path = schedule_admin_client
+    schedule_path.unlink()
+    response = client.get("/admin/courses/test-course/schedule/edit")
+
+    assert response.status_code == 200
+    data = response.json()
+    assert "course-id: test-course" in data["content"]
+    assert "source: guap" in data["content"]
+    assert "groups: {}" in data["content"]
+    assert "manual-groups: []" in data["content"]
+
+
+def test_edit_schedule_put_saves_changes(schedule_admin_client, tmp_path):
+    client, _, schedule_path = schedule_admin_client
+    new_content = """course-id: test-course
+source: guap
+timezone: UTC+3
+auto_open_minutes_before: 15
+auto_close_minutes_after: 10
+groups:
+  '4432':
+    group_id: '4432'
+    slots:
+      - id: new-slot
+        recurrence:
+          day: tuesday
+          week: all
+        start: '12:00'
+        end: '13:00'
+manual-groups: []
+"""
+    response = client.put(
+        "/admin/courses/test-course/schedule/edit",
+        json={"content": new_content},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "Изменения успешно сохранены"
+    saved = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
+    assert saved["groups"]["4432"]["slots"][0]["id"] == "new-slot"
+    assert saved["groups"]["4432"]["slots"][0]["start"] == "12:00"
+
+
+def test_edit_schedule_put_rejects_invalid_yaml(schedule_admin_client):
+    client, _, _ = schedule_admin_client
+    response = client.put(
+        "/admin/courses/test-course/schedule/edit",
+        json={"content": "invalid: yaml: ["},
+    )
+
+    assert response.status_code == 400
+    assert "YAML" in response.json()["detail"]
+
+
+def test_edit_schedule_put_rejects_mismatched_course_id(schedule_admin_client):
+    client, _, _ = schedule_admin_client
+    response = client.put(
+        "/admin/courses/test-course/schedule/edit",
+        json={"content": "course-id: other-course\ngroups: {}\nmanual-groups: []\n"},
+    )
+
+    assert response.status_code == 400
+    assert "course-id" in response.json()["detail"]
+
+
+def test_edit_schedule_put_rejects_non_numeric_group_ids(schedule_admin_client):
+    client, _, _ = schedule_admin_client
+    response = client.put(
+        "/admin/courses/test-course/schedule/edit",
+        json={
+            "content": """course-id: test-course
+groups:
+  'abc':
+    group_id: 'abc'
+    slots: []
+manual-groups: []
+"""
+        },
+    )
+
+    assert response.status_code == 400
+    assert "цифр" in response.json()["detail"] or "digits" in response.json()["detail"]
+
+
+def test_edit_schedule_put_rejects_mismatched_group_id(schedule_admin_client):
+    client, _, _ = schedule_admin_client
+    response = client.put(
+        "/admin/courses/test-course/schedule/edit",
+        json={
+            "content": """course-id: test-course
+groups:
+  '4432':
+    group_id: '4433'
+    slots: []
+manual-groups: []
+"""
+        },
+    )
+
+    assert response.status_code == 400
+    assert "group_id" in response.json()["detail"]
+
+
+def test_edit_schedule_put_rejects_invalid_groups_type(schedule_admin_client):
+    client, _, _ = schedule_admin_client
+    response = client.put(
+        "/admin/courses/test-course/schedule/edit",
+        json={
+            "content": """course-id: test-course
+groups: "not-a-dict"
+manual-groups: []
+"""
+        },
+    )
+
+    assert response.status_code == 400
+    assert "groups" in response.json()["detail"]
+
+
+def test_edit_schedule_put_rejects_invalid_manual_groups_type(schedule_admin_client):
+    client, _, _ = schedule_admin_client
+    response = client.put(
+        "/admin/courses/test-course/schedule/edit",
+        json={
+            "content": """course-id: test-course
+groups: {}
+manual-groups: "not-a-list"
+"""
+        },
+    )
+
+    assert response.status_code == 400
+    assert "manual-groups" in response.json()["detail"]
+
+
+def test_edit_schedule_put_requires_admin():
+    response = TestClient(main_module.app).put(
+        "/admin/courses/test-course/schedule/edit",
+        json={"content": "course-id: test-course\ngroups: {}\nmanual-groups: []\n"},
+    )
+
+    assert response.status_code == 401

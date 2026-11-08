@@ -1,11 +1,15 @@
 course-id: dev-course
-source: guap
+source: manual
 timezone: UTC+3
-auto_open_minutes_before: 15
-auto_close_minutes_after: 10
+auto_open_minutes_before: 30
+auto_close_minutes_after: 30
+manual-groups:
+  - "4431"
+  - "4432"
 groups:
-  '4431':
-    group_id: '4431'
+  "4431":
+    group_id: "4431"
+    source: manual
     slots:
     - id: guap-mon-2
       recurrence:

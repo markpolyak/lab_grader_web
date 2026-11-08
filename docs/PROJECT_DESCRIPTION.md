@@ -652,7 +652,7 @@ cd frontend/courses-front && npm test
 
 ## Лицензия
 
-MIT License (Copyright 2025 Matvey)
+MIT License (Copyright 2025 Matvey, Copyright 2025-2026 Mark Polyak)
 
 ## Технические характеристики
 

@@ -8,6 +8,8 @@ import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
 import { JoinLab } from "./components/JoinLab";
 import { LabListWrapper as AdminLabListWrapper } from "./components/admin/LabList/labListWrapper";
+import { SchedulePage } from "./pages/SchedulePage";
+import { AdminQueuePage } from "./components/admin/QueueView/AdminQueuePage";
 
 function App() {
   return (
@@ -18,7 +20,7 @@ function App() {
           path="/admin/courses"
           element={
             <ProtectedRoute>
-              <CourseList onSelectCourse={() => {}} isAdmin={true} />
+              <CourseList onSelectCourse={() => { }} isAdmin={true} />
             </ProtectedRoute>
           }
         />
@@ -27,6 +29,14 @@ function App() {
           element={
             <ProtectedRoute>
               <AdminLabListWrapper />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/courses/:courseId/schedule"
+          element={
+            <ProtectedRoute>
+              <SchedulePage />
             </ProtectedRoute>
           }
         />
@@ -45,7 +55,16 @@ function App() {
             данные берутся по токену (docs/SECRET_JOIN_LINKS_PLAN.md §10) */}
         <Route path="/j/:token" element={<JoinLab />} />
         <Route path="/join/:courseId/:labId" element={<JoinLab />} />
+        <Route
+        path="/admin/courses/:courseId/queue"
+        element={
+          <ProtectedRoute>
+            <AdminQueuePage />
+          </ProtectedRoute>
+        }
+      />
       </Routes>
+      
     </Router>
   );
 }
