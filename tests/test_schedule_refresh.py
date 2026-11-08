@@ -1,3 +1,6 @@
+from datetime import datetime
+from types import SimpleNamespace
+
 import yaml
 
 from grading.schedule import (
@@ -7,6 +10,198 @@ from grading.schedule import (
     refresh_all_groups,
 )
 from grading.schedule import guap as guap_module
+
+
+def test_guap_fetch_raw_requests_only_the_selected_group_without_cache(monkeypatch):
+    calls = []
+
+    class FakeFetcher:
+        def __init__(self, ttl):
+            assert ttl == 0
+
+        def index(self):
+            calls.append(("index",))
+            return "directory html"
+
+        def by_group(self, group_id):
+            calls.append(("group", group_id))
+            return "group html"
+
+    monkeypatch.setattr(guap_module, "Fetcher", FakeFetcher)
+    monkeypatch.setattr(
+        guap_module,
+        "parse_directories",
+        lambda _html: {"groups": {42: "М433"}},
+    )
+    monkeypatch.setattr(
+        guap_module, "parse_lessons", lambda html: [f"parsed {html}"]
+    )
+
+    source = guap_module.GuapScheduleSource(course_name="Test Course")
+
+    assert source.fetch_raw("М433") == ["parsed group html"]
+    assert calls == [("index",), ("group", 42)]
+
+
+def test_guap_sessions_filter_live_group_lessons_by_course():
+    source = guap_module.GuapScheduleSource(
+        group_code="М433",
+        course_id="test-course",
+        course_name="  TEST   Course ",
+    )
+    source.fetch_raw = lambda group_code: [
+        SimpleNamespace(
+            day="Понедельник",
+            slot=1,
+            kind="ЛР",
+            subject="Test Course",
+            room="Room 1",
+            teachers=["Teacher"],
+        ),
+        SimpleNamespace(
+            day="Понедельник",
+            slot=2,
+            kind="ЛР",
+            subject="Another Course",
+            room=None,
+            teachers=[],
+        ),
+        SimpleNamespace(
+            day="Понедельник",
+            slot=3,
+            kind="Лекция",
+            subject="Test Course",
+            room=None,
+            teachers=[],
+        ),
+    ]
+
+    sessions = list(
+        source.list_sessions(
+            "М433",
+            datetime(2026, 11, 9),
+            datetime(2026, 11, 10),
+        )
+    )
+
+    assert len(sessions) == 1
+    assert sessions[0].group_id == "М433"
+    assert sessions[0].subject == "Test Course"
+    assert sessions[0].room == "Room 1"
+    assert sessions[0].teacher == "Teacher"
+
+
+def test_guap_sessions_respect_week_parity_and_yaml_keeps_both_weeks():
+    source = guap_module.GuapScheduleSource(
+        group_code="4432",
+        course_id="test-course",
+        course_name="Test Course",
+    )
+    source.fetch_raw = lambda _group_code: [
+        SimpleNamespace(
+            day="Понедельник",
+            slot=1,
+            week=guap_module.WEEK_ODD,
+            kind="ЛР",
+            subject="Test Course",
+            teachers=[],
+        ),
+        SimpleNamespace(
+            day="Понедельник",
+            slot=2,
+            week=guap_module.WEEK_EVEN,
+            kind="ЛР",
+            subject="Test Course",
+            teachers=[],
+        ),
+        SimpleNamespace(
+            day="Понедельник",
+            slot=3,
+            week=guap_module.WEEK_ANY,
+            kind="ЛР",
+            subject="Test Course",
+            teachers=[],
+        ),
+    ]
+
+    sessions = list(
+        source.list_sessions(
+            "4432",
+            datetime(2026, 11, 9),
+            datetime(2026, 11, 17),
+        )
+    )
+
+    assert [
+        (session.starts_at.date().isoformat(), session.slot_id)
+        for session in sessions
+    ] == [
+        ("2026-11-09", "guap-mon-2-even"),
+        ("2026-11-09", "guap-mon-3"),
+        ("2026-11-16", "guap-mon-1-odd"),
+        ("2026-11-16", "guap-mon-3"),
+    ]
+    assert [
+        (slot["id"], slot["recurrence"]["week"])
+        for slot in source.to_yaml_sessions(source.fetch_raw("4432"))
+    ] == [
+        ("guap-mon-1-odd", "odd"),
+        ("guap-mon-2-even", "even"),
+        ("guap-mon-3", "all"),
+    ]
+
+
+def test_guap_sessions_apply_date_corrections():
+    source = guap_module.GuapScheduleSource(
+        group_code="4432",
+        course_id="test-course",
+        course_name="Test Course",
+        corrections=[
+            {
+                "id": "cancel-monday",
+                "date": "2026-11-09",
+                "remove_slots": [{"slot_id": "guap-mon-1"}],
+            },
+            {
+                "id": "add-monday",
+                "date": "2026-11-16",
+                "add_slots": [
+                    {
+                        "id": "teacher-added",
+                        "start": "12:00",
+                        "end": "13:00",
+                        "subject": "Make-up lab",
+                        "room": "Room 2",
+                    }
+                ],
+            },
+        ],
+    )
+    source.fetch_raw = lambda _group_code: [
+        SimpleNamespace(
+            day="Понедельник",
+            slot=1,
+            week=guap_module.WEEK_EVEN,
+            kind="ЛР",
+            subject="Test Course",
+            teachers=[],
+        )
+    ]
+
+    sessions = list(
+        source.list_sessions(
+            "4432",
+            datetime(2026, 11, 9),
+            datetime(2026, 11, 17),
+        )
+    )
+
+    assert [
+        (session.starts_at.date().isoformat(), session.slot_id)
+        for session in sessions
+    ] == [("2026-11-16", "teacher-added")]
+    assert sessions[0].subject == "Make-up lab"
+    assert sessions[0].room == "Room 2"
 
 
 def _write_schedule_config(path):
@@ -53,14 +248,15 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
 ):
     schedule_path = tmp_path / "test-course.yaml"
     _write_schedule_config(schedule_path)
+    captured = {}
 
     class FakeGuapScheduleSource:
-        def __init__(self, group_code, **_kwargs):
-            self.group_code = group_code
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
 
-        def fetch_raw(self, _group_code):
-            if self.group_code == "missing":
-                raise RuntimeError("group missing from snapshot")
+        def fetch_raw(self, group_code):
+            if group_code == "missing":
+                raise RuntimeError("group missing from GUAP")
             return ["raw lesson"]
 
         def to_yaml_sessions(self, raw_lessons):
@@ -71,6 +267,7 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
                     "recurrence": {"day": "monday", "week": "all"},
                     "start": "12:00",
                     "end": "13:00",
+                    "subject": "Test Course",
                 }
             ]
 
@@ -84,13 +281,14 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
         "test-course",
         schedule_file_path=schedule_path,
         groups=groups,
-        snapshot_path="unused.json",
+        course_name="Test Course",
     )
 
     assert result["refreshed"] == {"4432": 1}
     assert result["errors"] == {
-        "4433": "RuntimeError: group missing from snapshot"
+        "4433": "RuntimeError: group missing from GUAP"
     }
+    assert captured["course_name"] == "Test Course"
     data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
     assert data["groups"]["4432"]["slots"][0]["id"] == "fresh-slot"
     assert data["groups"]["4432"]["corrections"] == [
@@ -106,13 +304,64 @@ def test_refresh_all_groups_isolates_errors_and_preserves_teacher_edits(
     ).keys() == {"4432", "4433"}
 
 
+def test_refresh_filters_directly_fetched_group_sessions_by_course_name(
+    tmp_path, monkeypatch
+):
+    schedule_path = tmp_path / "test-course.yaml"
+
+    class FakeGuapScheduleSource:
+        def __init__(self, **_kwargs):
+            self.fetches = []
+
+        def fetch_raw(self, group_code):
+            self.fetches.append(group_code)
+            return [
+                SimpleNamespace(subject="Операционные системы"),
+                SimpleNamespace(subject="Проектирование баз данных"),
+                SimpleNamespace(subject="  ОПЕРАЦИОННЫЕ   СИСТЕМЫ "),
+            ]
+
+        def to_yaml_sessions(self, raw_lessons):
+            return [
+                {
+                    "id": f"slot-{index}",
+                    "subject": lesson.subject,
+                }
+                for index, lesson in enumerate(raw_lessons)
+            ]
+
+    sources = []
+
+    def make_source(**kwargs):
+        source = FakeGuapScheduleSource(**kwargs)
+        sources.append(source)
+        return source
+
+    monkeypatch.setattr(guap_module, "GuapScheduleSource", make_source)
+    result = refresh_all_groups(
+        "test-course",
+        schedule_path,
+        [{"id": "4432", "guap_group_id": "4432"}],
+        course_name=" Операционные системы ",
+    )
+
+    assert len(sources) == 1
+    assert sources[0].fetches == ["4432"]
+    assert result["refreshed"] == {"4432": 2}
+    data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
+    assert [slot["subject"] for slot in data["groups"]["4432"]["slots"]] == [
+        "Операционные системы",
+        "  ОПЕРАЦИОННЫЕ   СИСТЕМЫ ",
+    ]
+
+
 def test_refresh_creates_initial_schedule_yaml(tmp_path, monkeypatch):
     schedule_dir = tmp_path / "schedules"
     schedule_path = schedule_dir / "test-course.yaml"
 
     class FakeGuapScheduleSource:
-        def __init__(self, **_kwargs):
-            pass
+        def __init__(self, **kwargs):
+            assert kwargs["course_name"] == "Test Course"
 
         def fetch_raw(self, _group_code):
             return ["lesson"]
@@ -124,6 +373,7 @@ def test_refresh_creates_initial_schedule_yaml(tmp_path, monkeypatch):
                     "recurrence": {"day": "monday", "week": "all"},
                     "start": "10:00",
                     "end": "11:00",
+                    "subject": "Test Course",
                 }
             ]
 
@@ -132,12 +382,91 @@ def test_refresh_creates_initial_schedule_yaml(tmp_path, monkeypatch):
         "test-course",
         schedule_path,
         [{"id": "4432", "guap_group_id": "4432"}],
+        course_name="Test Course",
     )
     assert result["refreshed"] == {"4432": 1}
     data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
     assert data["course-id"] == "test-course"
     assert data["groups"]["4432"]["group_id"] == "4432"
     assert data["groups"]["4432"]["slots"][0]["id"] == "new-slot"
+
+
+def test_refresh_filters_slots_by_course_name_case_insensitively(tmp_path, monkeypatch):
+    schedule_path = tmp_path / "test-course.yaml"
+
+    class FakeGuapScheduleSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fetch_raw(self, _group_code):
+            return ["matching", "other"]
+
+        def to_yaml_sessions(self, raw_lessons):
+            return [
+                {"id": "operating-systems", "subject": "Операционные системы"},
+                {"id": "other-course", "subject": "Проектирование баз данных"},
+                {"id": "spacing-case", "subject": "  ОПЕРАЦИОННЫЕ   СИСТЕМЫ "},
+            ]
+
+    monkeypatch.setattr(guap_module, "GuapScheduleSource", FakeGuapScheduleSource)
+    result = refresh_all_groups(
+        "test-course",
+        schedule_path,
+        [{"id": "4432", "guap_group_id": "4432"}],
+        course_name=" Операционные системы ",
+    )
+
+    assert result["refreshed"] == {"4432": 2}
+    data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
+    assert [slot["id"] for slot in data["groups"]["4432"]["slots"]] == [
+        "operating-systems",
+        "spacing-case",
+    ]
+
+
+def test_refresh_reports_groups_without_slots_but_not_manual_groups(tmp_path, monkeypatch):
+    schedule_path = tmp_path / "test-course.yaml"
+    schedule_path.write_text(
+        """course-id: test-course
+source: guap
+groups:
+  '4432':
+    group_id: '4432'
+    source: manual
+    slots:
+      - id: teacher-slot
+  '4433':
+    group_id: '4433'
+    slots: []
+""",
+        encoding="utf-8",
+    )
+
+    class FakeGuapScheduleSource:
+        def __init__(self, **_kwargs):
+            pass
+
+        def fetch_raw(self, _group_code):
+            return []
+
+        def to_yaml_sessions(self, _raw_lessons):
+            return []
+
+    monkeypatch.setattr(guap_module, "GuapScheduleSource", FakeGuapScheduleSource)
+    result = refresh_all_groups(
+        "test-course",
+        schedule_path,
+        [
+            {"id": "4432", "guap_group_id": "4432"},
+            {"id": "4433", "guap_group_id": "4433"},
+        ],
+    )
+
+    assert result["refreshed"] == {"4432": 0, "4433": 0}
+    assert result["not_found"] == ["4433"]
+    assert result["skipped"] == ["4432"]
+    data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
+    assert data["groups"]["4432"]["slots"][0]["id"] == "teacher-slot"
 
 
 def test_schedule_yaml_requires_course_and_group_identifiers(tmp_path):
@@ -163,3 +492,19 @@ def test_schedule_yaml_requires_course_and_group_identifiers(tmp_path):
         assert "`group_id` is required" in str(error)
     else:
         raise AssertionError("Schedule group without group_id should be rejected")
+
+
+def test_schedule_yaml_accepts_alphanumeric_group_ids(tmp_path):
+    schedule_path = tmp_path / "test-course.yaml"
+    schedule_path.write_text(
+        """course-id: test-course
+source: guap
+groups:
+  М433:
+    group_id: М433
+    slots: []
+""",
+        encoding="utf-8",
+    )
+
+    assert parse_schedule_file(schedule_path, "test-course").keys() == {"М433"}

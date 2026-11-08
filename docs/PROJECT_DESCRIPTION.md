@@ -195,8 +195,19 @@ lab_grader_web/
 | POST | `/admin/courses/{course_id}/groups/{group_id}/labs/{lab_id}/bulk-grade` | Массовая проверка лабораторной для группы (см. ниже) |
 | GET | `/admin/bulk-grade-jobs/{job_id}` | Прогресс и отчёт массовой проверки |
 | POST | `/admin/bulk-grade-jobs/{job_id}/cancel` | Остановка массовой проверки |
+| GET | `/admin/courses/{course_id}/groups/{group_id}/schedule/sessions` | Ближайшие занятия группы; для `source: guap` запрашивает сайт ГУАП напрямую |
+| POST | `/admin/courses/{course_id}/schedule/refresh-all` | Обновление расписаний групп из ГУАП |
 
 Все административные маршруты (включая перечисленные выше) защищены зависимостью `require_admin` - её отсутствие раньше означало, что `POST /courses/upload`, `DELETE /courses/{course_id}` и `GET/PUT /courses/{course_id}/edit` были доступны без аутентификации на уровне API (защита была только на уровне фронтенда).
+
+Для `source: guap` расписание запрашивается с сайта ГУАП по группе и при разборе
+отбирается по точному названию курса из `course.name` (без учёта регистра и
+повторных пробелов). Полный слепок `data/schedule.json` не используется.
+Файл `schedules/<course_id>.yaml` хранит настройки очереди и группы; для
+`source: manual` расписание по-прежнему читается из YAML. Признак верхней/
+нижней недели из расписания ГУАП учитывается при выдаче занятий (`odd`/
+`even` по ISO-неделе); date-specific `corrections` группы применяются и к
+live-расписанию.
 
 ### Рассылка обновлений стартового кода (`propagate-template-update`)
 
