@@ -104,6 +104,11 @@ export const CorrectionsDialog = ({ courseId, groupId, open, onClose, onSaved })
     if (open) loadCorrections();
   }, [open, loadCorrections]);
 
+  // Clear error when user modifies form data
+  useEffect(() => {
+    if (error) setError(null);
+  }, [formData]);
+
   const handleSave = async () => {
     setSaving(true);
     setError(null);
@@ -205,6 +210,12 @@ export const CorrectionsDialog = ({ courseId, groupId, open, onClose, onSaved })
     
     if (!id || !date) {
       setError(t("schedule.corrections.errors.requiredFields"));
+      return;
+    }
+    
+    // Validate start < end for add type
+    if (type === "add" && start && end && start >= end) {
+      setError(t("schedule.corrections.errors.startBeforeEnd"));
       return;
     }
     
