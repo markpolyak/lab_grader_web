@@ -12,6 +12,7 @@
   "cancel": "Cancel",
   "fullscreen": "Fullscreen",
   "collapse": "Collapse",
+  "back": "Back",
   "details": "Details",
   "hide": "Hide",
   "logout": "Logout",
@@ -243,6 +244,226 @@
       "notOpenAt": "The assignment is not open yet. The link will start working on {{moment}}.",
       "closed": "Submissions are closed: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored.",
       "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
+    }
+  },
+  "adminQueue": {
+    "button": "Queue",
+    "title": "Queue: {{lab}}",
+    "group": "Group",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "empty": "Queue is empty",
+    "total": "Total: {{count}}",
+    "close": "Close",
+    "columns": {
+      "position": "#",
+      "group": "Group",
+      "name": "Student",
+      "lab": "Lab",
+      "status": "Status"
+    },
+    "errors": {
+      "groupsFailed": "Failed to load groups",
+      "loadFailed": "Failed to load queue"
+    },
+    "buttonToday": "Today's queue",
+    "titleToday": "Queue for {{date}}"
+  },
+  "queue": {
+    "title": "Defense queue",
+    "description": "Join the lab defense queue and track your position.",
+    "loading": "Loading queue status…",
+    "signInRequired": "Sign in with GitHub to join and view the queue.",
+    "signIn": "Sign in with GitHub",
+    "fillFormFirst": "Fill in the form above and click «Register» to join the queue.",
+    "alreadyPassed": "This lab has already been passed.",
+    "position": "You are in the queue: position {{position}} of {{total}}.",
+    "closed": "The queue is closed. Next session: {{nextSession}}.",
+    "noNextSession": "not scheduled yet",
+    "ciNotRun": "CI has not run yet. Push your code to the repository, then return here.",
+    "ciFailed": "CI did not pass. Fix your code and wait for the checks to finish.",
+    "register": "Join the queue",
+    "working": "Please wait…",
+    "registered": "You have joined the queue.",
+    "withdraw": "Leave the queue",
+    "withdrawn": "You have left the queue.",
+    "shiftBy": "Move back by",
+    "shift": "Move back",
+    "shifted": "Your queue position has been updated.",
+    "session": "Next defense",
+    "listTitle": "Your group's queue",
+    "refresh": "Refresh",
+    "empty": "No one has joined the queue yet.",
+    "cannotRegister": "You cannot join the queue right now.",
+    "teamTitle": "Your team",
+    "teamMembers": "Members",
+    "unnamedEntry": "Student",
+    "statuses": {
+      "ждёт": "waiting",
+      "сдал": "passed",
+      "не_сдал": "not passed",
+      "нет": "absent",
+      "отозван": "withdrew",
+      "waiting": "waiting",
+      "passed": "passed",
+      "failed": "not passed",
+      "absent": "absent",
+      "withdrawn": "withdrew"
+    },
+    "errors": {
+      "generic": "Could not complete the queue request. Please try again.",
+      "INVALID_RESPONSE": "The server returned an unexpected queue response. Please refresh the page.",
+      "ALREADY_IN_QUEUE": "You are already in the queue.",
+      "NOT_IN_QUEUE": "Your queue entry was not found.",
+      "CI_NOT_PASSED": "CI did not pass. Fix your code and try again.",
+      "CI_NOT_RUN": "CI has not run yet. Push your code to the repository.",
+      "CI_CHECK_FAILED": "Could not check the CI results.",
+      "ALREADY_PASSED": "This lab has already been passed.",
+      "QUEUE_CLOSED": "Registration for the queue is currently closed.",
+      "INVALID_SHIFT": "Enter a valid number of positions to move back.",
+      "NOT_WAITING": "This queue entry can no longer be changed.",
+      "NOT_IN_GROUP": "You can only join your own group's queue.",
+      "SESSION_REQUIRED": "Sign in with GitHub to use the queue.",
+      "NO_TEAM": "You are not a member of a team for this lab.",
+      "TEAMS_UNAVAILABLE": "Could not load team details.",
+      "SHEETS_UNAVAILABLE": "The Google Sheet is temporarily unavailable.",
+      "CI_PENDING": "CI is still running. Please wait and try again."
+    }
+  },
+  "schedule": {
+    "title": "Schedule",
+    "groupSourcesDescription": "Only Google Sheets tabs with numeric group names are used for schedules. Add a numeric group ID manually if needed; the list is saved in the course config.",
+    "manualGroupInput": "Group ID",
+    "addManualGroup": "Add group",
+    "refreshButton": "Fetch schedule",
+    "refreshing": "Refreshing…",
+    "refreshedOk": "Groups refreshed: {{ok}}, errors: {{err}}",
+    "status": {
+      "ok": "OK",
+      "error": "Error"
+    },
+    "columns": {
+      "group": "Group",
+      "slotsCount": "Slots",
+      "status": "Status",
+      "error": "Error",
+      "corrections": "Corrections",
+      "source": "Source"
+    },
+    "errors": {
+      "loadGroupsFailed": "Failed to load groups",
+      "refreshFailed": "Failed to fetch schedule",
+      "saveGroupsFailed": "Failed to save the group list"
+    },
+    "editor": {
+      "title": "Schedule Editor",
+      "loading": "Loading…",
+      "loadFailed": "Failed to load schedule file",
+      "saveFailed": "Failed to save schedule file",
+      "saved": "Schedule saved",
+      "saving": "Saving…",
+      "placeholder": "Schedule YAML configuration…",
+      "errors": {
+        "startRequired": "start is required for each slot",
+        "endRequired": "end is required for each slot"
+      }
+    },
+    "corrections": {
+      "title": "Schedule Corrections — group {{groupId}}",
+      "listTitle": "Corrections list",
+      "addTitle": "Add correction",
+      "editTitle": "Edit correction",
+      "addButton": "Add correction",
+      "saveChanges": "Save changes",
+      "saving": "Saving…",
+      "loading": "Loading…",
+      "empty": "No corrections. Click «Add correction» to create one.",
+      "close": "Close",
+      "types": {
+        "remove": "Cancel session",
+        "add": "Extra session"
+      },
+      "columns": {
+        "id": "ID",
+        "date": "Date",
+        "type": "Type",
+        "details": "Details",
+        "actions": "Actions"
+      },
+      "fields": {
+        "id": "Correction ID",
+        "date": "Date",
+        "type": "Correction type",
+        "slotId": "Slot ID (from schedule)",
+        "labs": "Labs (comma-separated)",
+        "labsHint": "Empty = cancel whole slot. Specify labs to cancel only those.",
+        "newSlotId": "New slot ID",
+        "recurrenceDay": "Weekday (recurrence)",
+        "recurrenceDayHint": "Leave empty for one-off session and fill «Date» below.",
+        "recurrenceWeek": "Week parity",
+        "dateOnce": "Date (one-off)",
+        "dateOnceHint": "Alternative to recurrence: specific date.",
+        "start": "Start",
+        "end": "End",
+        "subject": "Subject",
+        "room": "Room",
+        "teacher": "Teacher"
+      },
+      "details": {
+        "removeSlot": "Remove slot",
+        "wholeSlot": "whole slot",
+        "addSlot": "Add slot",
+        "recurrence": "recurrence: {{day}}, {{week}}"
+      },
+      "errors": {
+        "loadFailed": "Failed to load corrections",
+        "saveFailed": "Failed to save corrections",
+        "requiredFields": "Fill in ID and date",
+        "slotRequired": "Specify slot ID (for removal) or ID/time (for addition)",
+        "startBeforeEnd": "Start time must be before end time",
+        "removeSlotIdRequired": "remove_slots: slot_id is required",
+        "removeSlotLabsArray": "remove_slots: labs must be an array or null",
+        "addSlotIdRequired": "add_slots: id is required",
+        "addSlotStartRequired": "add_slots: start is required",
+        "addSlotEndRequired": "add_slots: end is required",
+        "addSlotStartFormat": "add_slots: start must be HH:MM or HH:MM:SS",
+        "addSlotEndFormat": "add_slots: end must be HH:MM or HH:MM:SS",
+        "addSlotEndBeforeStart": "add_slots: end must be after start",
+        "addSlotRecurrenceObject": "add_slots: recurrence must be an object",
+        "addSlotRecurrenceDay": "add_slots: invalid recurrence day",
+        "addSlotRecurrenceWeek": "add_slots: recurrence.week must be all/odd/even",
+        "addSlotLabsArray": "add_slots: labs must be an array or null"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      }
+    },
+    "source": {
+      "title": "Schedule Source",
+      "defaultSource": "Default Source",
+      "defaultSourceLabel": "Source for new groups",
+      "defaultSourceHint": "Used when a group has no explicit source",
+      "groupSources": "Per-group sources",
+      "columns": {
+        "group": "Group",
+        "currentSource": "Current source",
+        "guapGroupId": "GUAP code",
+        "newSource": "New source"
+      },
+      "types": {
+        "guap": "GUAP (auto)",
+        "manual": "Manual"
+      },
+      "saveChanges": "Save changes",
+      "saving": "Saving…",
+      "loading": "Loading…",
+      "empty": "No groups",
+      "hint": "GUAP — slots updated via «Fetch schedule». Manual — slots edited only in YAML. Switching to Manual preserves current slots as base. Switching to GUAP — will overwrite on next refresh.",
+      "errors": {
+        "loadFailed": "Failed to load sources",
+        "saveFailed": "Failed to save sources"
+      }
     }
   }
 }

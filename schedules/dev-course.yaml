@@ -1,0 +1,148 @@
+course-id: dev-course
+source: manual
+timezone: UTC+3
+auto_open_minutes_before: 30
+auto_close_minutes_after: 30
+manual-groups:
+  - "4431"
+  - "4432"
+groups:
+  "4431":
+    group_id: "4431"
+    source: manual
+    slots:
+    - id: guap-mon-2
+      recurrence:
+        day: monday
+        week: all
+      start: '10:40:00'
+      end: '12:10:00'
+      subject: Проектирование баз данных
+      room: 23-10 (Б. Морская 67)
+      teacher: ''
+    - id: guap-mon-3
+      recurrence:
+        day: monday
+        week: all
+      start: '13:00:00'
+      end: '14:30:00'
+      subject: Разработка и проектирование интеллектуальных программных средств машинного
+        обучения
+      room: 23-10 (Б. Морская 67)
+      teacher: ''
+    - id: guap-mon-4
+      recurrence:
+        day: monday
+        week: all
+      start: '14:40:00'
+      end: '16:10:00'
+      subject: Операционные системы
+      room: 23-09 (Б. Морская 67)
+      teacher: ''
+    - id: guap-mon-6
+      recurrence:
+        day: monday
+        week: all
+      start: '18:00:00'
+      end: '19:30:00'
+      subject: Проектирование баз данных
+      room: 23-08 (Б. Морская 67)
+      teacher: ''
+    - id: guap-thu-1
+      recurrence:
+        day: thursday
+        week: all
+      start: 09:00:00
+      end: '10:30:00'
+      subject: Основы программной инженерии
+      room: 23-09 (Б. Морская 67)
+      teacher: ''
+    - id: guap-thu-2
+      recurrence:
+        day: thursday
+        week: all
+      start: '10:40:00'
+      end: '12:10:00'
+      subject: Основы программной инженерии
+      room: 23-09 (Б. Морская 67)
+      teacher: ''
+    - id: guap-fri-6
+      recurrence:
+        day: friday
+        week: all
+      start: '18:00:00'
+      end: '19:30:00'
+      subject: Проектирование программных систем
+      room: 23-08 (Б. Морская 67)
+      teacher: ''
+    - id: guap-sat-5
+      recurrence:
+        day: saturday
+        week: all
+      start: '16:20:00'
+      end: '17:50:00'
+      subject: Прикладные модели оптимизации
+      room: 23-09 (Б. Морская 67)
+      teacher: ''
+    guap_group_id: '4431'
+    source: guap
+  '4432':
+    group_id: '4432'
+    slots:
+    - id: guap-tue-2
+      recurrence:
+        day: tuesday
+        week: all
+      start: '10:40:00'
+      end: '12:10:00'
+      subject: Основы программной инженерии
+      room: 23-10 (Б. Морская 67)
+      teacher: ''
+    - id: guap-tue-3
+      recurrence:
+        day: tuesday
+        week: all
+      start: '13:00:00'
+      end: '14:30:00'
+      subject: Операционные системы
+      room: 23-10 (Б. Морская 67)
+      teacher: ''
+    - id: guap-wed-2
+      recurrence:
+        day: wednesday
+        week: all
+      start: '10:40:00'
+      end: '12:10:00'
+      subject: Проектирование баз данных
+      room: 23-09 (Б. Морская 67)
+      teacher: ''
+    - id: guap-thu-6
+      recurrence:
+        day: thursday
+        week: all
+      start: '18:00:00'
+      end: '19:30:00'
+      subject: Проектирование программных систем
+      room: 23-10 (Б. Морская 67)
+      teacher: ''
+    - id: guap-sat-1
+      recurrence:
+        day: saturday
+        week: all
+      start: 09:00:00
+      end: '10:30:00'
+      subject: Технология разработки серверных информационных систем
+      room: 23-09 (Б. Морская 67)
+      teacher: ''
+    - id: guap-sat-4
+      recurrence:
+        day: saturday
+        week: all
+      start: '14:40:00'
+      end: '16:10:00'
+      subject: Прикладные модели оптимизации
+      room: 23-09 (Б. Морская 67)
+      teacher: ''
+    guap_group_id: '4432'
+    source: guap
+manual-groups: []

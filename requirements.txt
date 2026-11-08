@@ -8,3 +8,5 @@ python-multipart
 python-dotenv
 itsdangerous
 slowapi
+beautifulsoup4
+lxml
