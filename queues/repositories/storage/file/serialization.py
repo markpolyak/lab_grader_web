@@ -93,6 +93,11 @@ def record_to_dict(record: QueueRecord) -> dict:
         "service_until": _datetime_to_str(record.service_until),
         "registration_mode": record.registration_mode.value,
         "manual": record.manual,
+        "cancelled": record.cancelled,
+        "original_starts_at": _datetime_to_str(record.original_starts_at),
+        "original_ends_at": _datetime_to_str(record.original_ends_at),
+        "lesson_kind": record.lesson_kind,
+        "lesson_room": record.lesson_room,
         "version": record.version,
         "queue": {
             "closed": record.queue.closed,
@@ -128,6 +133,11 @@ def record_from_dict(data: dict) -> QueueRecord:
             data.get("registration_mode", RegistrationMode.AUTOMATIC.value)
         ),
         manual=bool(data.get("manual", False)),
+        cancelled=bool(data.get("cancelled", False)),
+        original_starts_at=_datetime_from_str(data.get("original_starts_at")),
+        original_ends_at=_datetime_from_str(data.get("original_ends_at")),
+        lesson_kind=data.get("lesson_kind", "Занятие"),
+        lesson_room=data.get("lesson_room"),
         version=int(data.get("version", 0)),
         queue=queue,
         entry_metadata={

@@ -186,18 +186,19 @@ class QueueService:
                         record = restore_record(record, schedule, lesson)
                     self._records[lesson_id] = record
 
-                    schedule.lessons.append(lesson)
+                    if week_start <= lesson.starts_at.astimezone(ZoneInfo("Europe/Moscow")).date() < week_end:
+                        schedule.lessons.append(lesson)
 
-                # Manual (unscheduled) queues live only in the repository, so
-                # restore them into the current week after a restart.
+                # Manual and rescheduled lessons may have no source entry in
+                # this week; restore them from the repository after a restart.
                 for record in self.repository.list_by_course(course_id):
-                    if not record.manual or record.id in lessons:
+                    if not (record.manual or record.original_starts_at is not None) or record.id in lessons:
                         continue
                     if record.id in self._archived_lesson_ids:
                         continue
                     if record.lesson_starts_at is None or record.lesson_ends_at is None:
                         continue
-                    if not (week_start <= record.lesson_starts_at.date() < week_end):
+                    if not (week_start <= record.lesson_starts_at.astimezone(ZoneInfo("Europe/Moscow")).date() < week_end):
                         continue
                     lesson = self._lessons.get(record.id)
                     if lesson is None:
@@ -206,12 +207,19 @@ class QueueService:
                             starts_at=record.lesson_starts_at,
                             ends_at=record.lesson_ends_at,
                             groups=tuple(group_ids(record)),
-                            kind="Внештатное занятие",
+                            kind="Внештатное занятие" if record.manual else record.lesson_kind,
+                            room=record.lesson_room,
                             queue=record.queue,
+                            cancelled=record.cancelled,
+                            original_starts_at=record.original_starts_at,
                         )
                         self._lessons[record.id] = lesson
                     else:
                         lesson.queue = record.queue
+                        lesson.starts_at = record.lesson_starts_at
+                        lesson.ends_at = record.lesson_ends_at
+                        lesson.cancelled = record.cancelled
+                        lesson.original_starts_at = record.original_starts_at
                     self._records[record.id] = record
                     schedule.lessons.append(lesson)
 
@@ -294,6 +302,8 @@ class QueueService:
             if lesson is None or record is None:
                 raise KeyError(f"Занятие {lesson_id} не найдено")
             closed = bool(closed)
+            if lesson.cancelled and not closed:
+                raise InvalidStateError("Отменённое занятие нельзя открыть для записи")
             if lesson.queue.closed == closed:
                 return record
             lesson.queue.closed = closed
@@ -303,6 +313,24 @@ class QueueService:
         """Сохранённое состояние очереди занятия (только чтение)."""
         with self._lock:
             return self._records.get(lesson_id)
+
+    def get_lesson(self, course_id, lesson_id) -> Lesson | None:
+        with self._lock:
+            record = self._records.get(lesson_id)
+            return self._lessons.get(lesson_id) if record is not None and record.course_id == course_id else None
+
+    def admin_lessons(self, course_id, week_start) -> list[Lesson]:
+        """Include lessons moved out of this week, labelled with their new date."""
+        with self._lock:
+            schedule = self.schedules.get(course_id)
+            result = {lesson.id: lesson for lesson in schedule.lessons} if schedule else {}
+            for lesson_id, record in self._records.items():
+                original = record.original_starts_at
+                if record.course_id == course_id and original is not None and week_start <= original.date() < week_start + timedelta(days=7):
+                    lesson = self._lessons.get(lesson_id)
+                    if lesson is not None:
+                        result[lesson_id] = lesson
+            return sorted(result.values(), key=lambda item: (item.starts_at, item.groups, item.kind))
 
     def save_lesson(self, lesson_id) -> QueueRecord:
         """Сохранить состояние очереди занятия (write-through после мутации)."""
@@ -398,6 +426,7 @@ class QueueService:
         self,
         lesson_id,
         *,
+        cancelled: bool | None = None,
         starts_at: datetime | None = None,
         ends_at: datetime | None = None,
         registration_opens_at: datetime | None = None,
@@ -411,30 +440,56 @@ class QueueService:
             if lesson is None or record is None:
                 raise EntryNotFoundError(lesson_id)
 
-            if (starts_at is not None or ends_at is not None) and not record.manual:
-                raise ValueError("Время занятия задаётся расписанием")
-
-            if starts_at is not None:
-                lesson.starts_at = starts_at
-            if ends_at is not None:
-                lesson.ends_at = ends_at
-            _validate_lesson_times(lesson.starts_at, lesson.ends_at)
-
-            if registration_opens_at is not None:
-                record.registration_opens_at = registration_opens_at
-            if registration_closes_at is not None:
-                record.registration_closes_at = registration_closes_at
-            if service_until is not None:
-                record.service_until = service_until
-            _validate_registration(record)
-
-            self.save_lesson(lesson_id)
+            candidate = deepcopy(record)
+            candidate.lesson_starts_at = starts_at or lesson.starts_at
+            candidate.lesson_ends_at = ends_at or lesson.ends_at
+            _validate_lesson_times(candidate.lesson_starts_at, candidate.lesson_ends_at)
+            moved = (candidate.lesson_starts_at, candidate.lesson_ends_at) != (lesson.starts_at, lesson.ends_at)
+            if moved and not record.manual and candidate.original_starts_at is None:
+                candidate.original_starts_at = lesson.starts_at
+                candidate.original_ends_at = lesson.ends_at
+            if (candidate.lesson_starts_at, candidate.lesson_ends_at) == (candidate.original_starts_at, candidate.original_ends_at):
+                candidate.original_starts_at = None
+                candidate.original_ends_at = None
+            delta = candidate.lesson_starts_at - lesson.starts_at
+            for field, value in (
+                ("registration_opens_at", registration_opens_at),
+                ("registration_closes_at", registration_closes_at),
+                ("service_until", service_until),
+            ):
+                old = getattr(candidate, field)
+                setattr(candidate, field, value if value is not None else old + delta if old is not None else None)
+            if cancelled is not None:
+                candidate.cancelled = cancelled
+            if candidate.cancelled:
+                candidate.queue.closed = True
+            _validate_registration(candidate)
+            # Validate and persist before publishing, so failed updates leave
+            # both lesson times and the existing queue untouched.
+            try:
+                saved = self.repository.save(candidate, expected_version=record.version)
+            except QueueNotFoundError:
+                saved = self.repository.create(candidate)
+            lesson.starts_at = saved.lesson_starts_at
+            lesson.ends_at = saved.lesson_ends_at
+            lesson.original_starts_at = saved.original_starts_at
+            lesson.cancelled = saved.cancelled
+            lesson.queue.closed = saved.queue.closed
+            saved.queue = lesson.queue
+            self._records[lesson_id] = saved
+            for schedule in self.schedules.values():
+                if schedule.course_id != record.course_id:
+                    continue
+                if not schedule.week_start <= lesson.starts_at.astimezone(ZoneInfo("Europe/Moscow")).date() < schedule.week_start + timedelta(days=7):
+                    schedule.lessons[:] = [item for item in schedule.lessons if item.id != lesson_id]
+                elif all(item.id != lesson_id for item in schedule.lessons):
+                    schedule.lessons.append(lesson)
             for schedule in (*self.schedules.values(), *self._schedules.values()):
                 if any(item.id == lesson_id for item in schedule.lessons):
                     schedule.lessons.sort(
                         key=lambda item: (item.starts_at, item.groups, item.kind)
                     )
-            return record
+            return saved
 
     def delete_queue(self, lesson_id) -> None:
         """Удалить пустую внештатную очередь."""
@@ -589,6 +644,8 @@ class QueueService:
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
                 raise EntryNotFoundError(lesson_id)
+            if lesson.cancelled:
+                raise InvalidStateError("Занятие отменено")
             ensure_entry_metadata(record)
             waiting = [
                 entry
@@ -605,7 +662,7 @@ class QueueService:
             return entry
 
     def finish(
-        self, lesson_id, entry_id, outcome: DefenseResult, *, now=None
+        self, lesson_id, entry_id, outcome: DefenseResult | None = None, *, now=None
     ) -> QueueEntry:
         """Завершить вызванную запись с результатом защиты."""
         with self._lock:

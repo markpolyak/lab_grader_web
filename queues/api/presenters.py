@@ -26,6 +26,8 @@ from .schemas import (
     QueueUpdateResponse,
     StudentQueueEntryResponse,
     StudentQueueStateResponse,
+    LessonQueueResponse,
+    QueueParticipantResponse,
 )
 
 
@@ -64,6 +66,8 @@ def queue_lesson(lesson: Lesson) -> AdminQueueLessonResponse:
         groups=list(lesson.groups),
         kind=lesson.kind,
         room=lesson.room,
+        cancelled=lesson.cancelled,
+        original_starts_at=lesson.original_starts_at,
     )
 
 
@@ -95,9 +99,11 @@ def queue_detail(
     waiting: list[AdminQueueEntryResponse] = []
     called: list[AdminQueueEntryResponse] = []
     finished: list[AdminQueueEntryResponse] = []
+    entries: list[AdminQueueEntryResponse] = []
 
-    for entry in lesson.queue.entries:
+    for position, entry in enumerate(lesson.queue.entries, start=1):
         meta = metadata.get(entry.id)
+        entries.append(queue_entry(entry, meta, position=position))
         status = meta.status if meta is not None else EntryStatus.WAITING
         if status == EntryStatus.WAITING:
             waiting.append(queue_entry(entry, meta, position=len(waiting) + 1))
@@ -116,6 +122,7 @@ def queue_detail(
         waiting=waiting,
         called=called,
         finished=finished,
+        entries=entries,
     )
 
 
@@ -126,6 +133,27 @@ def registration_response(
         queue_id=lesson.id,
         closed=lesson.queue.closed,
         version=record.version,
+    )
+
+
+def lesson_queue_response(schedule: Schedule, lesson: Lesson, record: QueueRecord | None, labs) -> LessonQueueResponse:
+    detail = queue_detail(schedule, lesson, record)
+
+    def participant(entry):
+        return QueueParticipantResponse(
+            id=entry.id, full_name=entry.full_name,
+            github=entry.github, lab_id=entry.lab_id, status=entry.status,
+            lab_name=entry.lab_name, position=entry.position,
+        )
+
+    return LessonQueueResponse(
+        queue_id=lesson.id, course_id=schedule.course_id,
+        course_name=schedule.course_name, lesson=detail.lesson,
+        closed=detail.closed, version=detail.version,
+        waiting=[participant(entry) for entry in detail.waiting],
+        called=[participant(entry) for entry in detail.called],
+        entries=[participant(entry) for entry in detail.entries],
+        labs=labs,
     )
 
 

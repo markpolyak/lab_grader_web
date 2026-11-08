@@ -107,15 +107,15 @@ def test_update_queue_rejects_invalid_times(tmp_path):
         )
 
 
-def test_update_queue_rejects_scheduled_lesson_times(tmp_path):
+def test_update_queue_preserves_scheduled_lesson_override(tmp_path):
     service = build(tmp_path)
     scheduled = service.schedules["os-2026"].lessons[0]
 
-    with pytest.raises(ValueError):
-        service.update_queue(
-            scheduled.id,
-            starts_at=datetime(2026, 11, 9, 16, 0, tzinfo=TZ),
-        )
+    service.update_queue(scheduled.id, starts_at=datetime(2026, 11, 9, 16, 0, tzinfo=TZ))
+    restored = build(tmp_path)
+    lesson = restored.get_lesson("os-2026", scheduled.id)
+    assert lesson.starts_at.hour == 16
+    assert lesson.original_starts_at.hour == 15
 
 
 def test_manual_queue_must_be_in_the_current_week(tmp_path):

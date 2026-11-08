@@ -191,3 +191,4 @@ pnpm-debug.log*
 dist/
 .cache/logs/
 schedule/.cache/
+queue_state/
