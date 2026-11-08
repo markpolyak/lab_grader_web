@@ -23,11 +23,16 @@ ERROR_HTTP_STATUS = {
 }
 
 
-class QueueError(Exception):
-    """Queue service error with a stable API code."""
+_STATUS_MAP: dict[str, int] = {
+    "SESSION_REQUIRED": 401, "ALREADY_IN_QUEUE": 409, "NOT_IN_QUEUE": 404,
+    "NOT_WAITING": 409, "INVALID_STATUS": 400, "INVALID_SHIFT": 400,
+    "CI_NOT_PASSED": 400, "CI_PENDING": 409, "ALREADY_PASSED": 400,
+    "NO_TEAM": 400, "QUEUE_CLOSED": 403,
+}
 
-    def __init__(self, code: str, message: str = "") -> None:
+class QueueError(Exception):
+    def __init__(self, code: str, message: str = ""):
         self.code = code
         self.message = message
-        self.http_status = ERROR_HTTP_STATUS.get(code, 400)
-        super().__init__(f"{code}: {message}" if message else code)
+        self.http_status = _STATUS_MAP.get(code, 500)  # plain attribute
+        super().__init__(f"{code}: {message}")

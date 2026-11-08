@@ -377,7 +377,17 @@ def register(
     with locked_course(spreadsheet.id):
         worksheet = ensure_today_sheet(spreadsheet, today, group_ids)
         rows = read_queue_rows(worksheet)
-        if find_waiting(rows, group, lab, fio, session_no):
+        # Duplicate check ignores session_no: a student cannot be waiting
+        # twice for the same lab on the same day, even across sessions.
+        already_waiting = [
+            row
+            for row in rows
+            if row.group == group
+            and row.lab == lab
+            and row.fio == fio
+            and row.status == STATUS_WAITING
+        ]
+        if already_waiting:
             raise QueueError("ALREADY_IN_QUEUE", "Участник уже ожидает")
 
         waiting = list_waiting(rows, group, lab, session_no)
@@ -524,8 +534,12 @@ def snapshot_sheet(spreadsheet, sheet_name: str) -> int:
     """Atomically append a day's rows to history and delete its queue tab.
 
     Idempotent: rows already present in history (matched by
-    ``(date, group, fio, lab)``) are skipped, so a retry after a partial
+    ``(group, fio, lab)``) are skipped, so a retry after a partial
     failure does not duplicate data.
+
+    The append and delete are sent as a single ``batch_update`` call
+    (two requests: ``appendCells`` + ``deleteSheet``) so they are atomic
+    from the Sheets API perspective.
     """
     with locked_course(spreadsheet.id):
         worksheet = _get_worksheet(spreadsheet, sheet_name)
@@ -542,7 +556,7 @@ def snapshot_sheet(spreadsheet, sheet_name: str) -> int:
         history = ensure_history_sheet(spreadsheet)
         existing_keys = _read_history_keys_for_date(history, sheet_date)
 
-        new_rows: list[tuple[str, str, str, str, str, str]] = []
+        new_rows: list[tuple[str, str, str, str, str, str, str]] = []
         for row in rows:
             key = (row.group, row.fio, row.lab)
             if key in existing_keys:
@@ -552,12 +566,13 @@ def snapshot_sheet(spreadsheet, sheet_name: str) -> int:
             )
             new_rows.append(
                 (
-                    sheet_date.isoformat(),
-                    str(row.position or ""),
-                    row.group,
-                    row.fio,
-                    row.lab,
-                    final_status,
+                    sheet_date.isoformat(),        # 0: Дата
+                    str(row.position or ""),        # 1: ПОЗИЦИЯ
+                    row.group,                      # 2: ГРУППА
+                    row.fio,                        # 3: ФИО
+                    row.lab,                        # 4: ЛР
+                    str(row.session_no or ""),      # 5: Пар№
+                    final_status,                   # 6: Статус
                 )
             )
             existing_keys.add(key)
@@ -567,15 +582,16 @@ def snapshot_sheet(spreadsheet, sheet_name: str) -> int:
             history_rows = [
                 {
                     "values": [
-                        {"userEnteredValue": {"stringValue": d}},
-                        {"userEnteredValue": {"stringValue": p}},
-                        {"userEnteredValue": {"stringValue": g}},
-                        {"userEnteredValue": {"stringValue": f}},
-                        {"userEnteredValue": {"stringValue": l}},
-                        {"userEnteredValue": {"stringValue": s}},
+                        {"userEnteredValue": {"stringValue": d}}, 
+                        {"userEnteredValue": {"stringValue": p}}, 
+                        {"userEnteredValue": {"stringValue": g}}, 
+                        {"userEnteredValue": {"stringValue": f}}, 
+                        {"userEnteredValue": {"stringValue": l}}, 
+                        {"userEnteredValue": {"stringValue": sn}},
+                        {"userEnteredValue": {"stringValue": s}}, 
                     ]
                 }
-                for d, p, g, f, l, s in new_rows
+                for d, p, g, f, l, sn, s in new_rows
             ]
             requests.append(
                 {
@@ -589,7 +605,6 @@ def snapshot_sheet(spreadsheet, sheet_name: str) -> int:
         requests.append({"deleteSheet": {"sheetId": worksheet.id}})
         spreadsheet.batch_update({"requests": requests})
         return len(new_rows)
-
 
 def maybe_snapshot_past_days(spreadsheet, today: date) -> int:
     """Lazy snapshot triggered on the first queue request of a new day."""
