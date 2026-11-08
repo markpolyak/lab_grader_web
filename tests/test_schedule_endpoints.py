@@ -58,12 +58,14 @@ groups:
         def worksheets(self):
             return [
                 FakeSheet("4433"),
+                FakeSheet("М433"),
                 FakeSheet("Example"),
                 FakeSheet("Queue"),
                 FakeSheet("Очередь-08.11.2026"),
                 FakeSheet("History"),
                 FakeSheet("История"),
                 FakeSheet("Info"),
+                FakeSheet("Info 2026"),
             ]
 
     class FakeSheetsClient:
@@ -102,6 +104,50 @@ def test_course_groups_endpoint_returns_only_numeric_group_sheets(schedule_admin
 
     assert response.status_code == 200
     assert response.json() == ["4433"]
+
+
+def test_course_groups_endpoint_supports_prefixes_and_alphanumeric_names(
+    schedule_admin_client,
+):
+    client, _, _ = schedule_admin_client
+    course_info = main_module.get_course_by_id("test-course")
+    course_info["google"]["info-sheet"] = [
+        "Info",
+        "Example",
+        "Queue",
+        "History",
+        "Очередь",
+        "История",
+    ]
+
+    response = client.get("/courses/test-course/groups")
+
+    assert response.status_code == 200
+    assert response.json() == ["4433", "М433"]
+
+
+def test_schedule_groups_endpoint_supports_prefixes_and_alphanumeric_names(
+    schedule_admin_client,
+):
+    client, _, _ = schedule_admin_client
+    course_info = main_module.get_course_by_id("test-course")
+    course_info["google"]["info-sheet"] = [
+        "Info",
+        "Example",
+        "Queue",
+        "History",
+        "Очередь",
+        "История",
+    ]
+
+    response = client.get("/admin/courses/test-course/schedule/groups")
+
+    assert response.status_code == 200
+    assert response.json()["groups"] == [
+        {"id": "4432", "guap_group_id": "4432"},
+        {"id": "4433", "guap_group_id": "4433"},
+        {"id": "М433", "guap_group_id": "М433"},
+    ]
 
 
 def test_save_manual_groups_updates_schedule_yaml(schedule_admin_client):

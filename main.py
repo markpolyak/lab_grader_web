@@ -823,7 +823,9 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
     return {"message": "Изменения успешно сохранены"}
 
 
-def _is_group_sheet_title(title: str, info_sheet: str | None) -> bool:
+def _is_group_sheet_title(title: str, info_sheet: str | list[str] | None) -> bool:
+    if isinstance(info_sheet, list):
+        return not title.startswith(tuple(info_sheet))
     return title != info_sheet and re.fullmatch(r"\d+", title) is not None
 
 
