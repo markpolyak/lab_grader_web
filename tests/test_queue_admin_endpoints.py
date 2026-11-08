@@ -466,3 +466,218 @@ def test_queue_history_returns_terminal_entries(endpoint):
 def test_queue_history_requires_admin(endpoint):
     client, _ = endpoint
     assert client.get("/admin/courses/os-2026/queue-history").status_code == 401
+
+
+def test_create_manual_queue_and_see_it_in_list(endpoint):
+    client, _ = endpoint
+    authenticate(client)
+
+    response = client.post(
+        "/admin/courses/os-2026/queues",
+        json={
+            "group_ids": ["4431"],
+            "lesson_starts_at": "2026-11-09T20:00:00+03:00",
+            "lesson_ends_at": "2026-11-09T21:30:00+03:00",
+            "registration_opens_at": "2026-11-09T19:45:00+03:00",
+            "registration_closes_at": "2026-11-09T21:30:00+03:00",
+            "service_until": "2026-11-09T23:59:00+03:00",
+            "closed": False,
+        },
+    )
+
+    assert response.status_code == 201
+    queue_id = response.json()["queue_id"]
+    assert response.json()["version"] == 0
+
+    detail = client.get(f"/admin/courses/os-2026/queues/{queue_id}")
+    assert detail.status_code == 200
+    assert detail.json()["closed"] is False
+    assert detail.json()["lesson"]["kind"] == "Внештатное занятие"
+    assert detail.json()["lesson"]["groups"] == ["4431"]
+
+    listed = client.get("/admin/courses/os-2026/queues?date=2026-11-09")
+    assert queue_id in [item["queue_id"] for item in listed.json()["queues"]]
+
+
+def test_create_manual_queue_validates_times_and_requires_admin(endpoint):
+    client, _ = endpoint
+    payload = {
+        "group_ids": ["4431"],
+        "lesson_starts_at": "2026-11-09T20:00:00+03:00",
+        "lesson_ends_at": "2026-11-09T19:30:00+03:00",
+    }
+
+    assert client.post("/admin/courses/os-2026/queues", json=payload).status_code == 401
+
+    authenticate(client)
+    assert client.post("/admin/courses/os-2026/queues", json=payload).status_code == 422
+    assert client.post(
+        "/admin/courses/os-2026/queues",
+        json={**payload, "group_ids": []},
+    ).status_code == 422
+
+
+def test_update_queue_rejects_scheduled_times_and_out_of_week_creation(endpoint):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+    authenticate(client)
+
+    invalid = client.patch(
+        f"/admin/courses/os-2026/queues/{lesson.id}",
+        json={"lesson_starts_at": "2026-11-09T16:00:00+03:00"},
+    )
+    assert invalid.status_code == 422
+
+    out_of_week = client.post(
+        "/admin/courses/os-2026/queues",
+        json={
+            "group_ids": ["4431"],
+            "lesson_starts_at": "2026-11-16T20:00:00+03:00",
+            "lesson_ends_at": "2026-11-16T21:30:00+03:00",
+        },
+    )
+    assert out_of_week.status_code == 422
+
+
+def test_update_queue_times_and_window(endpoint):
+    client, _ = endpoint
+    authenticate(client)
+    created = client.post(
+        "/admin/courses/os-2026/queues",
+        json={
+            "group_ids": ["4431"],
+            "lesson_starts_at": "2026-11-09T20:00:00+03:00",
+            "lesson_ends_at": "2026-11-09T21:30:00+03:00",
+        },
+    ).json()
+    queue_id = created["queue_id"]
+
+    response = client.patch(
+        f"/admin/courses/os-2026/queues/{queue_id}",
+        json={
+            "lesson_starts_at": "2026-11-09T20:30:00+03:00",
+            "lesson_ends_at": "2026-11-09T22:00:00+03:00",
+            "registration_closes_at": "2026-11-09T22:00:00+03:00",
+            "service_until": "2026-11-09T23:59:00+03:00",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["version"] == 1
+    detail = client.get(f"/admin/courses/os-2026/queues/{queue_id}").json()
+    assert detail["lesson"]["starts_at"] == "2026-11-09T20:30:00+03:00"
+    assert detail["lesson"]["ends_at"] == "2026-11-09T22:00:00+03:00"
+    assert detail["version"] == 1
+
+    assert client.patch(
+        f"/admin/courses/os-2026/queues/{queue_id}", json={}
+    ).status_code == 422
+    assert client.patch(
+        "/admin/courses/os-2026/queues/00000000-0000-0000-0000-000000000001",
+        json={"lesson_ends_at": "2026-11-09T22:00:00+03:00"},
+    ).status_code == 404
+
+
+def test_create_update_delete_require_admin(endpoint):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+
+    assert client.post(
+        "/admin/courses/os-2026/queues",
+        json={
+            "group_ids": ["4431"],
+            "lesson_starts_at": "2026-11-09T20:00:00+03:00",
+            "lesson_ends_at": "2026-11-09T21:30:00+03:00",
+        },
+    ).status_code == 401
+    assert client.patch(
+        f"/admin/courses/os-2026/queues/{lesson.id}",
+        json={"lesson_ends_at": "2026-11-09T18:00:00+03:00"},
+    ).status_code == 401
+    assert client.delete(
+        f"/admin/courses/os-2026/queues/{lesson.id}"
+    ).status_code == 401
+
+
+def test_delete_manual_queue_and_reject_others(endpoint):
+    client, service = endpoint
+    authenticate(client)
+    created = client.post(
+        "/admin/courses/os-2026/queues",
+        json={
+            "group_ids": ["4431"],
+            "lesson_starts_at": "2026-11-09T20:00:00+03:00",
+            "lesson_ends_at": "2026-11-09T21:30:00+03:00",
+        },
+    ).json()
+    queue_id = created["queue_id"]
+
+    assert client.delete(
+        f"/admin/courses/os-2026/queues/{queue_id}"
+    ).status_code == 200
+    assert client.get(
+        f"/admin/courses/os-2026/queues/{queue_id}"
+    ).status_code == 404
+
+    scheduled = service.schedules["os-2026"].lessons[0]
+    response = client.delete(f"/admin/courses/os-2026/queues/{scheduled.id}")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "QUEUE_NOT_DELETABLE"
+
+    manual = client.post(
+        "/admin/courses/os-2026/queues",
+        json={
+            "group_ids": ["4431"],
+            "lesson_starts_at": "2026-11-09T20:00:00+03:00",
+            "lesson_ends_at": "2026-11-09T21:30:00+03:00",
+        },
+    ).json()["queue_id"]
+    lesson = next(item for item in service.schedules["os-2026"].lessons if str(item.id) == manual)
+    lesson.queue.closed = False
+    lesson.queue.add_entry(Student("Иван", "Иванов", "", "ivan"), "1", "ЛР1")
+    service.save_lesson(lesson.id)
+
+    non_empty = client.delete(f"/admin/courses/os-2026/queues/{manual}")
+    assert non_empty.status_code == 409
+    assert non_empty.json()["detail"] == "QUEUE_NOT_EMPTY"
+
+
+def test_update_result_and_remove_entry(endpoint):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+    lesson.queue.closed = False
+    entry = lesson.queue.add_entry(
+        Student("Иван", "Иванов", "", "ivan"), "1", "ЛР1"
+    )
+    service.save_lesson(lesson.id)
+    authenticate(client)
+
+    service.call_next(lesson.id)
+    service.finish(lesson.id, entry.id, DefenseResult.DEFENDED)
+    corrected = client.patch(
+        f"/admin/courses/os-2026/queues/{lesson.id}/entries/{entry.id}/result",
+        json={"outcome": "not_defended"},
+    )
+    assert corrected.status_code == 200
+    assert corrected.json()["entry"]["result"] == "not_defended"
+
+    waiting = lesson.queue.add_entry(
+        Student("Пётр", "Петров", "", "petr"), "2", "ЛР2"
+    )
+    service.save_lesson(lesson.id)
+    assert client.patch(
+        f"/admin/courses/os-2026/queues/{lesson.id}/entries/{waiting.id}/result",
+        json={"outcome": "defended"},
+    ).status_code == 409
+
+    removed = client.delete(
+        f"/admin/courses/os-2026/queues/{lesson.id}/entries/{waiting.id}"
+    )
+    assert removed.status_code == 200
+    assert removed.json() == {"removed": True}
+    detail = client.get(f"/admin/courses/os-2026/queues/{lesson.id}").json()
+    assert any(item["id"] == str(waiting.id) for item in detail["finished"])
+
+    assert client.delete(
+        f"/admin/courses/os-2026/queues/{lesson.id}/entries/{waiting.id}"
+    ).status_code == 409

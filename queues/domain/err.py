@@ -42,6 +42,16 @@ class GroupNotAllowedError(QueueError):
         super().__init__("Группа студента не записана на это занятие")
 
 
+class QueueNotEmptyError(QueueError):
+    def __init__(self) -> None:
+        super().__init__("Очередь не пуста")
+
+
+class QueueNotDeletableError(QueueError):
+    def __init__(self, message: str = "Эту очередь нельзя удалить") -> None:
+        super().__init__(message)
+
+
 class QueueAlreadyExistsError(QueueError):
     def __init__(self, queue_id: UUID) -> None:
         self.queue_id = queue_id

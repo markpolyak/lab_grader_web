@@ -90,9 +90,13 @@ from grading.queue_eligibility import (
 import tempfile
 from queues.api.presenters import (
     entry_action_response,
+    entry_removed_response,
     history_response,
+    queue_create_response,
+    queue_deleted_response,
     queue_detail,
     queues_response,
+    queue_update_response,
     registration_response,
     student_queue_entry,
     student_queue_state,
@@ -101,7 +105,11 @@ from queues.api.presenters import (
 from queues.api.schemas import (
     AdminQueueDetailResponse,
     AdminQueuesResponse,
+    QueueCreateRequest,
+    QueueCreateResponse,
+    QueueDeletedResponse,
     QueueEntryActionResponse,
+    QueueEntryRemovedResponse,
     QueueFinishRequest,
     QueueHistoryResponse,
     QueueJoinRequest,
@@ -109,6 +117,8 @@ from queues.api.schemas import (
     QueueLeaveResponse,
     QueueRegistrationRequest,
     QueueRegistrationResponse,
+    QueueUpdateRequest,
+    QueueUpdateResponse,
     StudentQueueStateResponse,
 )
 from queues.domain.err import (
@@ -119,6 +129,8 @@ from queues.domain.err import (
     InvalidStateError,
     QueueClosedError,
     QueueEmptyError,
+    QueueNotEmptyError,
+    QueueNotDeletableError,
 )
 from queues.event.websocket import websocketService
 from queues.parser.parser import ScheduleParser
@@ -806,6 +818,34 @@ class CourseLessonsResponse(BaseModel):
     lessons: list[CourseLessonResponse]
 
 
+def _course_lessons_response(schedule) -> CourseLessonsResponse:
+    return CourseLessonsResponse(
+        schedule_id=schedule.id,
+        course_id=schedule.course_id,
+        course_name=schedule.course_name,
+        week_start=schedule.week_start,
+        week_end=schedule.week_start + timedelta(days=6),
+        lessons=[
+            CourseLessonResponse(
+                id=lesson.id,
+                starts_at=lesson.starts_at,
+                ends_at=lesson.ends_at,
+                groups=list(lesson.groups),
+                kind=lesson.kind,
+                room=lesson.room,
+                queue=LessonQueueResponse(
+                    closed=lesson.queue.closed,
+                    entries_count=len(lesson.queue.entries),
+                ),
+            )
+            for lesson in sorted(
+                schedule.lessons,
+                key=lambda item: (item.starts_at, item.groups, item.kind),
+            )
+        ],
+    )
+
+
 @app.get("/courses/{course_id}/lessons", response_model=CourseLessonsResponse)
 @limiter.limit("100/minute")
 def get_course_lessons(request: Request, course_id: str):
@@ -816,25 +856,7 @@ def get_course_lessons(request: Request, course_id: str):
     """
     _, schedule = _get_current_schedule(request, course_id)
 
-    return {
-        "course_id": schedule.course_id,
-        "schedule_id": schedule.id,
-        "course_name": schedule.course_name,
-        "week_start": schedule.week_start,
-        "week_end": schedule.week_start + timedelta(days=6),
-        "lessons": [
-            {
-                "id": lesson.id,
-                "starts_at": lesson.starts_at,
-                "ends_at": lesson.ends_at,
-                "groups": lesson.groups,
-                "kind": lesson.kind,
-                "room": lesson.room,
-                "queue": {"closed": lesson.queue.closed, "entries_count": len(lesson.queue.entries)},
-            }
-            for lesson in sorted(schedule.lessons, key=lambda item: (item.starts_at, item.groups, item.kind))
-        ],
-    }
+    return _course_lessons_response(schedule)
 
 
 def _get_queue_service(request: Request):
@@ -961,6 +983,102 @@ def admin_set_queue_registration(
 
 
 @app.post(
+    "/admin/courses/{course_id}/queues",
+    response_model=QueueCreateResponse,
+    status_code=201,
+)
+@limiter.limit("30/minute")
+def admin_create_queue(
+    request: Request,
+    course_id: str,
+    body: QueueCreateRequest,
+    admin: str = Depends(require_admin),
+):
+    """Создать внештатную очередь для занятия вне расписания."""
+    service, schedule = _get_current_schedule(request, course_id)
+    try:
+        record = service.create_manual(
+            course_id,
+            schedule.course_name,
+            week_start=schedule.week_start,
+            group_ids=body.group_ids,
+            starts_at=body.lesson_starts_at,
+            ends_at=body.lesson_ends_at,
+            registration_opens_at=body.registration_opens_at,
+            registration_closes_at=body.registration_closes_at,
+            service_until=body.service_until,
+            closed=body.closed,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return queue_create_response(record)
+
+
+@app.patch(
+    "/admin/courses/{course_id}/queues/{queue_id}",
+    response_model=QueueUpdateResponse,
+)
+@limiter.limit("60/minute")
+def admin_update_queue(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    body: QueueUpdateRequest,
+    admin: str = Depends(require_admin),
+):
+    """Обновить время занятия и окно записи очереди."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+    if not body.model_dump(exclude_none=True):
+        raise HTTPException(status_code=422, detail="NO_FIELDS")
+
+    try:
+        record = service.update_queue(
+            lesson.id,
+            starts_at=body.lesson_starts_at,
+            ends_at=body.lesson_ends_at,
+            registration_opens_at=body.registration_opens_at,
+            registration_closes_at=body.registration_closes_at,
+            service_until=body.service_until,
+        )
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return queue_update_response(record)
+
+
+@app.delete(
+    "/admin/courses/{course_id}/queues/{queue_id}",
+    response_model=QueueDeletedResponse,
+)
+@limiter.limit("60/minute")
+def admin_delete_queue(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    admin: str = Depends(require_admin),
+):
+    """Удалить пустую внештатную очередь."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        service.delete_queue(lesson.id)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+    except QueueNotDeletableError:
+        raise HTTPException(status_code=409, detail="QUEUE_NOT_DELETABLE")
+    except QueueNotEmptyError:
+        raise HTTPException(status_code=409, detail="QUEUE_NOT_EMPTY")
+    return queue_deleted_response()
+
+
+@app.post(
     "/admin/courses/{course_id}/queues/{queue_id}/call-next",
     response_model=QueueEntryActionResponse,
 )
@@ -1022,6 +1140,66 @@ def admin_finish_entry(
     return entry_action_response(
         entry, metadata, record.version if record is not None else 0
     )
+
+
+@app.patch(
+    "/admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}/result",
+    response_model=QueueEntryActionResponse,
+)
+@limiter.limit("60/minute")
+def admin_update_result(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    body: QueueFinishRequest,
+    admin: str = Depends(require_admin),
+):
+    """Исправить результат завершённой защиты."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        entry = service.update_result(lesson.id, entry_id, body.outcome)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+
+    record = service.get_record(lesson.id)
+    metadata = record.entry_metadata.get(entry.id) if record is not None else None
+    return entry_action_response(
+        entry, metadata, record.version if record is not None else 0
+    )
+
+
+@app.delete(
+    "/admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}",
+    response_model=QueueEntryRemovedResponse,
+)
+@limiter.limit("60/minute")
+def admin_remove_entry(
+    request: Request,
+    course_id: str,
+    queue_id: uuid.UUID,
+    entry_id: uuid.UUID,
+    admin: str = Depends(require_admin),
+):
+    """Убрать активную запись из очереди, сохранив её в истории."""
+    service, schedule = _get_current_schedule(request, course_id)
+    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    if lesson is None:
+        raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    try:
+        service.remove_entry(lesson.id, entry_id)
+    except EntryNotFoundError:
+        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
+    return entry_removed_response()
 
 
 @app.get("/courses/{course_id}/queue", response_model=StudentQueueStateResponse)

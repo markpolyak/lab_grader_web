@@ -22,6 +22,9 @@ class QueueRepository(Protocol):
     def save(self, queue: QueueRecord, *, expected_version: int) -> QueueRecord:
         ...
 
+    def delete(self, queue_id: UUID) -> None:
+        ...
+
     def list_by_course(
         self, course_id: str, *, group_id: str | None = None
     ) -> list[QueueRecord]:

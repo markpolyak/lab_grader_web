@@ -70,6 +70,42 @@ class QueueRegistrationResponse(BaseModel):
     version: int
 
 
+class QueueCreateRequest(BaseModel):
+    group_ids: list[str] = Field(..., min_length=1)
+    lesson_starts_at: datetime
+    lesson_ends_at: datetime
+    registration_opens_at: datetime | None = None
+    registration_closes_at: datetime | None = None
+    service_until: datetime | None = None
+    closed: bool = False
+
+
+class QueueCreateResponse(BaseModel):
+    queue_id: uuid.UUID
+    version: int
+
+
+class QueueUpdateRequest(BaseModel):
+    lesson_starts_at: datetime | None = None
+    lesson_ends_at: datetime | None = None
+    registration_opens_at: datetime | None = None
+    registration_closes_at: datetime | None = None
+    service_until: datetime | None = None
+
+
+class QueueUpdateResponse(BaseModel):
+    queue_id: uuid.UUID
+    version: int
+
+
+class QueueDeletedResponse(BaseModel):
+    deleted: bool
+
+
+class QueueEntryRemovedResponse(BaseModel):
+    removed: bool
+
+
 class QueueJoinRequest(BaseModel):
     github: str = Field(..., min_length=1)
     lesson_id: uuid.UUID

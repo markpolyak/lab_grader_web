@@ -46,6 +46,11 @@ class InMemoryQueueRepository:
             self._queues[queue.id] = stored
             return deepcopy(stored)
 
+    def delete(self, queue_id: UUID) -> None:
+        with self._lock:
+            if self._queues.pop(queue_id, None) is None:
+                raise QueueNotFoundError(queue_id)
+
     def list_by_course(
         self, course_id: str, *, group_id: str | None = None
     ) -> list[QueueRecord]:
