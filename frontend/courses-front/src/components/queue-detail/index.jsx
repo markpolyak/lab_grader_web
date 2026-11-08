@@ -20,16 +20,23 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [snapshot, setSnapshot] = useState(null);
+  const [archived, setArchived] = useState(false);
   const [error, setError] = useState(null);
   const [attempt, setAttempt] = useState(0);
   const [revision, setRevision] = useState(0);
   const [ownEntryId, setOwnEntryId] = useState(null);
   useQueueEvents(lessonId, (event) => {
+    if (event.type === "queue.archived") {
+      setSnapshot(null);
+      setArchived(true);
+      return;
+    }
     if (event.type === "queue.deleted") setSnapshot(null);
     setAttempt((value) => value + 1);
   });
 
   useEffect(() => {
+    if (archived) return;
     const controller = new AbortController();
     let timer;
     async function load() {
@@ -47,7 +54,7 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
     }
     load();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [courseId, lessonId, attempt]);
+  }, [courseId, lessonId, attempt, archived]);
 
   const dateTime = new Intl.DateTimeFormat(i18n.language, {
     timeZone: "Europe/Moscow", weekday: "long", day: "numeric", month: "long",
@@ -61,9 +68,10 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
       <Navigation><BackButton onClick={onBack}>{t("queueDetail.back")}</BackButton><Breadcrumb courseId={courseId} /></Navigation>
       <Title>{t("queueDetail.title")}</Title>
       <Content>
-        {error && <Alert severity="error" action={<RetryButton onClick={() => setAttempt((value) => value + 1)}>{t("queueLessons.retry")}</RetryButton>}>{t(`queueDetail.errors.${error}`)}</Alert>}
-        {!snapshot && !error && <Status role="status"><Spin /><Muted>{t("queueDetail.loading")}</Muted></Status>}
-        {snapshot && (
+        {archived && <Alert severity="info">{t("queueDetail.archived")}</Alert>}
+        {!archived && error && <Alert severity="error" action={<RetryButton onClick={() => setAttempt((value) => value + 1)}>{t("queueLessons.retry")}</RetryButton>}>{t(`queueDetail.errors.${error}`)}</Alert>}
+        {!archived && !snapshot && !error && <Status role="status"><Spin /><Muted>{t("queueDetail.loading")}</Muted></Status>}
+        {!archived && snapshot && (
           <>
             <Description>{snapshot.course_name}</Description>
             <Description>{dateTime.format(new Date(snapshot.lesson.starts_at))} · {t("queueDetail.moscowTime")}</Description>

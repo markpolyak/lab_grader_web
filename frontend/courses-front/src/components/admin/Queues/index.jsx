@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useQueueEvents } from "../../../hooks/useQueueEvents";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useLocation } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Alert, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { Spin } from "antd";
-import { fetchAdminQueues, fetchAdminQueue, setQueueRegistration, updateAdminQueue, callNextStudent, finishStudent } from "../../../api/adminQueues";
+import { completeAdminQueue, fetchAdminQueues, fetchAdminQueue, setQueueRegistration, updateAdminQueue, callNextStudent, finishStudent } from "../../../api/adminQueues";
 import { QueueTable } from "../../queue-table";
 import { CreateLessonForm } from "./CreateLessonForm";
 import { DateTimeField } from "../../date-time-field";
@@ -30,6 +30,8 @@ export function AdminQueues() {
 function QueueView({ courseId, queueId }) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
+  const [completing, setCompleting] = useState(false);
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [pending, setPending] = useState(false);
@@ -39,6 +41,10 @@ function QueueView({ courseId, queueId }) {
   const [ends, setEnds] = useState("");
   const [creating, setCreating] = useState(false);
   useQueueEvents(queueId, (event) => {
+    if (event.type === "queue.archived") {
+      navigate(`/admin/courses/${courseId}/queues`, { replace: true, state: { archived: true } });
+      return;
+    }
     if (event.type === "queue.deleted") setData(null);
     setRefresh((value) => value + 1);
   });
@@ -92,6 +98,23 @@ function QueueView({ courseId, queueId }) {
     }
   }
 
+  async function completeLesson() {
+    setPending(true);
+    setCompleting(true);
+    setError(null);
+    try {
+      await completeAdminQueue(courseId, queueId);
+      navigate(`/admin/courses/${courseId}/queues`, { replace: true, state: { archived: true } });
+    } catch (cause) {
+      if (cause.status === 401) navigate("/admin", { replace: true });
+      else setError(t(cause.code === "ARCHIVE_PENDING" ? "adminQueues.archivePending" : "adminQueues.saveFailed"));
+      try { setData(await fetchAdminQueue(courseId, queueId)); } catch { /* Keep the last snapshot. */ }
+    } finally {
+      setPending(false);
+      setCompleting(false);
+    }
+  }
+
   function badges(lesson, closed) {
     return <>
       <RegistrationStatus cancelled={lesson.cancelled} closed={closed} />
@@ -120,6 +143,8 @@ function QueueView({ courseId, queueId }) {
     </Navigation>
     <Title>{t(queueId ? "adminQueues.queueTitle" : "adminQueues.lessons")}</Title>
     <Content>
+      {location.state?.archived && !queueId && <Alert severity="success">{t("adminQueues.archived")}</Alert>}
+      {data?.archive_pending && <Alert severity="warning">{t("adminQueues.archivePending")}</Alert>}
       {error && <Alert severity="error">{error}</Alert>}
       {!data && !error && <Status role="status"><Spin /><Muted>{t("adminQueues.loading")}</Muted></Status>}
       {!data && error && <SecondaryButton onClick={() => setRefresh((value) => value + 1)}>{t("queueLessons.retry")}</SecondaryButton>}
@@ -140,18 +165,21 @@ function QueueView({ courseId, queueId }) {
           {data.lesson.room && <Muted>{t("queueLessons.room")}: {data.lesson.room}</Muted>}
           {badges(data.lesson, data.closed)}
           <Actions>
-            <PrimaryButton disabled={pending || data.lesson.cancelled} onClick={() => mutate(() => setQueueRegistration(courseId, queueId, !data.closed))}>
-              {t(data.closed ? "adminQueues.openQueue" : "adminQueues.closeQueue")}
+            <PrimaryButton disabled={pending} onClick={completeLesson}>
+              {t(completing ? "adminQueues.archiving" : data.archive_pending ? "adminQueues.retryArchive" : "adminQueues.completeLesson")}
             </PrimaryButton>
-            <SecondaryButton disabled={pending} onClick={() => { setStarts(localInput(data.lesson.starts_at)); setEnds(localInput(data.lesson.ends_at)); setDialog("move"); }}>{t("adminQueues.move")}</SecondaryButton>
-            <SecondaryButton disabled={pending} onClick={() => setDialog("cancel")}>{t(data.lesson.cancelled ? "adminQueues.restore" : "adminQueues.cancelLesson")}</SecondaryButton>
+            {data.closed && !data.archive_pending && <SecondaryButton disabled={pending || data.lesson.cancelled} onClick={() => mutate(() => setQueueRegistration(courseId, queueId, false))}>
+              {t("adminQueues.openQueue")}
+            </SecondaryButton>}
+            <SecondaryButton disabled={pending || data.archive_pending} onClick={() => { setStarts(localInput(data.lesson.starts_at)); setEnds(localInput(data.lesson.ends_at)); setDialog("move"); }}>{t("adminQueues.move")}</SecondaryButton>
+            <SecondaryButton disabled={pending || data.archive_pending} onClick={() => setDialog("cancel")}>{t(data.lesson.cancelled ? "adminQueues.restore" : "adminQueues.cancelLesson")}</SecondaryButton>
           </Actions>
         </Panel>
         <Panel>
           <Heading>{t("queueDetail.participants")}</Heading>
-          <Actions><PrimaryButton disabled={pending || data.lesson.cancelled || !data.waiting.length}
+          <Actions><PrimaryButton disabled={pending || data.archive_pending || data.lesson.cancelled || !data.waiting.length}
             onClick={() => mutate(() => callNextStudent(courseId, queueId))}>{t("queueTable.callNext")}</PrimaryButton></Actions>
-          <QueueTable entries={data.entries} pending={pending}
+          <QueueTable entries={data.entries} pending={pending || data.archive_pending}
             onAbsent={(entryId) => mutate(() => finishStudent(courseId, queueId, entryId, "absent"))}
             onFinish={(entryId) => mutate(() => finishStudent(courseId, queueId, entryId))} />
         </Panel>

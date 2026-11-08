@@ -17,6 +17,7 @@ const coursePath = (courseId) => `/courses/${encodeURIComponent(courseId)}/queue
 export const fetchAdminQueues = (courseId, options) => adminRequest(coursePath(courseId), options);
 export const fetchAdminQueue = (courseId, queueId, options) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}`, options);
 export const setQueueRegistration = (courseId, queueId, closed) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}/registration`, { method: "PUT", body: { closed } });
+export const completeAdminQueue = (courseId, queueId) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}/complete`, { method: "POST" });
 export const updateAdminQueue = (courseId, queueId, body) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}`, { method: "PATCH", body });
 export const callNextStudent = (courseId, queueId) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}/call-next`, { method: "POST" });
 export const finishStudent = (courseId, queueId, entryId, outcome) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}/entries/${encodeURIComponent(entryId)}/finish`, { method: "POST", body: outcome ? { outcome } : {} });

@@ -17,7 +17,9 @@ class QueueHistoryService:
         history: LessonHistoryRepository | None = None,
         *,
         history_by_course: Mapping[str, LessonHistoryRepository] | None = None,
+        on_archived=None,
     ) -> None:
+        self._on_archived = on_archived
         self._queues = queues
         self._history = history
         self._history_by_course = dict(history_by_course or {})
@@ -54,12 +56,18 @@ class QueueHistoryService:
             with self._lock:
                 self._saving.discard(lesson_id)
 
+        if self._on_archived is not None:
+            try:
+                await self._on_archived(lesson_id)
+            except Exception:
+                logger.exception("Не удалось уведомить об архивировании %s", lesson_id)
+
     async def archive_finished(self, *, retry_only: bool = False) -> dict[UUID, Exception]:
         candidates = self._queues.finished_lessons()
         with self._lock:
             candidates = [(sid, lid) for sid, lid in candidates
                           if lid not in self._saving
-                          and (not retry_only or lid in self._history_retries)]
+                          and (not retry_only or lid in self._history_retries or self._queues.archive_requested(lid))]
         errors = {}
         for schedule_id, lesson_id in candidates:
             try:

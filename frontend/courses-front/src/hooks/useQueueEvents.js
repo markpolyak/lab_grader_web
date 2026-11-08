@@ -22,7 +22,7 @@ export function useQueueEvents(queueId, onChanged) {
         let data;
         try { data = JSON.parse(event.data); } catch { return; }
         if (data.type === "subscribed" ||
-            (["queue.updated", "queue.deleted"].includes(data.type) && data.queue_id === queueId)) {
+            (["queue.updated", "queue.deleted", "queue.archived"].includes(data.type) && data.queue_id === queueId)) {
           callback.current(data);
         }
       };

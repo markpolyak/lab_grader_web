@@ -53,6 +53,7 @@ class AdminQueueEntryResponse(BaseModel):
 
 
 class AdminQueueDetailResponse(BaseModel):
+    archive_pending: bool = False
     queue_id: uuid.UUID
     course_id: str
     lesson: AdminQueueLessonResponse
