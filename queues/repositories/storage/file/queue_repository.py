@@ -84,6 +84,13 @@ class FileQueueRepository:
             self._write(path, stored)
             return deepcopy(stored)
 
+    def delete(self, queue_id: UUID) -> None:
+        with self._lock:
+            path = self._path(queue_id)
+            if not path.exists():
+                raise QueueNotFoundError(queue_id)
+            path.unlink()
+
     def list_by_course(
         self, course_id: str, *, group_id: str | None = None
     ) -> list[QueueRecord]:

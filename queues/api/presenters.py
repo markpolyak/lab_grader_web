@@ -17,9 +17,13 @@ from .schemas import (
     AdminQueuesResponse,
     AdminQueueSummaryResponse,
     QueueEntryActionResponse,
+    QueueCreateResponse,
+    QueueDeletedResponse,
+    QueueEntryRemovedResponse,
     QueueHistoryEntryResponse,
     QueueHistoryResponse,
     QueueRegistrationResponse,
+    QueueUpdateResponse,
     StudentQueueEntryResponse,
     StudentQueueStateResponse,
 )
@@ -123,6 +127,22 @@ def registration_response(
         closed=lesson.queue.closed,
         version=record.version,
     )
+
+
+def queue_create_response(record: QueueRecord) -> QueueCreateResponse:
+    return QueueCreateResponse(queue_id=record.id, version=record.version)
+
+
+def queue_update_response(record: QueueRecord) -> QueueUpdateResponse:
+    return QueueUpdateResponse(queue_id=record.id, version=record.version)
+
+
+def queue_deleted_response() -> QueueDeletedResponse:
+    return QueueDeletedResponse(deleted=True)
+
+
+def entry_removed_response() -> QueueEntryRemovedResponse:
+    return QueueEntryRemovedResponse(removed=True)
 
 
 def waiting_position(record: QueueRecord, entry_id) -> int | None:

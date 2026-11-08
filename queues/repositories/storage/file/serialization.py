@@ -4,7 +4,7 @@
 сериализацию YAML, а превращаются в строки. Это делает файл стабильным и
 позволяет позже заменить хранилище на БД без изменения домена.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from ....domain.queue import Queue
@@ -51,7 +51,10 @@ def entry_from_dict(data: dict) -> QueueEntry:
         student=student_from_dict(data["student"]),
         lab_id=data["lab_id"],
         lab_name=data.get("lab_name"),
-        enqueued_time=_datetime_from_str(data["enqueued_time"]),
+        enqueued_time=(
+            _datetime_from_str(data.get("enqueued_time"))
+            or datetime.now(timezone.utc)
+        ),
     )
 
 
@@ -89,6 +92,7 @@ def record_to_dict(record: QueueRecord) -> dict:
         "registration_closes_at": _datetime_to_str(record.registration_closes_at),
         "service_until": _datetime_to_str(record.service_until),
         "registration_mode": record.registration_mode.value,
+        "manual": record.manual,
         "version": record.version,
         "queue": {
             "closed": record.queue.closed,
@@ -123,6 +127,7 @@ def record_from_dict(data: dict) -> QueueRecord:
         registration_mode=RegistrationMode(
             data.get("registration_mode", RegistrationMode.AUTOMATIC.value)
         ),
+        manual=bool(data.get("manual", False)),
         version=int(data.get("version", 0)),
         queue=queue,
         entry_metadata={

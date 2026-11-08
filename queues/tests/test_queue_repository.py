@@ -118,6 +118,15 @@ class QueueRepositoryTests(unittest.TestCase):
         with self.assertRaises(QueueNotFoundError):
             self.repo.save(make_queue(), expected_version=0)
 
+    def test_delete_removes_record(self):
+        queue = self.repo.create(make_queue())
+
+        self.repo.delete(queue.id)
+
+        self.assertIsNone(self.repo.get(queue.id))
+        with self.assertRaises(QueueNotFoundError):
+            self.repo.delete(queue.id)
+
     def test_repository_owns_version_numbers(self):
         queue = make_queue()
         queue.version = 10

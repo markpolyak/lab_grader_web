@@ -27,6 +27,7 @@ class QueueRecord:
     lesson_starts_at: datetime | None = None
     lesson_ends_at: datetime | None = None
     registration_mode: RegistrationMode = RegistrationMode.AUTOMATIC
+    manual: bool = False
     queue: Queue = field(default_factory=Queue)
     entry_metadata: dict[UUID, QueueEntryMetadata] = field(default_factory=dict)
     version: int = 0

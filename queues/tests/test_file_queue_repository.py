@@ -194,3 +194,15 @@ def test_directory_defaults_to_environment(tmp_path, monkeypatch):
     record = repo.create(make_record())
 
     assert (state_dir / f"{record.id}.yaml").exists()
+
+
+def test_delete_removes_the_state_file(tmp_path):
+    repo = FileQueueRepository(tmp_path)
+    record = repo.create(make_record())
+
+    repo.delete(record.id)
+
+    assert repo.get(record.id) is None
+    assert not (tmp_path / f"{record.id}.yaml").exists()
+    with pytest.raises(QueueNotFoundError):
+        repo.delete(record.id)

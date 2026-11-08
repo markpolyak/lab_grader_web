@@ -16,9 +16,12 @@ from ..domain.err import (
     InvalidStateError,
     QueueClosedError,
     QueueEmptyError,
+    QueueNotEmptyError,
+    QueueNotDeletableError,
     QueueNotFoundError,
 )
 from ..domain.lesson import Lesson
+from ..domain.queue import Queue
 from ..domain.queue_entry import QueueEntry
 from ..domain.queue_record import QueueEntryMetadata, QueueRecord
 from ..domain.schedule import Schedule
@@ -26,6 +29,7 @@ from ..domain.status import DefenseResult, EntryStatus
 from ..repositories.mappers import (
     ensure_entry_metadata,
     group_ids,
+    group_key,
     record_from_lesson,
     restore_record,
     sync_record_with_lesson,
@@ -47,6 +51,35 @@ def _full_name(student) -> str:
 
 def _now() -> datetime:
     return datetime.now(ZoneInfo("Europe/Moscow"))
+
+
+def _validate_lesson_times(starts_at: datetime, ends_at: datetime) -> None:
+    if starts_at.tzinfo is None or ends_at.tzinfo is None:
+        raise ValueError("Время занятия должно содержать часовой пояс")
+    if ends_at <= starts_at:
+        raise ValueError("Окончание занятия должно быть позже начала")
+
+
+def _validate_registration(record: QueueRecord) -> None:
+    for value in (
+        record.registration_opens_at,
+        record.registration_closes_at,
+        record.service_until,
+    ):
+        if value is not None and value.tzinfo is None:
+            raise ValueError("Время должно содержать часовой пояс")
+    if (
+        record.registration_opens_at is not None
+        and record.registration_closes_at is not None
+        and record.registration_opens_at >= record.registration_closes_at
+    ):
+        raise ValueError("Открытие записи должно быть раньше закрытия")
+    if (
+        record.registration_closes_at is not None
+        and record.service_until is not None
+        and record.registration_closes_at > record.service_until
+    ):
+        raise ValueError("Обслуживание не может закончиться раньше записи")
 
 
 class QueueService:
@@ -154,6 +187,34 @@ class QueueService:
                     self._records[lesson_id] = record
 
                     schedule.lessons.append(lesson)
+
+                # Manual (unscheduled) queues live only in the repository, so
+                # restore them into the current week after a restart.
+                for record in self.repository.list_by_course(course_id):
+                    if not record.manual or record.id in lessons:
+                        continue
+                    if record.id in self._archived_lesson_ids:
+                        continue
+                    if record.lesson_starts_at is None or record.lesson_ends_at is None:
+                        continue
+                    if not (week_start <= record.lesson_starts_at.date() < week_end):
+                        continue
+                    lesson = self._lessons.get(record.id)
+                    if lesson is None:
+                        lesson = Lesson(
+                            id=record.id,
+                            starts_at=record.lesson_starts_at,
+                            ends_at=record.lesson_ends_at,
+                            groups=tuple(group_ids(record)),
+                            kind="Внештатное занятие",
+                            queue=record.queue,
+                        )
+                        self._lessons[record.id] = lesson
+                    else:
+                        lesson.queue = record.queue
+                    self._records[record.id] = record
+                    schedule.lessons.append(lesson)
+
                 schedule.lessons.sort(key=lambda lesson: (
                     lesson.starts_at, lesson.groups, lesson.kind,
                 ))
@@ -263,6 +324,186 @@ class QueueService:
             record.version = saved.version
             self._records[lesson_id] = record
             return record
+
+    def create_manual(
+        self,
+        course_id: str,
+        course_name: str,
+        *,
+        week_start: date,
+        group_ids: list[str],
+        starts_at: datetime,
+        ends_at: datetime,
+        registration_opens_at: datetime | None = None,
+        registration_closes_at: datetime | None = None,
+        service_until: datetime | None = None,
+        closed: bool = False,
+    ) -> QueueRecord:
+        """Создать внештатную очередь, которой нет в YAML расписания."""
+        groups = tuple(
+            sorted({str(group) for group in group_ids if str(group).strip()})
+        )
+        if not groups:
+            raise ValueError("Укажите хотя бы одну группу")
+        _validate_lesson_times(starts_at, ends_at)
+        if not (week_start <= starts_at.date() < week_start + timedelta(days=7)):
+            raise ValueError("Внештатное занятие должно попадать в текущую неделю")
+
+        with self._lock:
+            lesson = Lesson(
+                id=uuid.uuid4(),
+                starts_at=starts_at,
+                ends_at=ends_at,
+                groups=groups,
+                kind="Внештатное занятие",
+                queue=Queue(closed=closed),
+            )
+            record = QueueRecord(
+                id=lesson.id,
+                course_id=course_id,
+                group_id=group_key(groups),
+                registration_opens_at=registration_opens_at,
+                registration_closes_at=registration_closes_at,
+                service_until=service_until,
+                lesson_starts_at=starts_at,
+                lesson_ends_at=ends_at,
+                queue=lesson.queue,
+                manual=True,
+            )
+            _validate_registration(record)
+
+            schedule = self.schedules.get(course_id)
+            if schedule is None:
+                schedule = Schedule(
+                    id=uuid5(
+                        NAMESPACE_URL,
+                        repr((course_id, week_start.isoformat())),
+                    ),
+                    course_id=course_id,
+                    course_name=course_name,
+                    week_start=week_start,
+                )
+                self.schedules[course_id] = schedule
+            self._schedules[schedule.id] = schedule
+            schedule.lessons.append(lesson)
+            schedule.lessons.sort(
+                key=lambda item: (item.starts_at, item.groups, item.kind)
+            )
+
+            self._lessons[lesson.id] = lesson
+            self._records[lesson.id] = record
+            return self.save_lesson(lesson.id)
+
+    def update_queue(
+        self,
+        lesson_id,
+        *,
+        starts_at: datetime | None = None,
+        ends_at: datetime | None = None,
+        registration_opens_at: datetime | None = None,
+        registration_closes_at: datetime | None = None,
+        service_until: datetime | None = None,
+    ) -> QueueRecord:
+        """Обновить время занятия и окно записи."""
+        with self._lock:
+            lesson = self._lessons.get(lesson_id)
+            record = self._records.get(lesson_id)
+            if lesson is None or record is None:
+                raise EntryNotFoundError(lesson_id)
+
+            if (starts_at is not None or ends_at is not None) and not record.manual:
+                raise ValueError("Время занятия задаётся расписанием")
+
+            if starts_at is not None:
+                lesson.starts_at = starts_at
+            if ends_at is not None:
+                lesson.ends_at = ends_at
+            _validate_lesson_times(lesson.starts_at, lesson.ends_at)
+
+            if registration_opens_at is not None:
+                record.registration_opens_at = registration_opens_at
+            if registration_closes_at is not None:
+                record.registration_closes_at = registration_closes_at
+            if service_until is not None:
+                record.service_until = service_until
+            _validate_registration(record)
+
+            self.save_lesson(lesson_id)
+            for schedule in (*self.schedules.values(), *self._schedules.values()):
+                if any(item.id == lesson_id for item in schedule.lessons):
+                    schedule.lessons.sort(
+                        key=lambda item: (item.starts_at, item.groups, item.kind)
+                    )
+            return record
+
+    def delete_queue(self, lesson_id) -> None:
+        """Удалить пустую внештатную очередь."""
+        with self._lock:
+            record = self._records.get(lesson_id)
+            lesson = self._lessons.get(lesson_id)
+            if record is None or lesson is None:
+                raise EntryNotFoundError(lesson_id)
+            if not record.manual:
+                raise QueueNotDeletableError(
+                    "Удалять можно только внештатную очередь"
+                )
+            if lesson.queue.entries:
+                raise QueueNotEmptyError()
+
+            try:
+                self.repository.delete(lesson_id)
+            except QueueNotFoundError:
+                pass
+            self._records.pop(lesson_id, None)
+            self._lessons.pop(lesson_id, None)
+            self._archived_lesson_ids.discard(lesson_id)
+            for schedule in (*self.schedules.values(), *self._schedules.values()):
+                schedule.lessons[:] = [
+                    item for item in schedule.lessons if item.id != lesson_id
+                ]
+
+    def remove_entry(self, lesson_id, entry_id, *, now=None) -> QueueEntry:
+        """Убрать активную запись преподавателем; она остаётся в истории."""
+        with self._lock:
+            lesson = self._lessons.get(lesson_id)
+            record = self._records.get(lesson_id)
+            if lesson is None or record is None:
+                raise EntryNotFoundError(entry_id)
+            ensure_entry_metadata(record)
+            entry = next(
+                (item for item in lesson.queue.entries if item.id == entry_id), None
+            )
+            if entry is None:
+                raise EntryNotFoundError(entry_id)
+            metadata = record.entry_metadata[entry.id]
+            if metadata.status not in ACTIVE_STATUSES:
+                raise InvalidStateError("Удалить можно только активную запись")
+            metadata.status = EntryStatus.WITHDRAWN
+            metadata.finished_at = now or _now()
+            self.save_lesson(lesson_id)
+            return entry
+
+    def update_result(
+        self, lesson_id, entry_id, outcome: DefenseResult
+    ) -> QueueEntry:
+        """Исправить результат уже завершённой защиты."""
+        with self._lock:
+            lesson = self._lessons.get(lesson_id)
+            record = self._records.get(lesson_id)
+            if lesson is None or record is None:
+                raise EntryNotFoundError(entry_id)
+            ensure_entry_metadata(record)
+            entry = next(
+                (item for item in lesson.queue.entries if item.id == entry_id), None
+            )
+            if entry is None:
+                raise EntryNotFoundError(entry_id)
+            metadata = record.entry_metadata[entry.id]
+            if metadata.status != EntryStatus.FINISHED:
+                raise InvalidStateError("Исправить можно только завершённую запись")
+            metadata.result = outcome
+            self.save_lesson(lesson_id)
+            return entry
 
     def active_entry(self, course_id, github) -> tuple[QueueRecord, QueueEntry] | None:
         """Активная запись студента (waiting/called) в пределах курса."""
