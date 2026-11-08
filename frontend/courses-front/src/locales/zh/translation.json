@@ -31,7 +31,14 @@
     "starts": "开始时间（莫斯科）",
     "ends": "结束时间（莫斯科）",
     "cancelConfirm": "取消课程并关闭报名？",
-    "restoreConfirm": "恢复此课程？"
+    "restoreConfirm": "恢复此课程？",
+    "createLesson": "添加课程",
+    "groupIds": "班组（逗号分隔）",
+    "groupsRequired": "请填写至少一个班组。",
+    "loginRequired": "请以教师身份登录。",
+    "otherDates": "其他日期的课程",
+    "dateTimeRequired": "请填写开始与结束日期及时间。",
+    "dateTimePlaceholder": "DD.MM.YYYY HH:mm"
   },
   "queueDetail": {
     "fullName": "姓名",
@@ -363,7 +370,9 @@
       "called": "答辩中",
       "finished": "已结束",
       "withdrawn": "已退出",
-      "expired": "已过期"
-    }
+      "expired": "已过期",
+      "absent": "未到场"
+    },
+    "absent": "未到场"
   }
 }

@@ -190,7 +190,9 @@ lab_grader_web/
 | POST | `/admin/login` | Вход в админ-панель |
 | GET | `/admin/check-auth` | Проверка аутентификации |
 | POST | `/admin/logout` | Выход из системы |
-| GET | `/admin/courses/{course_id}/queues` | Занятия недели, включая отменённые и перенесённые с этой недели |
+| GET | `/admin/courses/{course_id}/queues` | Занятия недели, перенесённые с этой недели и созданные вручную на любые даты |
+| POST | `/admin/courses/{course_id}/queues` | Создать занятие на любую дату для одной или нескольких групп |
+| POST | `/admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}/finish` | Завершить запись вызванного студента; `outcome: "absent"` — неявка |
 | GET | `/admin/courses/{course_id}/queues/{queue_id}` | Очередь с ФИО, GitHub, работой и местом студента |
 | PUT | `/admin/courses/{course_id}/queues/{queue_id}/registration` | Открыть/закрыть запись: `closed` |
 | PATCH | `/admin/courses/{course_id}/queues/{queue_id}` | Отменить/восстановить (`cancelled`), перенести (`lesson_starts_at`, `lesson_ends_at`, ISO 8601 с часовым поясом) |

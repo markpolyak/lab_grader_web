@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
+import { RegistrationStatus } from "../registration-status";
 import { Alert } from "@mui/material";
 import { Spin } from "antd";
 import { fetchCourseLessons } from "../../api";
@@ -119,7 +120,7 @@ export function QueueLessons({ courseId, onBack }) {
                     </LessonDate>
                     <LessonDetails>
                       <Subject>{schedule.course_name}</Subject>
-                      {lesson.cancelled && <Detail>{t("adminQueues.cancelled")}</Detail>}
+                      <RegistrationStatus closed={lesson.queue.closed} cancelled={lesson.cancelled} />
                       {lesson.original_starts_at && <Detail>{t("adminQueues.movedFrom", { date: dateFormatter.format(new Date(lesson.original_starts_at)) })}</Detail>}
                       <Detail>{lesson.kind}</Detail>
                       <Detail>{t("queueLessons.groups")}: {lesson.groups.join(", ") || "—"}</Detail>

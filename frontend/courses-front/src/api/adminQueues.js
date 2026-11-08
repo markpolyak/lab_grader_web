@@ -19,4 +19,5 @@ export const fetchAdminQueue = (courseId, queueId, options) => adminRequest(`${c
 export const setQueueRegistration = (courseId, queueId, closed) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}/registration`, { method: "PUT", body: { closed } });
 export const updateAdminQueue = (courseId, queueId, body) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}`, { method: "PATCH", body });
 export const callNextStudent = (courseId, queueId) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}/call-next`, { method: "POST" });
-export const finishStudent = (courseId, queueId, entryId) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}/entries/${encodeURIComponent(entryId)}/finish`, { method: "POST", body: {} });
+export const finishStudent = (courseId, queueId, entryId, outcome) => adminRequest(`${coursePath(courseId)}/${encodeURIComponent(queueId)}/entries/${encodeURIComponent(entryId)}/finish`, { method: "POST", body: outcome ? { outcome } : {} });
+export const createAdminLesson = (courseId, body) => adminRequest(coursePath(courseId), { method: "POST", body });

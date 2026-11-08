@@ -43,6 +43,14 @@ TERMINAL_STATUSES = frozenset(
 )
 
 
+def _is_queue_lesson(kind: str) -> bool:
+    """Очереди формируются только для лабораторных и практических занятий."""
+    return kind.strip().casefold().rstrip(".") in {
+        "лабораторное занятие", "лабораторная работа", "лр", "лб",
+        "практическое занятие", "практическая работа", "практика", "пр", "пз",
+    }
+
+
 def _full_name(student) -> str:
     return " ".join(
         part for part in (student.surname, student.name, student.patronymic) if part
@@ -142,6 +150,8 @@ class QueueService:
                 if not week_start <= lesson_date < week_end:
                     continue
                 for item in items:
+                    if not _is_queue_lesson(item.get("kind", "")):
+                        continue
                     for course_id, schedule in schedules.items():
                         if item.get("subject") != schedule.course_name:
                             continue
@@ -196,9 +206,12 @@ class QueueService:
                         continue
                     if record.id in self._archived_lesson_ids:
                         continue
+                    if not record.manual and not _is_queue_lesson(record.lesson_kind):
+                        continue
                     if record.lesson_starts_at is None or record.lesson_ends_at is None:
                         continue
-                    if not (week_start <= record.lesson_starts_at.astimezone(ZoneInfo("Europe/Moscow")).date() < week_end):
+                    in_week = week_start <= record.lesson_starts_at.astimezone(ZoneInfo("Europe/Moscow")).date() < week_end
+                    if not record.manual and not in_week:
                         continue
                     lesson = self._lessons.get(record.id)
                     if lesson is None:
@@ -207,7 +220,7 @@ class QueueService:
                             starts_at=record.lesson_starts_at,
                             ends_at=record.lesson_ends_at,
                             groups=tuple(group_ids(record)),
-                            kind="Внештатное занятие" if record.manual else record.lesson_kind,
+                            kind=record.lesson_kind if _is_queue_lesson(record.lesson_kind) else "Практическое занятие",
                             room=record.lesson_room,
                             queue=record.queue,
                             cancelled=record.cancelled,
@@ -221,7 +234,22 @@ class QueueService:
                         lesson.cancelled = record.cancelled
                         lesson.original_starts_at = record.original_starts_at
                     self._records[record.id] = record
-                    schedule.lessons.append(lesson)
+                    if record.manual:
+                        lesson.kind = record.lesson_kind if _is_queue_lesson(record.lesson_kind) else "Практическое занятие"
+                    if in_week:
+                        schedule.lessons.append(lesson)
+                    if record.manual:
+                        # Keep arbitrary-date manual lessons manageable and
+                        # available to the history service after a restart.
+                        lesson_date = lesson.starts_at.astimezone(ZoneInfo("Europe/Moscow")).date()
+                        monday = lesson_date - timedelta(days=lesson_date.weekday())
+                        context_id = uuid5(NAMESPACE_URL, repr((course_id, monday.isoformat())))
+                        context = self._schedules.setdefault(context_id, Schedule(
+                            id=context_id, course_id=course_id,
+                            course_name=schedule.course_name, week_start=monday,
+                        ))
+                        if all(item.id != lesson.id for item in context.lessons):
+                            context.lessons.append(lesson)
 
                 schedule.lessons.sort(key=lambda lesson: (
                     lesson.starts_at, lesson.groups, lesson.kind,
@@ -317,18 +345,19 @@ class QueueService:
     def get_lesson(self, course_id, lesson_id) -> Lesson | None:
         with self._lock:
             record = self._records.get(lesson_id)
-            return self._lessons.get(lesson_id) if record is not None and record.course_id == course_id else None
+            lesson = self._lessons.get(lesson_id)
+            return lesson if record is not None and record.course_id == course_id and lesson is not None and _is_queue_lesson(lesson.kind) else None
 
     def admin_lessons(self, course_id, week_start) -> list[Lesson]:
-        """Include lessons moved out of this week, labelled with their new date."""
+        """Include manual lessons on any date and lessons moved out of this week."""
         with self._lock:
             schedule = self.schedules.get(course_id)
             result = {lesson.id: lesson for lesson in schedule.lessons} if schedule else {}
             for lesson_id, record in self._records.items():
                 original = record.original_starts_at
-                if record.course_id == course_id and original is not None and week_start <= original.date() < week_start + timedelta(days=7):
+                if record.course_id == course_id and (record.manual or original is not None and week_start <= original.date() < week_start + timedelta(days=7)):
                     lesson = self._lessons.get(lesson_id)
-                    if lesson is not None:
+                    if lesson is not None and _is_queue_lesson(lesson.kind):
                         result[lesson_id] = lesson
             return sorted(result.values(), key=lambda item: (item.starts_at, item.groups, item.kind))
 
@@ -369,13 +398,11 @@ class QueueService:
     ) -> QueueRecord:
         """Создать внештатную очередь, которой нет в YAML расписания."""
         groups = tuple(
-            sorted({str(group) for group in group_ids if str(group).strip()})
+            sorted({str(group).strip() for group in group_ids if str(group).strip()})
         )
         if not groups:
             raise ValueError("Укажите хотя бы одну группу")
         _validate_lesson_times(starts_at, ends_at)
-        if not (week_start <= starts_at.date() < week_start + timedelta(days=7)):
-            raise ValueError("Внештатное занятие должно попадать в текущую неделю")
 
         with self._lock:
             lesson = Lesson(
@@ -383,7 +410,7 @@ class QueueService:
                 starts_at=starts_at,
                 ends_at=ends_at,
                 groups=groups,
-                kind="Внештатное занятие",
+                kind="Практическое занятие",
                 queue=Queue(closed=closed),
             )
             record = QueueRecord(
@@ -397,6 +424,7 @@ class QueueService:
                 lesson_ends_at=ends_at,
                 queue=lesson.queue,
                 manual=True,
+                lesson_kind=lesson.kind,
             )
             _validate_registration(record)
 
@@ -412,15 +440,26 @@ class QueueService:
                     week_start=week_start,
                 )
                 self.schedules[course_id] = schedule
-            self._schedules[schedule.id] = schedule
-            schedule.lessons.append(lesson)
-            schedule.lessons.sort(
-                key=lambda item: (item.starts_at, item.groups, item.kind)
-            )
+            lesson_date = starts_at.astimezone(ZoneInfo("Europe/Moscow")).date()
+            monday = lesson_date - timedelta(days=lesson_date.weekday())
+            context_id = uuid5(NAMESPACE_URL, repr((course_id, monday.isoformat())))
+            context = self._schedules.setdefault(context_id, Schedule(
+                id=context_id, course_id=course_id,
+                course_name=course_name, week_start=monday,
+            ))
+
+            # Persist before publishing the lesson in either list.
+            saved = self.repository.create(record)
+            saved.queue = lesson.queue
+            context.lessons.append(lesson)
+            if schedule.week_start == monday and context is not schedule:
+                schedule.lessons.append(lesson)
+            for item in (context, schedule):
+                item.lessons.sort(key=lambda lesson: (lesson.starts_at, lesson.groups, lesson.kind))
 
             self._lessons[lesson.id] = lesson
-            self._records[lesson.id] = record
-            return self.save_lesson(lesson.id)
+            self._records[lesson.id] = saved
+            return saved
 
     def update_queue(
         self,
@@ -677,8 +716,15 @@ class QueueService:
             if entry is None:
                 raise EntryNotFoundError(entry_id)
             metadata = record.entry_metadata[entry.id]
-            if metadata.status != EntryStatus.CALLED:
-                raise InvalidStateError("Завершить можно только вызванную запись")
+            first_waiting = next((item for item in lesson.queue.entries
+                                  if record.entry_metadata[item.id].status == EntryStatus.WAITING), None)
+            waiting_absence = (
+                outcome == DefenseResult.ABSENT
+                and metadata.status == EntryStatus.WAITING
+                and first_waiting is not None and first_waiting.id == entry.id
+            )
+            if metadata.status != EntryStatus.CALLED and not waiting_absence:
+                raise InvalidStateError("Неявку можно отметить у первого ожидающего; завершить защиту — у вызванного")
             metadata.status = EntryStatus.FINISHED
             metadata.result = outcome
             metadata.finished_at = now or _now()

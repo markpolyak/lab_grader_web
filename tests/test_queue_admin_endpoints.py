@@ -86,7 +86,7 @@ def test_lists_current_week_queues_without_private_data(endpoint):
     assert data["course_name"] == "Операционные системы"
     assert data["week_start"] == "2026-11-09"
     assert data["week_end"] == "2026-11-15"
-    assert len(data["queues"]) == 4
+    assert len(data["queues"]) == 3
 
     first = data["queues"][0]
     assert first["queue_id"] == str(lesson.id)
@@ -120,7 +120,7 @@ def test_filters_by_group_and_date(endpoint):
 
     assert (
         len(client.get("/admin/courses/os-2026/queues?group_id=4432").json()["queues"])
-        == 2
+        == 1
     )
     assert (
         len(client.get("/admin/courses/os-2026/queues?date=2026-11-09").json()["queues"])
@@ -544,7 +544,7 @@ def test_create_manual_queue_and_see_it_in_list(endpoint):
     detail = client.get(f"/admin/courses/os-2026/queues/{queue_id}")
     assert detail.status_code == 200
     assert detail.json()["closed"] is False
-    assert detail.json()["lesson"]["kind"] == "Внештатное занятие"
+    assert detail.json()["lesson"]["kind"] == "Практическое занятие"
     assert detail.json()["lesson"]["groups"] == ["4431"]
 
     listed = client.get("/admin/courses/os-2026/queues?date=2026-11-09")
@@ -569,7 +569,7 @@ def test_create_manual_queue_validates_times_and_requires_admin(endpoint):
     ).status_code == 422
 
 
-def test_update_queue_accepts_scheduled_times_and_rejects_out_of_week_creation(endpoint):
+def test_update_queue_accepts_scheduled_times_and_arbitrary_date_creation(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
     authenticate(client)
@@ -588,7 +588,55 @@ def test_update_queue_accepts_scheduled_times_and_rejects_out_of_week_creation(e
             "lesson_ends_at": "2026-11-16T21:30:00+03:00",
         },
     )
-    assert out_of_week.status_code == 422
+    assert out_of_week.status_code == 201
+    queue_id = out_of_week.json()["queue_id"]
+    assert client.get(f"/admin/courses/os-2026/queues/{queue_id}").status_code == 200
+    listed = client.get("/admin/courses/os-2026/queues").json()["queues"]
+    assert queue_id in [item["queue_id"] for item in listed]
+    assert queue_id not in [str(item.id) for item in service.schedules["os-2026"].lessons]
+
+
+def test_absent_student_is_terminal_and_visible_in_both_tables(endpoint):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+    lesson.queue.closed = False
+    entry = lesson.queue.add_entry(Student("Иван", "Иванов", "", "absent-student"), "1", "ЛР1")
+    path = f"/admin/courses/os-2026/queues/{lesson.id}"
+    authenticate(client)
+    command = path + f"/entries/{entry.id}/finish"
+    response = client.post(command, json={"outcome": "absent"})
+    assert response.status_code == 200
+    assert response.json()["entry"]["result"] == "absent"
+    assert response.json()["entry"]["status"] == "finished"
+    assert response.json()["entry"]["absent"] is True
+    assert response.json()["entry"]["called_at"] is None
+    admin_entry = client.get(path).json()["entries"][0]
+    public_entry = client.get(f"/courses/os-2026/lessons/{lesson.id}/queue").json()["entries"][0]
+    assert admin_entry["position"] == public_entry["position"] == 1
+    assert admin_entry["absent"] is public_entry["absent"] is True
+    assert "result" not in public_entry
+    assert service.active_entry("os-2026", "absent-student") is None
+    assert client.post(command, json={"outcome": "absent"}).status_code == 409
+
+
+def test_waiting_absence_cannot_skip_the_next_student(endpoint):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+    lesson.queue.closed = False
+    entries = [lesson.queue.add_entry(Student(str(i), "Тест", "", f"fifo-{i}"), "1") for i in range(4)]
+    path = f"/admin/courses/os-2026/queues/{lesson.id}"
+    authenticate(client)
+    def absent(entry):
+        return client.post(path + f"/entries/{entry.id}/finish", json={"outcome": "absent"})
+    assert absent(entries[1]).status_code == 409
+    assert client.post(path + "/call-next").json()["entry"]["id"] == str(entries[0].id)
+    assert absent(entries[2]).status_code == 409
+    assert absent(entries[1]).status_code == 200
+    assert absent(entries[3]).status_code == 409
+    assert client.post(path + "/call-next").json()["entry"]["id"] == str(entries[2].id)
+    data = client.get(path).json()
+    assert [entry["status"] for entry in data["entries"]] == ["called", "finished", "called", "waiting"]
+    assert data["entries"][1]["absent"] is True
 
 
 def test_update_queue_times_and_window(endpoint):

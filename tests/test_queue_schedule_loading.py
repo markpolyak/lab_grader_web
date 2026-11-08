@@ -38,7 +38,7 @@ def test_lifespan_loads_seed_and_reloads_after_parser_job(tmp_path, monkeypatch)
         async with main.lifespan(app):
             service = app.state.queue_service
             lesson = service.schedules["os"].lessons[0]
-            assert len(service.schedules["os"].lessons) == 4
+            assert len(service.schedules["os"].lessons) == 3
             callback = parser.scheduler.add_listener.call_args.args[0]
             updated = deepcopy(document)
             updated["days"]["2026-11-09"][0]["room"] = "Новая аудитория"

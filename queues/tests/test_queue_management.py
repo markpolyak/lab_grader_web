@@ -57,14 +57,14 @@ def test_manual_queue_is_created_and_restored_after_restart(tmp_path):
     lesson = next(
         item for item in service.schedules["os-2026"].lessons if item.id == record.id
     )
-    assert lesson.kind == "Внештатное занятие"
+    assert lesson.kind == "Практическое занятие"
     assert lesson.groups == ("4431",)
     assert lesson.queue.closed is False
 
     restored = build(tmp_path)
     lessons = {item.id: item for item in restored.schedules["os-2026"].lessons}
     assert record.id in lessons
-    assert lessons[record.id].kind == "Внештатное занятие"
+    assert lessons[record.id].kind == "Практическое занятие"
     assert lessons[record.id].queue.closed is False
     assert restored.get_record(record.id).manual is True
 
@@ -118,18 +118,26 @@ def test_update_queue_preserves_scheduled_lesson_override(tmp_path):
     assert lesson.original_starts_at.hour == 15
 
 
-def test_manual_queue_must_be_in_the_current_week(tmp_path):
+@pytest.mark.parametrize("days", [-14, 7, 60, 400])
+def test_manual_queue_can_have_any_date_and_survives_restart(tmp_path, days):
     service = build(tmp_path)
-
-    with pytest.raises(ValueError):
-        service.create_manual(
-            "os-2026",
-            "Операционные системы",
-            week_start=MONDAY,
-            group_ids=["4431"],
-            starts_at=datetime(2026, 11, 16, 20, 0, tzinfo=TZ),
-            ends_at=datetime(2026, 11, 16, 21, 30, tzinfo=TZ),
-        )
+    starts = datetime(2026, 11, 9, 20, tzinfo=TZ) + timedelta(days=days)
+    record = service.create_manual(
+        "os-2026", "Операционные системы", week_start=MONDAY,
+        group_ids=[" 4431 ", "4432", "4431"],
+        starts_at=starts, ends_at=starts + timedelta(minutes=90),
+    )
+    assert record.group_id == "4431,4432"
+    assert all(item.id != record.id for item in service.schedules["os-2026"].lessons)
+    restored = build(tmp_path)
+    lesson = restored.get_lesson("os-2026", record.id)
+    assert lesson.starts_at == starts
+    assert lesson.groups == ("4431", "4432")
+    assert record.id in [item.id for item in restored.admin_lessons("os-2026", MONDAY)]
+    assert all(item.id != record.id for item in restored.schedules["os-2026"].lessons)
+    target_week = starts.date() - timedelta(days=starts.weekday())
+    restored.load_saved_week(COURSES, SCHEDULE_DIR, week_start=target_week)
+    assert record.id in [item.id for item in restored.schedules["os-2026"].lessons]
 
 
 def test_delete_manual_empty_queue(tmp_path):

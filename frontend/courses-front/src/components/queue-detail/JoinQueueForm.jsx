@@ -76,7 +76,7 @@ export function JoinQueueForm({ courseId, snapshot, revision, onChanged, onOwnEn
   return (
     <Panel>
       <Heading>{t("queueDetail.joinTitle")}</Heading>
-      {snapshot.closed && <Alert severity="info">{t("queueDetail.closed")}</Alert>}
+      {snapshot.closed && <Alert severity="error">{t("queueDetail.closed")}</Alert>}
       {ownEntry && (
         <Alert severity={ownEntry.status === "called" ? "success" : "info"}>
           {ownEntry.lesson_id !== snapshot.queue_id ? (

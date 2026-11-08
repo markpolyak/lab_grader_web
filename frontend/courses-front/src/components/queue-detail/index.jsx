@@ -11,6 +11,7 @@ import { Page, Navigation, BackButton, Title } from "../course-actions/styled";
 import { Status, Description, RetryButton } from "../queue-lessons/styled";
 import { JoinQueueForm } from "./JoinQueueForm";
 import { QueueTable } from "../queue-table";
+import { RegistrationStatus } from "../registration-status";
 import { queueErrorKey } from "./state";
 import { Content, Panel, Heading, Muted } from "./styled";
 
@@ -62,7 +63,7 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
             <Description>{snapshot.course_name}</Description>
             <Description>{dateTime.format(new Date(snapshot.lesson.starts_at))} · {t("queueDetail.moscowTime")}</Description>
             <Description>{snapshot.lesson.kind} · {t("queueLessons.groups")}: {snapshot.lesson.groups.join(", ")}{snapshot.lesson.room ? ` · ${snapshot.lesson.room}` : ""}</Description>
-            {snapshot.lesson.cancelled && <Alert severity="warning">{t("adminQueues.cancelled")}</Alert>}
+            <RegistrationStatus closed={snapshot.closed} cancelled={snapshot.lesson.cancelled} />
             {snapshot.lesson.original_starts_at && <Description>{t("adminQueues.movedFrom", { date: dateTime.format(new Date(snapshot.lesson.original_starts_at)) })}</Description>}
             <Panel aria-live="polite">
               <Heading>{t("queueDetail.participants")}</Heading>

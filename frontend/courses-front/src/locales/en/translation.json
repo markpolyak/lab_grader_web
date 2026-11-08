@@ -28,10 +28,17 @@
     "cancelLesson": "Cancel lesson",
     "finished": "Completed entries",
     "waiting": "Waiting",
-    "starts": "Lesson starts (Moscow)",
-    "ends": "Lesson ends (Moscow)",
+    "starts": "Lesson starts",
+    "ends": "Lesson ends",
     "cancelConfirm": "Cancel this lesson and close registration?",
-    "restoreConfirm": "Restore this lesson?"
+    "restoreConfirm": "Restore this lesson?",
+    "createLesson": "Add lesson",
+    "groupIds": "Groups (comma-separated)",
+    "groupsRequired": "Enter at least one group.",
+    "loginRequired": "Sign in as a teacher.",
+    "otherDates": "Lessons on other dates",
+    "dateTimeRequired": "Enter the start and end date and time.",
+    "dateTimePlaceholder": "DD.MM.YYYY HH:mm"
   },
   "queueDetail": {
     "fullName": "Full name",
@@ -360,7 +367,9 @@
       "called": "Defending",
       "finished": "Finished",
       "withdrawn": "Withdrawn",
-      "expired": "Expired"
-    }
+      "expired": "Expired",
+      "absent": "Absent"
+    },
+    "absent": "Absent"
   }
 }
