@@ -60,7 +60,9 @@ groups:
                 FakeSheet("4433"),
                 FakeSheet("Example"),
                 FakeSheet("Queue"),
+                FakeSheet("Очередь-08.11.2026"),
                 FakeSheet("History"),
+                FakeSheet("История"),
                 FakeSheet("Info"),
             ]
 
@@ -92,6 +94,14 @@ def test_schedule_groups_endpoint_merges_sheet_and_manual_groups(schedule_admin_
         "manual_groups": ["4432"],
         "warnings": [],
     }
+
+
+def test_course_groups_endpoint_returns_only_numeric_group_sheets(schedule_admin_client):
+    client, _, _ = schedule_admin_client
+    response = client.get("/courses/test-course/groups")
+
+    assert response.status_code == 200
+    assert response.json() == ["4433"]
 
 
 def test_save_manual_groups_updates_schedule_yaml(schedule_admin_client):
