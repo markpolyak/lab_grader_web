@@ -2613,6 +2613,10 @@ def schedule_sessions(
             course_name=course_name,
             auto_open_minutes=auto_open_minutes,
             auto_close_minutes=auto_close_minutes,
+            corrections=group_config.get("corrections", []),
+            queue_settings=group_config.get(
+                "queue_settings", schedule_defaults.get("queue_settings", {})
+            ),
         )
         try:
             sessions = list(live_source.list_sessions(group_id, since, until))

@@ -91,6 +91,119 @@ def test_guap_sessions_filter_live_group_lessons_by_course():
     assert sessions[0].teacher == "Teacher"
 
 
+def test_guap_sessions_respect_week_parity_and_yaml_keeps_both_weeks():
+    source = guap_module.GuapScheduleSource(
+        group_code="4432",
+        course_id="test-course",
+        course_name="Test Course",
+    )
+    source.fetch_raw = lambda _group_code: [
+        SimpleNamespace(
+            day="Понедельник",
+            slot=1,
+            week=guap_module.WEEK_ODD,
+            kind="ЛР",
+            subject="Test Course",
+            teachers=[],
+        ),
+        SimpleNamespace(
+            day="Понедельник",
+            slot=2,
+            week=guap_module.WEEK_EVEN,
+            kind="ЛР",
+            subject="Test Course",
+            teachers=[],
+        ),
+        SimpleNamespace(
+            day="Понедельник",
+            slot=3,
+            week=guap_module.WEEK_ANY,
+            kind="ЛР",
+            subject="Test Course",
+            teachers=[],
+        ),
+    ]
+
+    sessions = list(
+        source.list_sessions(
+            "4432",
+            datetime(2026, 11, 9),
+            datetime(2026, 11, 17),
+        )
+    )
+
+    assert [
+        (session.starts_at.date().isoformat(), session.slot_id)
+        for session in sessions
+    ] == [
+        ("2026-11-09", "guap-mon-2-even"),
+        ("2026-11-09", "guap-mon-3"),
+        ("2026-11-16", "guap-mon-1-odd"),
+        ("2026-11-16", "guap-mon-3"),
+    ]
+    assert [
+        (slot["id"], slot["recurrence"]["week"])
+        for slot in source.to_yaml_sessions(source.fetch_raw("4432"))
+    ] == [
+        ("guap-mon-1-odd", "odd"),
+        ("guap-mon-2-even", "even"),
+        ("guap-mon-3", "all"),
+    ]
+
+
+def test_guap_sessions_apply_date_corrections():
+    source = guap_module.GuapScheduleSource(
+        group_code="4432",
+        course_id="test-course",
+        course_name="Test Course",
+        corrections=[
+            {
+                "id": "cancel-monday",
+                "date": "2026-11-09",
+                "remove_slots": [{"slot_id": "guap-mon-1"}],
+            },
+            {
+                "id": "add-monday",
+                "date": "2026-11-16",
+                "add_slots": [
+                    {
+                        "id": "teacher-added",
+                        "start": "12:00",
+                        "end": "13:00",
+                        "subject": "Make-up lab",
+                        "room": "Room 2",
+                    }
+                ],
+            },
+        ],
+    )
+    source.fetch_raw = lambda _group_code: [
+        SimpleNamespace(
+            day="Понедельник",
+            slot=1,
+            week=guap_module.WEEK_EVEN,
+            kind="ЛР",
+            subject="Test Course",
+            teachers=[],
+        )
+    ]
+
+    sessions = list(
+        source.list_sessions(
+            "4432",
+            datetime(2026, 11, 9),
+            datetime(2026, 11, 17),
+        )
+    )
+
+    assert [
+        (session.starts_at.date().isoformat(), session.slot_id)
+        for session in sessions
+    ] == [("2026-11-16", "teacher-added")]
+    assert sessions[0].subject == "Make-up lab"
+    assert sessions[0].room == "Room 2"
+
+
 def _write_schedule_config(path):
     path.write_text(
         """# Keep this teacher note.

@@ -1,14 +1,15 @@
 """Fetch group-specific GUAP schedules and expose matching lab sessions."""
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Iterable
 
 from suai_rasp.fetch import Fetcher
-from suai_rasp.model import LESSON_TIMES
+from suai_rasp.model import LESSON_TIMES, WEEK_ANY, WEEK_EVEN, WEEK_ODD
 from suai_rasp.parse import parse_directories, parse_lessons
 
 from .base import ScheduleSource, ScheduledSession, ScheduleConfigError
+from .manual import ManualScheduleSource
 from .registry import register_source
 
 
@@ -35,6 +36,13 @@ GUAP_SLOTS = {
 }
 
 DEFAULT_LAB_KINDS = ("ЛР", "Лабораторная", "Лабораторное занятие")
+GUAP_WEEKS = {
+    WEEK_ANY: "all",
+    WEEK_ODD: "odd",
+    WEEK_EVEN: "even",
+}
+
+
 def normalize_subject(value: str | None) -> str:
     """Normalize whitespace and case for exact course-title matching."""
     return " ".join(str(value or "").split()).casefold()
@@ -58,6 +66,8 @@ class GuapScheduleSource(ScheduleSource):
         course_name: str | None = None,
         auto_open_minutes: int = 15,
         auto_close_minutes: int = 10,
+        corrections: list[dict] | None = None,
+        queue_settings: dict | None = None,
     ):
         self._group_code = group_code
         self._lab_kinds = tuple(lab_kinds)
@@ -65,6 +75,8 @@ class GuapScheduleSource(ScheduleSource):
         self._course_name = normalize_subject(course_name)
         self._auto_open_minutes = auto_open_minutes
         self._auto_close_minutes = auto_close_minutes
+        self._corrections = list(corrections or [])
+        self._queue_settings = dict(queue_settings or {})
         self._fetcher: Fetcher | None = None
         self._group_directory: dict[int, str] | None = None
 
@@ -115,7 +127,7 @@ class GuapScheduleSource(ScheduleSource):
 
         Each returned dict has:
           id:          "guap-<weekday>-<slot>" (e.g. "guap-mon-3")
-          recurrence:  {day: "monday", week: "all"}   (GUAP doesn't expose parity)
+          recurrence:  {day: "monday", week: "all|odd|even"}
           start:       "HH:MM"
           end:         "HH:MM"
           subject:     "..."
@@ -135,7 +147,7 @@ class GuapScheduleSource(ScheduleSource):
         otherwise serialize them with !!python/object: tags that
         yaml.safe_load can't read back.
         """
-        seen_keys: set[tuple[int, int]] = set()
+        seen_keys: set[tuple[int, int, int]] = set()
         out: list[dict] = []
         for lesson in raw_lessons:
             kind = getattr(lesson, 'kind', None)
@@ -149,17 +161,24 @@ class GuapScheduleSource(ScheduleSource):
             if slot is None:
                 continue
             slot = int(slot)
-            key = (iso, slot)
+            week = getattr(lesson, 'week', WEEK_ANY)
+            if week not in GUAP_WEEKS:
+                week = WEEK_ANY
+            key = (iso, slot, week)
             if key in seen_keys:
                 continue
             seen_keys.add(key)
 
-            start_t, end_t = GUAP_SLOTS.get(slot, (time(9, 0), time(21, 10)))
+            lesson_day = date(2024, 1, 1) + timedelta(days=iso)
+            starts_at, ends_at = self._lesson_times(lesson, lesson_day)
             out.append({
-                'id': f"guap-{ISO_TO_SHORT_DAY[iso]}-{slot}",
-                'recurrence': {'day': ISO_TO_YAML_DAY[iso], 'week': 'all'},
-                'start': str(start_t.isoformat()),
-                'end': str(end_t.isoformat()),
+                'id': self._slot_id(iso, slot, week),
+                'recurrence': {
+                    'day': ISO_TO_YAML_DAY[iso],
+                    'week': GUAP_WEEKS[week],
+                },
+                'start': starts_at.time().isoformat(),
+                'end': ends_at.time().isoformat(),
                 'subject': str(getattr(lesson, 'subject', '') or ''),
                 'room': str(getattr(lesson, 'room', '') or ''),
                 'teacher': ", ".join(
@@ -178,43 +197,62 @@ class GuapScheduleSource(ScheduleSource):
         until: datetime,
     ) -> Iterable[ScheduledSession]:
         lessons = self.fetch_raw(self._group_code or group_id)
-        day = since.date()
-        last = until.date()
-        while day <= last:
-            weekday = day.weekday()
-            for lesson in lessons:
-                if GUAP_WEEKDAYS.get(getattr(lesson, 'day', None)) != weekday:
-                    continue
-                if getattr(lesson, 'kind', None) not in self._lab_kinds:
-                    continue
-                subject = str(getattr(lesson, 'subject', '') or '')
-                if self._course_name and normalize_subject(subject) != self._course_name:
-                    continue
-                starts_at, ends_at = self._lesson_times(lesson, day)
-                if starts_at < since or starts_at >= until:
-                    continue
-                room_value = getattr(lesson, 'room', None)
-                room = str(room_value) if room_value else None
-                teachers = getattr(lesson, 'teachers', [])
-                teacher = ", ".join(str(value) for value in teachers) or None
-                yield ScheduledSession(
-                    course_id=self._course_id,
-                    group_id=group_id,
-                    subject=subject or 'Лабораторная',
-                    starts_at=starts_at,
-                    ends_at=ends_at,
-                    auto_open_at=starts_at - timedelta(minutes=self._auto_open_minutes),
-                    auto_close_at=ends_at + timedelta(minutes=self._auto_close_minutes),
-                    source='guap',
-                    slot_id=f"guap-{ISO_TO_SHORT_DAY[weekday]}-{getattr(lesson, 'slot', '?')}",
-                    allowed_lab_ids=None,  # GUAP doesn't know our lab ids
-                    room=room,
-                    teacher=teacher,
-                    raw={'day': getattr(lesson, 'day', None),
-                         'slot': getattr(lesson, 'slot', None),
-                         'kind': getattr(lesson, 'kind', None)},
-                )
-            day += timedelta(days=1)
+        if self._course_name:
+            lessons = [
+                lesson for lesson in lessons
+                if normalize_subject(getattr(lesson, "subject", ""))
+                == self._course_name
+            ]
+        slots = self.to_yaml_sessions(lessons)
+        source = ManualScheduleSource(
+            course_id=self._course_id,
+            group_id=group_id,
+            group_cfg={
+                "source": "guap",
+                "auto_open_minutes_before": self._auto_open_minutes,
+                "auto_close_minutes_after": self._auto_close_minutes,
+                "queue_settings": self._queue_settings,
+                "slots": slots,
+                "corrections": self._corrections_for_slots(slots),
+            },
+        )
+        yield from source.list_sessions(group_id, since, until)
+
+    @staticmethod
+    def _slot_id(weekday: int, slot: int, week: int) -> str:
+        base = f"guap-{ISO_TO_SHORT_DAY[weekday]}-{slot}"
+        if week == WEEK_ODD:
+            return f"{base}-odd"
+        if week == WEEK_EVEN:
+            return f"{base}-even"
+        return base
+
+    def _corrections_for_slots(self, slots: list[dict]) -> list[dict]:
+        """Expand legacy slot IDs to parity-specific IDs after a refresh."""
+        slot_ids = {slot["id"] for slot in slots}
+        corrections = []
+        for correction in self._corrections:
+            copied = dict(correction)
+            remove_slots = []
+            for removal in correction.get("remove_slots", []) or []:
+                copied_removal = dict(removal)
+                slot_id = copied_removal.get("slot_id")
+                if slot_id not in slot_ids:
+                    matching_ids = [
+                        candidate for candidate in slot_ids
+                        if candidate.startswith(f"{slot_id}-")
+                    ]
+                    if matching_ids:
+                        remove_slots.extend(
+                            {**copied_removal, "slot_id": matching_id}
+                            for matching_id in matching_ids
+                        )
+                        continue
+                remove_slots.append(copied_removal)
+            if "remove_slots" in correction:
+                copied["remove_slots"] = remove_slots
+            corrections.append(copied)
+        return corrections
 
     # ------------------------------------------------------------------
     # Internals

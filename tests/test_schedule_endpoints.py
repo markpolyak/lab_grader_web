@@ -208,6 +208,36 @@ def test_schedule_sessions_fetches_guap_group_and_course_on_demand(
     assert captured["query"][0] == "М433"
 
 
+def test_schedule_sessions_passes_guap_corrections(schedule_admin_client, monkeypatch):
+    client, _, schedule_path = schedule_admin_client
+    data = yaml.safe_load(schedule_path.read_text(encoding="utf-8"))
+    corrections = [
+        {
+            "id": "cancel-session",
+            "date": "2026-11-09",
+            "remove_slots": [{"slot_id": "guap-mon-1"}],
+        }
+    ]
+    data["groups"]["4432"]["corrections"] = corrections
+    schedule_path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    captured = {}
+
+    class FakeGuapScheduleSource:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def list_sessions(self, group_id, since, until):
+            return []
+
+    monkeypatch.setattr(main_module, "GuapScheduleSource", FakeGuapScheduleSource)
+    response = client.get(
+        "/admin/courses/test-course/groups/4432/schedule/sessions"
+    )
+
+    assert response.status_code == 200
+    assert captured["corrections"] == corrections
+
+
 def test_schedule_sessions_keeps_manual_yaml_source(schedule_admin_client, monkeypatch):
     client, _, schedule_path = schedule_admin_client
     schedule_path.write_text(
