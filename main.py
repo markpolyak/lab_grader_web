@@ -369,6 +369,9 @@ signer = TimestampSigner(SECRET_KEY)
 
 # Course index management
 INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
+# One backend process owns course configuration writes, just as it owns queues.
+# Serialize read/validate/write across edits, index updates and uploads.
+_course_config_lock = threading.RLock()
 
 def load_course_index():
     """Load and validate course index file"""
@@ -1470,28 +1473,25 @@ def delete_course(request: Request, course_id: str, admin: str = Depends(require
     Mark course as hidden in index (soft delete)
     The course file is preserved in repository
     """
-    index_data = load_course_index()
-
-    # Find course in index
-    course_found = False
-    for entry in index_data.get("courses", []):
-        if entry.get("id") == course_id:
-            entry["status"] = "hidden"
-            course_found = True
-            break
-
-    if not course_found:
-        raise HTTPException(status_code=404, detail="Курс не найден")
-
-    # Save updated index
-    with open(INDEX_FILE, "w", encoding="utf-8") as f:
-        yaml.dump(index_data, f, allow_unicode=True, sort_keys=False)
+    with _course_config_lock:
+        index_data = load_course_index()
+        for entry in index_data.get("courses", []):
+            if entry.get("id") == course_id:
+                entry["status"] = "hidden"
+                break
+        else:
+            raise HTTPException(status_code=404, detail="Курс не найден")
+        _write_file_atomically(
+            INDEX_FILE, yaml.safe_dump(index_data, allow_unicode=True, sort_keys=False),
+        )
 
     return {"message": "Курс успешно скрыт (файл сохранен в репозитории)"}
 
 
 class EditCourseRequest(BaseModel):
     content: str
+    # Optional for existing API clients; the web editor always sends its base.
+    original_content: str | None = None
 
 
 @app.get("/courses/{course_id}/edit")
@@ -1566,7 +1566,7 @@ def _validate_join_sections(new_data, old_data) -> None:
             )
 
 
-def _write_file_atomically(file_path: str, content: str) -> None:
+def _write_file_atomically(file_path: str, content: str | bytes) -> None:
     """
     Записать файл целиком или не записать вовсе.
 
@@ -1578,8 +1578,8 @@ def _write_file_atomically(file_path: str, content: str) -> None:
     directory = os.path.dirname(os.path.abspath(file_path))
     tmp_fd, tmp_path = tempfile.mkstemp(dir=directory, prefix=".course-", suffix=".yaml.tmp")
     try:
-        with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_file:
-            tmp_file.write(content)
+        with os.fdopen(tmp_fd, "wb") as tmp_file:
+            tmp_file.write(content.encode("utf-8") if isinstance(content, str) else content)
             tmp_file.flush()
             os.fsync(tmp_file.fileno())
         os.replace(tmp_path, file_path)
@@ -1593,25 +1593,27 @@ def _write_file_atomically(file_path: str, content: str) -> None:
 @limiter.limit("20/minute")
 def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, admin: str = Depends(require_admin)):
     """Сохранить изменения в YAML файле курса"""
-    course_info = get_course_by_id(course_id)
-    filename = course_info["_meta"]["filename"]
-
-    file_path = os.path.join(COURSES_DIR, filename)
-
     try:
         new_data = yaml.safe_load(data.content)
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка в YAML формате: {str(e)}")
 
-    try:
+    with _course_config_lock:
+        course_info = get_course_by_id(course_id)
+        file_path = os.path.join(COURSES_DIR, course_info["_meta"]["filename"])
         with open(file_path, "r", encoding="utf-8") as file:
-            old_data = yaml.safe_load(file.read())
-    except (OSError, yaml.YAMLError):
-        old_data = None
-
-    _validate_join_sections(new_data, old_data)
-
-    _write_file_atomically(file_path, data.content)
+            old_content = file.read()
+        if data.original_content is not None and data.original_content != old_content:
+            raise HTTPException(
+                status_code=409,
+                detail="Конфигурация курса уже изменена. Откройте редактор заново перед сохранением.",
+            )
+        try:
+            old_data = yaml.safe_load(old_content)
+        except yaml.YAMLError:
+            old_data = None
+        _validate_join_sections(new_data, old_data)
+        _write_file_atomically(file_path, data.content)
 
     return {"message": "Изменения успешно сохранены"}
 
@@ -3226,11 +3228,6 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
     if not file.filename.endswith(".yaml") and not file.filename.endswith(".yml"):
         raise HTTPException(status_code=400, detail="Только YAML файлы разрешены")
 
-    file_location = os.path.join(COURSES_DIR, file.filename)
-
-    if os.path.exists(file_location):
-        raise HTTPException(status_code=400, detail="Файл с таким именем уже существует")
-
     content = await file.read()
     try:
         course_data = yaml.safe_load(content)
@@ -3241,42 +3238,44 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
     if not isinstance(course_data, dict) or "course" not in course_data:
         raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
 
-    # Save course file
-    with open(file_location, "wb") as f:
-        f.write(content)
+    return await asyncio.to_thread(_store_uploaded_course, file.filename, content)
 
-    # Generate course ID from filename (e.g., 'operating-systems-2025.yaml' -> 'operating-systems-2025')
-    course_id = file.filename.replace(".yaml", "").replace(".yml", "")
 
-    # Update index
-    index_data = load_course_index()
-
-    # Check if ID already exists
-    existing_ids = {entry.get("id") for entry in index_data.get("courses", [])}
-    if course_id in existing_ids:
-        # If ID exists, try appending a number
-        counter = 2
-        while f"{course_id}-{counter}" in existing_ids:
-            counter += 1
-        course_id = f"{course_id}-{counter}"
-
-    # Add new course to index
-    new_entry = {
-        "id": course_id,
-        "file": file.filename,
-        "status": "active",
-        "priority": 0
-    }
-    index_data["courses"].append(new_entry)
-
-    # Save updated index
-    with open(INDEX_FILE, "w", encoding="utf-8") as f:
-        yaml.dump(index_data, f, allow_unicode=True, sort_keys=False)
+def _store_uploaded_course(filename: str, content: bytes) -> dict:
+    """Publish a complete course before adding it to the atomically saved index."""
+    with _course_config_lock:
+        file_location = os.path.join(COURSES_DIR, filename)
+        if os.path.exists(file_location):
+            raise HTTPException(status_code=400, detail="Файл с таким именем уже существует")
+        index_data = load_course_index()
+        course_id = filename.replace(".yaml", "").replace(".yml", "")
+        existing_ids = {entry.get("id") for entry in index_data.get("courses", [])}
+        if course_id in existing_ids:
+            counter = 2
+            while f"{course_id}-{counter}" in existing_ids:
+                counter += 1
+            course_id = f"{course_id}-{counter}"
+        index_data["courses"].append({
+            "id": course_id, "file": filename, "status": "active", "priority": 0,
+        })
+        _write_file_atomically(file_location, content)
+        try:
+            _write_file_atomically(
+                INDEX_FILE, yaml.safe_dump(index_data, allow_unicode=True, sort_keys=False),
+            )
+        except BaseException:
+            # This file was created by this command and has never been indexed.
+            # Keep a failed upload retryable without leaving an orphan behind.
+            try:
+                os.unlink(file_location)
+            except OSError:
+                logger.exception("Не удалось убрать файл неуспешной загрузки курса %s", filename)
+            raise
 
     return {
         "detail": "Курс успешно загружен и добавлен в индекс",
         "course_id": course_id,
-        "filename": file.filename
+        "filename": filename
     }
 
 

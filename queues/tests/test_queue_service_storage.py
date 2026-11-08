@@ -107,7 +107,7 @@ def test_set_registration_persists_and_is_idempotent(tmp_path):
     assert closed.version == 1
 
 
-def test_complete_future_lesson_retries_after_restart_and_removes_state(tmp_path):
+def test_complete_future_lesson_retries_after_restart_and_retains_history(tmp_path):
     import asyncio
     from unittest.mock import AsyncMock
     from queues.usecase.queue_history_service import QueueHistoryService
@@ -138,8 +138,12 @@ def test_complete_future_lesson_retries_after_restart_and_removes_state(tmp_path
         assert restarted.get_record(current.id) is None
         notify.assert_awaited_once_with(current.id)
         stored = restarted.repository.get(current.id)
-        assert stored.archived and not stored.queue.entries
-        assert build(tmp_path).get_lesson('os-2026', current.id) is None
+        assert stored.archived and len(stored.queue.entries) == 1
+        assert stored.entry_metadata[entry.id].status == EntryStatus.EXPIRED
+        restored = build(tmp_path)
+        assert restored.get_lesson('os-2026', current.id) is None
+        assert restored.active_entry('os-2026', 'student') is None
+        assert restored.history('os-2026')[0][0]['status'] == EntryStatus.EXPIRED
 
     asyncio.run(check())
 

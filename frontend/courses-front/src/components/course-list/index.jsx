@@ -142,7 +142,7 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ content: editContent }),
+        body: JSON.stringify({ content: editContent, original_content: originalContent }),
       });
 
       if (response.ok) {

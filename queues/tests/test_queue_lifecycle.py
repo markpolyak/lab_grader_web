@@ -160,7 +160,7 @@ def test_refresh_during_external_save_then_archive_and_restart(state, manual, tm
     assert restarted.get_lesson('os', lesson.id) is None
 
 
-def test_archive_clears_local_state_after_end_of_day_expiry(state, monkeypatch):
+def test_archive_retains_history_after_end_of_day_expiry(state, monkeypatch):
     service, schedule, lesson = state
     entry = service.join(lesson.id, eligible(), now=at('15:10'))
     monkeypatch.setattr('queues.usecase.queue_service._now',
@@ -170,10 +170,11 @@ def test_archive_clears_local_state_after_end_of_day_expiry(state, monkeypatch):
     asyncio.run(QueueHistoryService(service, AsyncMock()).save_history(schedule.id, lesson.id))
     record = service.repository.get(lesson.id)
     assert record.archived
-    assert record.queue.entries == []
-    assert record.entry_metadata == {}
+    assert [item.id for item in record.queue.entries] == [entry.id]
+    assert record.entry_metadata[entry.id].status == EntryStatus.EXPIRED
     items, _ = service.history('os')
-    assert items == []
+    assert items[0]['status'] == EntryStatus.EXPIRED
+    assert items[0]['finished_at'] == at('00:00') + timedelta(days=1)
 
 
 @pytest.mark.parametrize('clock,finished', [

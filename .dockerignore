@@ -2,3 +2,5 @@ __pycache__/
 node_modules/
 .env
 .git
+credentials.json
+google-credentials/
