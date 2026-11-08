@@ -326,6 +326,31 @@ class TestQueueStatus:
         assert data["can_register"] is False
         assert data["next_session"] is not None
 
+    def test_team_lab_can_attempt_registration_with_server_side_ci_check(
+        self, deps, monkeypatch
+    ):
+        course_info = _fake_course_info()
+        lab_config = {**course_info["labs"]["1"], "team": {}}
+        monkeypatch.setattr(
+            main_module, "_resolve_queue_lab",
+            lambda *args: (course_info, "1", lab_config),
+        )
+        monkeypatch.setattr(
+            main_module, "_resolve_queue_team",
+            lambda *args: SimpleNamespace(
+                title="Team One", repo_name="lab1-team-1", members=["alice"]
+            ),
+        )
+
+        data = main_module.queue_status(
+            _mock_request({"student_session": _make_student_cookie()}),
+            "dev-course", "4431", "1",
+        )
+
+        assert data["is_team_lab"] is True
+        assert data["ci_status"] == "unknown"
+        assert data["can_register"] is True
+
 
 class TestQueueRegister:
     def test_register_success(self, deps):
@@ -423,6 +448,67 @@ class TestQueueRegister:
             )
         assert exc.value.status_code == 409
         assert exc.value.detail == "CI_PENDING"
+
+    def test_team_registration_checks_ci_for_team_repository(self, deps, monkeypatch):
+        course_info = _fake_course_info()
+        lab_config = {**course_info["labs"]["1"], "team": {}}
+        monkeypatch.setattr(
+            main_module, "_resolve_queue_lab",
+            lambda *args: (course_info, "1", lab_config),
+        )
+        monkeypatch.setattr(
+            main_module, "_resolve_queue_team",
+            lambda *args: SimpleNamespace(
+                title="Team One", repo_name="lab1-team-1", members=["alice"]
+            ),
+        )
+        monkeypatch.setattr(main_module, "LabGrader", lambda *_args: object())
+        checked = {}
+
+        def pass_ci(**kwargs):
+            checked.update(kwargs)
+
+        monkeypatch.setattr(main_module, "ensure_ci_passed", pass_ci)
+
+        data = main_module.queue_register(
+            _mock_request({"student_session": _make_student_cookie()}),
+            "dev-course", "4431", "1",
+        )
+
+        assert checked["repo_name"] == "lab1-team-1"
+        assert data["position"] == 1
+
+    def test_team_registration_rejects_failed_ci(self, deps, monkeypatch):
+        from grading.queue.errors import QueueError
+
+        course_info = _fake_course_info()
+        lab_config = {**course_info["labs"]["1"], "team": {}}
+        monkeypatch.setattr(
+            main_module, "_resolve_queue_lab",
+            lambda *args: (course_info, "1", lab_config),
+        )
+        monkeypatch.setattr(
+            main_module, "_resolve_queue_team",
+            lambda *args: SimpleNamespace(
+                title="Team One", repo_name="lab1-team-1", members=["alice"]
+            ),
+        )
+        monkeypatch.setattr(main_module, "LabGrader", lambda *_args: object())
+        monkeypatch.setattr(
+            main_module, "ensure_ci_passed",
+            lambda **_kwargs: (_ for _ in ()).throw(
+                QueueError("CI_NOT_PASSED", "tests failed")
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc:
+            main_module.queue_register(
+                _mock_request({"student_session": _make_student_cookie()}),
+                "dev-course", "4431", "1",
+            )
+
+        assert exc.value.status_code == 400
+        assert exc.value.detail == "CI_NOT_PASSED"
 
 
 class TestQueueWithdraw:

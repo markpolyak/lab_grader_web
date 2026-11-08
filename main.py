@@ -3199,10 +3199,12 @@ def queue_status(request: Request, course_id: str, group_id: str, lab_id: str):
         ci_status = "unknown"
 
     queue_open = session is not None
+    team_lab = is_team_lab(lab_config)
     can_register = (
         not already_passed
         and entry is None
-        and ci_status in ("passed", "not_run")
+        # Team CI is checked against the shared repo by the registration endpoint.
+        and (team_lab or ci_status in ("passed", "not_run"))
         and queue_open
     )
 
@@ -3213,7 +3215,7 @@ def queue_status(request: Request, course_id: str, group_id: str, lab_id: str):
         "ci_status": ci_status,
         "can_register": can_register,
         "already_passed": already_passed,
-        "is_team_lab": is_team_lab(lab_config),
+        "is_team_lab": team_lab,
         "team": team_info,
         "queue_open": queue_open,
         "session": _session_dict(session) if session else None,
@@ -3251,6 +3253,7 @@ def queue_register(request: Request, course_id: str, group_id: str, lab_id: str)
     today_str = _ensure_queue_ready(spreadsheet, course_info, course_id)
 
     # Resolve identifier and FIO
+    team_repo_name = None
     try:
         if is_team_lab(lab_config):
             team_result = _resolve_queue_team(
@@ -3260,6 +3263,7 @@ def queue_register(request: Request, course_id: str, group_id: str, lab_id: str)
                 raise _queue_error_to_http(QueueError("NO_TEAM", "Студент не состоит в команде"))
             fio = team_result.title
             identifier = team_result.title
+            team_repo_name = team_result.repo_name
         else:
             ctx = _load_queue_sheet_context(
                 sheets_client, course_info, group_id, lab_config, username
@@ -3279,21 +3283,21 @@ def queue_register(request: Request, course_id: str, group_id: str, lab_id: str)
 
     # Check CI (runs evaluate_student if needed)
     try:
-        if not is_team_lab(lab_config):
-            grader = LabGrader(GitHubClient(GITHUB_TOKEN))
-            org = course_info.get("github", {}).get("organization")
-            ensure_ci_passed(
-                grader=grader,
-                org=org,
-                username=username,
-                lab_config=lab_config,
-                course_info=course_info,
-                context_loader=lambda: _load_queue_sheet_context(
-                    sheets_client, course_info, group_id, lab_config, username
-                ),
-                history_worksheet=history_ws,
-                group=group_id,
-            )
+        grader = LabGrader(GitHubClient(GITHUB_TOKEN))
+        org = course_info.get("github", {}).get("organization")
+        ensure_ci_passed(
+            grader=grader,
+            org=org,
+            username=username,
+            lab_config=lab_config,
+            course_info=course_info,
+            context_loader=lambda: _load_queue_sheet_context(
+                sheets_client, course_info, group_id, lab_config, username
+            ),
+            repo_name=team_repo_name,
+            history_worksheet=history_ws,
+            group=group_id,
+        )
     except QueueError as e:
         raise _queue_error_to_http(e)
 
