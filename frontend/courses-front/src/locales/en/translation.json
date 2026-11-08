@@ -12,6 +12,7 @@
   "cancel": "Cancel",
   "fullscreen": "Fullscreen",
   "collapse": "Collapse",
+  "back": "Back",
   "details": "Details",
   "hide": "Hide",
   "logout": "Logout",
@@ -261,12 +262,124 @@
       "group": "Group",
       "slotsCount": "Slots",
       "status": "Status",
-      "error": "Error"
+      "error": "Error",
+      "corrections": "Corrections",
+      "source": "Source"
     },
     "errors": {
       "loadGroupsFailed": "Failed to load groups",
       "refreshFailed": "Failed to fetch schedule",
       "saveGroupsFailed": "Failed to save the group list"
+    },
+    "editor": {
+      "title": "Schedule Editor",
+      "loading": "Loading…",
+      "loadFailed": "Failed to load schedule file",
+      "saveFailed": "Failed to save schedule file",
+      "saved": "Schedule saved",
+      "saving": "Saving…",
+      "placeholder": "Schedule YAML configuration…",
+      "errors": {
+        "startRequired": "start is required for each slot",
+        "endRequired": "end is required for each slot"
+      }
+    },
+    "corrections": {
+      "title": "Schedule Corrections — group {{groupId}}",
+      "listTitle": "Corrections list",
+      "addTitle": "Add correction",
+      "editTitle": "Edit correction",
+      "addButton": "Add correction",
+      "saveChanges": "Save changes",
+      "saving": "Saving…",
+      "loading": "Loading…",
+      "empty": "No corrections. Click «Add correction» to create one.",
+      "close": "Close",
+      "types": {
+        "remove": "Cancel session",
+        "add": "Extra session"
+      },
+      "columns": {
+        "id": "ID",
+        "date": "Date",
+        "type": "Type",
+        "details": "Details",
+        "actions": "Actions"
+      },
+      "fields": {
+        "id": "Correction ID",
+        "date": "Date",
+        "type": "Correction type",
+        "slotId": "Slot ID (from schedule)",
+        "labs": "Labs (comma-separated)",
+        "labsHint": "Empty = cancel whole slot. Specify labs to cancel only those.",
+        "newSlotId": "New slot ID",
+        "recurrenceDay": "Weekday (recurrence)",
+        "recurrenceDayHint": "Leave empty for one-off session and fill «Date» below.",
+        "recurrenceWeek": "Week parity",
+        "dateOnce": "Date (one-off)",
+        "dateOnceHint": "Alternative to recurrence: specific date.",
+        "start": "Start",
+        "end": "End",
+        "subject": "Subject",
+        "room": "Room",
+        "teacher": "Teacher"
+      },
+      "details": {
+        "removeSlot": "Remove slot",
+        "wholeSlot": "whole slot",
+        "addSlot": "Add slot",
+        "recurrence": "recurrence: {{day}}, {{week}}"
+      },
+      "errors": {
+        "loadFailed": "Failed to load corrections",
+        "saveFailed": "Failed to save corrections",
+        "requiredFields": "Fill in ID and date",
+        "slotRequired": "Specify slot ID (for removal) or ID/time (for addition)",
+        "startBeforeEnd": "Start time must be before end time",
+        "removeSlotIdRequired": "remove_slots: slot_id is required",
+        "removeSlotLabsArray": "remove_slots: labs must be an array or null",
+        "addSlotIdRequired": "add_slots: id is required",
+        "addSlotStartRequired": "add_slots: start is required",
+        "addSlotEndRequired": "add_slots: end is required",
+        "addSlotStartFormat": "add_slots: start must be HH:MM or HH:MM:SS",
+        "addSlotEndFormat": "add_slots: end must be HH:MM or HH:MM:SS",
+        "addSlotEndBeforeStart": "add_slots: end must be after start",
+        "addSlotRecurrenceObject": "add_slots: recurrence must be an object",
+        "addSlotRecurrenceDay": "add_slots: invalid recurrence day",
+        "addSlotRecurrenceWeek": "add_slots: recurrence.week must be all/odd/even",
+        "addSlotLabsArray": "add_slots: labs must be an array or null"
+      },
+      "actions": {
+        "edit": "Edit",
+        "delete": "Delete"
+      }
+    },
+    "source": {
+      "title": "Schedule Source",
+      "defaultSource": "Default Source",
+      "defaultSourceLabel": "Source for new groups",
+      "defaultSourceHint": "Used when a group has no explicit source",
+      "groupSources": "Per-group sources",
+      "columns": {
+        "group": "Group",
+        "currentSource": "Current source",
+        "guapGroupId": "GUAP code",
+        "newSource": "New source"
+      },
+      "types": {
+        "guap": "GUAP (auto)",
+        "manual": "Manual"
+      },
+      "saveChanges": "Save changes",
+      "saving": "Saving…",
+      "loading": "Loading…",
+      "empty": "No groups",
+      "hint": "GUAP — slots updated via «Fetch schedule». Manual — slots edited only in YAML. Switching to Manual preserves current slots as base. Switching to GUAP — will overwrite on next refresh.",
+      "errors": {
+        "loadFailed": "Failed to load sources",
+        "saveFailed": "Failed to save sources"
+      }
     }
   }
 }
