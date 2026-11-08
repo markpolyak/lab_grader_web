@@ -201,7 +201,7 @@ async def lifespan(app: FastAPI):
         for course_id, course in iter_course_configs()
         if (spreadsheet_id := course.get("google", {}).get("queue-history-spreadsheet"))
     }
-    queue_service = QueueService()
+    queue_service = QueueService(FileQueueRepository())
     history_service = QueueHistoryService(queue_service, history, history_by_course=history_by_course)
     app.state.queue_history_service = history_service
     week_start = os.getenv("QUEUE_WEEK_START")
@@ -808,6 +808,8 @@ class CourseLessonResponse(BaseModel):
     groups: list[str]
     kind: str
     room: str | None
+    cancelled: bool = False
+    original_starts_at: datetime | None = None
     queue: LessonQueueResponse
 
 
@@ -835,6 +837,8 @@ def _course_lessons_response(schedule) -> CourseLessonsResponse:
                 groups=list(lesson.groups),
                 kind=lesson.kind,
                 room=lesson.room,
+                cancelled=lesson.cancelled,
+                original_starts_at=lesson.original_starts_at,
                 queue=LessonQueueResponse(
                     closed=lesson.queue.closed,
                     entries_count=len(lesson.queue.entries),
@@ -928,9 +932,9 @@ def admin_list_queues(
     студентов в ответ не попадают. ``queue_id`` совпадает с id занятия, пока
     очередь живёт внутри Lesson.
     """
-    _, schedule = _get_current_schedule(request, course_id)
+    service, schedule = _get_current_schedule(request, course_id)
 
-    lessons = list(schedule.lessons)
+    lessons = service.admin_lessons(course_id, schedule.week_start)
     if group_id is not None:
         lessons = [lesson for lesson in lessons if group_id in lesson.groups]
     if lesson_date is not None:
@@ -950,7 +954,7 @@ def admin_get_queue(
 ):
     """Снимок одной очереди: ожидающие, вызванные и итоги (только чтение)."""
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    lesson = service.get_lesson(course_id, queue_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
@@ -972,7 +976,7 @@ def admin_set_queue_registration(
 ):
     """Открыть или закрыть запись в очередь вручную."""
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    lesson = service.get_lesson(course_id, queue_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
@@ -980,6 +984,9 @@ def admin_set_queue_registration(
         record = service.set_registration(lesson.id, closed=body.closed)
     except KeyError:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
+
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="LESSON_CANCELLED")
 
     return registration_response(lesson, record)
 
@@ -1030,7 +1037,7 @@ def admin_update_queue(
 ):
     """Обновить время занятия и окно записи очереди."""
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    lesson = service.get_lesson(course_id, queue_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
     if not body.model_dump(exclude_none=True):
@@ -1039,6 +1046,7 @@ def admin_update_queue(
     try:
         record = service.update_queue(
             lesson.id,
+            cancelled=body.cancelled,
             starts_at=body.lesson_starts_at,
             ends_at=body.lesson_ends_at,
             registration_opens_at=body.registration_opens_at,
@@ -1065,7 +1073,7 @@ def admin_delete_queue(
 ):
     """Удалить пустую внештатную очередь."""
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    lesson = service.get_lesson(course_id, queue_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
@@ -1093,7 +1101,7 @@ def admin_call_next(
 ):
     """Вызвать следующего ожидающего."""
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    lesson = service.get_lesson(course_id, queue_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
@@ -1126,7 +1134,7 @@ def admin_finish_entry(
 ):
     """Отметить результат защиты вызванного студента."""
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    lesson = service.get_lesson(course_id, queue_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
@@ -1159,7 +1167,7 @@ def admin_update_result(
 ):
     """Исправить результат завершённой защиты."""
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    lesson = service.get_lesson(course_id, queue_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
@@ -1191,7 +1199,7 @@ def admin_remove_entry(
 ):
     """Убрать активную запись из очереди, сохранив её в истории."""
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == queue_id), None)
+    lesson = service.get_lesson(course_id, queue_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 

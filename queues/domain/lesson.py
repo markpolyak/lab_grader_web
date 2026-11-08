@@ -14,6 +14,8 @@ class Lesson:
     room: str | None = None
     id: UUID = field(default_factory=uuid4)
     queue: Queue = field(default_factory=Queue)
+    cancelled: bool = False
+    original_starts_at: datetime | None = None
 
     def __post_init__(self):
         if any(value.utcoffset() is None for value in (self.starts_at, self.ends_at)):

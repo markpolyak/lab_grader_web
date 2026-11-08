@@ -29,6 +29,10 @@ def record_from_lesson(
         group_id=group_key(lesson.groups),
         lesson_starts_at=lesson.starts_at,
         lesson_ends_at=lesson.ends_at,
+        lesson_kind=lesson.kind,
+        lesson_room=lesson.room,
+        cancelled=lesson.cancelled,
+        original_starts_at=lesson.original_starts_at,
         queue=queue if queue is not None else lesson.queue,
     )
 
@@ -41,6 +45,10 @@ def sync_record_with_lesson(
     record.group_id = group_key(lesson.groups)
     record.lesson_starts_at = lesson.starts_at
     record.lesson_ends_at = lesson.ends_at
+    record.lesson_kind = lesson.kind
+    record.lesson_room = lesson.room
+    record.cancelled = lesson.cancelled
+    record.original_starts_at = lesson.original_starts_at
     return record
 
 
@@ -53,6 +61,13 @@ def restore_record(
     изменения видны и очереди, и снимку для сохранения.
     """
     lesson.queue = record.queue
+    lesson.cancelled = record.cancelled
+    lesson.original_starts_at = record.original_starts_at
+    if record.manual or record.original_starts_at is not None:
+        lesson.starts_at = record.lesson_starts_at
+        lesson.ends_at = record.lesson_ends_at
+    if lesson.cancelled:
+        lesson.queue.closed = True
     ensure_entry_metadata(record)
     return sync_record_with_lesson(record, schedule, lesson)
 

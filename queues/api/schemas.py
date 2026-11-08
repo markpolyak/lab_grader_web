@@ -18,6 +18,8 @@ class AdminQueueLessonResponse(BaseModel):
     groups: list[str]
     kind: str
     room: str | None
+    cancelled: bool = False
+    original_starts_at: datetime | None = None
 
 
 class AdminQueueSummaryResponse(BaseModel):
@@ -86,6 +88,7 @@ class QueueCreateResponse(BaseModel):
 
 
 class QueueUpdateRequest(BaseModel):
+    cancelled: bool | None = None
     lesson_starts_at: datetime | None = None
     lesson_ends_at: datetime | None = None
     registration_opens_at: datetime | None = None

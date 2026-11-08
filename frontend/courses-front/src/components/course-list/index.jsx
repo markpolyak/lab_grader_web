@@ -412,9 +412,9 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
             >
               <SelectButton
                 onClick={() => onSelectCourse(course.id)}
-                style={{ backgroundColor: colors.selected }}
+                style={{ backgroundColor: colors.selected, ...(isAdmin ? { width: "auto" } : {}) }}
               >
-                {t("select")}
+                {isAdmin ? t("adminQueues.lessons") : t("select")}
               </SelectButton>
 
               <Button onClick={() => handleExpand(course.id)}>

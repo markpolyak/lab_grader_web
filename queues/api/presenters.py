@@ -66,6 +66,8 @@ def queue_lesson(lesson: Lesson) -> AdminQueueLessonResponse:
         groups=list(lesson.groups),
         kind=lesson.kind,
         room=lesson.room,
+        cancelled=lesson.cancelled,
+        original_starts_at=lesson.original_starts_at,
     )
 
 

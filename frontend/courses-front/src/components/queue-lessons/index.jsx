@@ -119,6 +119,8 @@ export function QueueLessons({ courseId, onBack }) {
                     </LessonDate>
                     <LessonDetails>
                       <Subject>{schedule.course_name}</Subject>
+                      {lesson.cancelled && <Detail>{t("adminQueues.cancelled")}</Detail>}
+                      {lesson.original_starts_at && <Detail>{t("adminQueues.movedFrom", { date: dateFormatter.format(new Date(lesson.original_starts_at)) })}</Detail>}
                       <Detail>{lesson.kind}</Detail>
                       <Detail>{t("queueLessons.groups")}: {lesson.groups.join(", ") || "—"}</Detail>
                       {lesson.room && <Detail>{t("queueLessons.room")}: {lesson.room}</Detail>}

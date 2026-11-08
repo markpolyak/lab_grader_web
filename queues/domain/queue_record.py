@@ -28,6 +28,11 @@ class QueueRecord:
     lesson_ends_at: datetime | None = None
     registration_mode: RegistrationMode = RegistrationMode.AUTOMATIC
     manual: bool = False
+    cancelled: bool = False
+    original_starts_at: datetime | None = None
+    original_ends_at: datetime | None = None
+    lesson_kind: str = "Занятие"
+    lesson_room: str | None = None
     queue: Queue = field(default_factory=Queue)
     entry_metadata: dict[UUID, QueueEntryMetadata] = field(default_factory=dict)
     version: int = 0

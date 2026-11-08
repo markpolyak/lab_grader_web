@@ -56,6 +56,20 @@ def test_requires_admin(endpoint):
     assert client.get("/admin/courses/os-2026/queues").status_code == 401
 
 
+def test_cancel_and_restore_lesson(endpoint):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+    path = f"/admin/courses/os-2026/queues/{lesson.id}"
+    assert client.patch(path, json={"cancelled": True}).status_code == 401
+    authenticate(client)
+    assert client.patch(path, json={"cancelled": True}).status_code == 200
+    assert client.get(path).json()["lesson"]["cancelled"] is True
+    assert client.get(path).json()["closed"] is True
+    assert client.put(path + "/registration", json={"closed": False}).status_code == 409
+    assert client.patch(path, json={"cancelled": False}).status_code == 200
+    assert client.put(path + "/registration", json={"closed": False}).status_code == 200
+
+
 def test_lists_current_week_queues_without_private_data(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
@@ -83,6 +97,8 @@ def test_lists_current_week_queues_without_private_data(endpoint):
         "groups": ["4431"],
         "kind": "Лабораторное занятие",
         "room": "23-09 (Б. Морская 67)",
+        "cancelled": False,
+        "original_starts_at": None,
     }
     assert first["closed"] is False
     assert first["entries_count"] == 1
@@ -517,7 +533,7 @@ def test_create_manual_queue_validates_times_and_requires_admin(endpoint):
     ).status_code == 422
 
 
-def test_update_queue_rejects_scheduled_times_and_out_of_week_creation(endpoint):
+def test_update_queue_accepts_scheduled_times_and_rejects_out_of_week_creation(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
     authenticate(client)
@@ -526,7 +542,7 @@ def test_update_queue_rejects_scheduled_times_and_out_of_week_creation(endpoint)
         f"/admin/courses/os-2026/queues/{lesson.id}",
         json={"lesson_starts_at": "2026-11-09T16:00:00+03:00"},
     )
-    assert invalid.status_code == 422
+    assert invalid.status_code == 200
 
     out_of_week = client.post(
         "/admin/courses/os-2026/queues",
