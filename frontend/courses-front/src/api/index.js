@@ -19,11 +19,11 @@ export const fetchLessonQueue = (courseId, lessonId, { signal } = {}) =>
 export const fetchStudentQueue = (courseId, { github, group_id }, { signal } = {}) =>
   requestQueue(`/courses/${encodeURIComponent(courseId)}/queue?${new URLSearchParams({ github, group_id })}`, { signal });
 
-export const joinLessonQueue = (courseId, { github, full_name, lesson_id, lab_id }) =>
+export const joinLessonQueue = (courseId, { github, surname, name, patronymic, lesson_id, lab_id }) =>
   requestQueue(`/courses/${encodeURIComponent(courseId)}/queue/join`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ github, full_name, lesson_id, lab_id }),
+    body: JSON.stringify({ github, surname, name, patronymic, lesson_id, lab_id }),
   });
 
 // Публичные данные для страницы создания репозитория. Сам OAuth намеренно не

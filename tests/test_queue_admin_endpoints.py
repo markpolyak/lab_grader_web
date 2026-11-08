@@ -396,6 +396,42 @@ def test_call_next_empty_queue_is_409(endpoint):
     assert response.json()["detail"] == "QUEUE_EMPTY"
 
 
+def test_several_called_students_form_fifo_prefix_and_finish_stays_in_table(endpoint):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+    lesson.queue.closed = False
+    entries = [lesson.queue.add_entry(Student(f"Студент{i}", "Тестовый", "", f"demo-{i}"), "1", "ЛР1") for i in range(4)]
+    path = f"/admin/courses/os-2026/queues/{lesson.id}"
+    assert client.post(path + "/call-next").status_code == 401
+    authenticate(client)
+    for item in entries[:2]:
+        response = client.post(path + "/call-next")
+        assert response.status_code == 200
+        assert response.json()["entry"]["id"] == str(item.id)
+    snapshot = client.get(path).json()
+    assert [item["status"] for item in snapshot["entries"]] == ["called", "called", "waiting", "waiting"]
+    assert client.post(path + f"/entries/{entries[2].id}/finish", json={}).status_code == 409
+    # A status-only finish must not fabricate a successful defense result.
+    response = client.post(path + f"/entries/{entries[1].id}/finish", json={})
+    assert response.status_code == 200
+    assert response.json()["entry"]["result"] is None
+    assert client.post(path + "/call-next").json()["entry"]["id"] == str(entries[2].id)
+    snapshot = client.get(path).json()
+    assert [item["status"] for item in snapshot["entries"]] == ["called", "finished", "called", "waiting"]
+    assert [item["position"] for item in snapshot["entries"]] == [1, 2, 3, 4]
+    assert [item["id"] for item in snapshot["entries"]] == [str(item.id) for item in entries]
+
+
+def test_cancelled_lesson_cannot_call_students(endpoint):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+    service.update_queue(lesson.id, cancelled=True)
+    authenticate(client)
+    response = client.post(f"/admin/courses/os-2026/queues/{lesson.id}/call-next")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "LESSON_CANCELLED"
+
+
 def test_finish_requires_called_state_and_known_entry(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]

@@ -78,7 +78,7 @@ def test_state_requires_group_id(endpoint):
     assert client.get("/courses/os-2026/queue?github=student").status_code == 422
 
 
-def test_public_lesson_queue_has_fifo_names_without_private_admin_fields(endpoint):
+def test_public_lesson_queue_keeps_order_statuses_and_github_without_results(endpoint):
     client, service = endpoint
     lesson = open_first_lesson(service)
     for name, github in [("Первый", "private-first"), ("Второй", "private-second")]:
@@ -96,13 +96,41 @@ def test_public_lesson_queue_has_fifo_names_without_private_admin_fields(endpoin
     assert data["waiting"][0]["full_name"] == "Студент Второй"
     assert data["waiting"][0]["position"] == 1
     assert data["called"][0]["id"] == str(first.id)
-    assert "private-first" not in response.text and "private-second" not in response.text
+    assert [item["github"] for item in data["entries"]] == ["private-first", "private-second"]
+    assert [item["position"] for item in data["entries"]] == [1, 2]
+    assert [item["status"] for item in data["entries"]] == ["called", "waiting"]
     assert "finished" not in data
     assert "result" not in data["called"][0]
     service.finish(lesson.id, first.id, "defended")
     data = client.get(f"/courses/os-2026/lessons/{lesson.id}/queue").json()
     assert data["called"] == []
     assert len(data["waiting"]) == 1
+    assert data["entries"][0]["status"] == "finished"
+    assert data["entries"][0]["position"] == 1
+    assert all("result" not in entry and "finished_at" not in entry for entry in data["entries"])
+
+
+def test_join_accepts_separate_student_name_parts(endpoint):
+    client, service = endpoint
+    lesson = open_first_lesson(service)
+    payload = {"github": "student", "lesson_id": str(lesson.id), "lab_id": "1",
+               "surname": "  Иванов  ", "name": "ИВАН", "patronymic": ""}
+    payload["surname"] = "Другой"
+    assert client.post("/courses/os-2026/queue/join", json=payload).status_code == 403
+    payload["surname"] = "  Иванов  "
+    response = client.post("/courses/os-2026/queue/join", json=payload)
+    assert response.status_code == 201
+    assert response.json()["full_name"] == "Иванов Иван"
+    assert lesson.queue.entries[0].student == Student("Иван", "Иванов", "", "student")
+
+
+@pytest.mark.parametrize("parts", [{"name": "Иван"}, {"surname": "Иванов"}, {"surname": " ", "name": "Иван"}])
+def test_join_rejects_incomplete_name_parts(endpoint, parts):
+    client, service = endpoint
+    lesson = open_first_lesson(service)
+    payload = {"github": "student", "lesson_id": str(lesson.id), "lab_id": "1", **parts}
+    assert client.post("/courses/os-2026/queue/join", json=payload).status_code == 422
+    assert not lesson.queue.entries
 
 
 def test_public_lesson_queue_rejects_unknown_lesson_and_course(endpoint):

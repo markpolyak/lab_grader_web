@@ -26,12 +26,12 @@
     "move": "Reschedule lesson",
     "restore": "Restore lesson",
     "cancelLesson": "Cancel lesson",
-    "cancelHint": "Cancellation closes registration. The lesson and student entries are retained. After restoring, registration can be opened separately.",
     "finished": "Completed entries",
     "waiting": "Waiting",
-    "moveHint": "Enter the new start and end in Moscow time. The queue and student entries are retained.",
     "starts": "Lesson starts (Moscow)",
-    "ends": "Lesson ends (Moscow)"
+    "ends": "Lesson ends (Moscow)",
+    "cancelConfirm": "Cancel this lesson and close registration?",
+    "restoreConfirm": "Restore this lesson?"
   },
   "queueDetail": {
     "fullName": "Full name",
@@ -40,7 +40,6 @@
     "loading": "Loading queue…",
     "moscowTime": "Moscow time",
     "participants": "Queue participants",
-    "autoRefresh": "The list updates automatically.",
     "called": "Called for defense",
     "calledBadge": "Called",
     "waiting": "Waiting: {{count}}",
@@ -53,7 +52,6 @@
     "lab": "Lab assignment number",
     "chooseLab": "Choose a lab assignment",
     "noLabs": "There are no available lab assignments for this course yet.",
-    "eligibility": "Students in the lesson's group can join after passing the selected lab's checks.",
     "join": "Join the end of the queue",
     "sending": "Checking your details…",
     "checkEntry": "Check my entry",
@@ -75,13 +73,15 @@
       "rateLimit": "Too many requests. Please wait and try again.",
       "requestFailed": "Could not load queue data. Please try again.",
       "required": "Enter your full name, GitHub username, group, and lab assignment."
-    }
+    },
+    "surname": "Surname",
+    "name": "First name",
+    "patronymic": "Patronymic"
   },
   "queueLessons": {
     "title": "Course lessons",
     "back": "← Back to actions",
     "week": "Week: {{dates}} · Moscow time",
-    "selectionUnavailable": "Choosing a lesson and joining its queue are not available yet.",
     "loading": "Loading lessons…",
     "empty": "There are no lessons this week.",
     "notConfigured": "The lesson schedule is not available for this course yet.",
@@ -344,6 +344,23 @@
       "notOpenAt": "The assignment is not open yet. The link will start working on {{moment}}.",
       "closed": "Submissions are closed: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored.",
       "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
+    }
+  },
+  "queueTable": {
+    "position": "Position",
+    "lab": "Lab",
+    "actions": "Actions",
+    "empty": "No students in the queue yet.",
+    "finish": "Finish defense",
+    "callNext": "Call next",
+    "noWaiting": "No students are waiting.",
+    "invalidState": "The student status has changed. Refresh the queue.",
+    "status": {
+      "waiting": "Waiting",
+      "called": "Defending",
+      "finished": "Finished",
+      "withdrawn": "Withdrawn",
+      "expired": "Expired"
     }
   }
 }

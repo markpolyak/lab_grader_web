@@ -10,6 +10,7 @@ export const Content = styled.div`
   padding: 0 16px 24px;
 `;
 export const Panel = styled.section`
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -30,35 +31,6 @@ export const Muted = styled.p`
   font-size: ${sizes.fontSizeMedium};
   color: ${colors.textSecondary};
   line-height: 1.6;
-`;
-export const Participants = styled.ol`
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-`;
-export const Participant = styled.li`
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 12px;
-  border-radius: 8px;
-  background: ${({ $own }) => $own ? colors.buttonHover : "#fff"};
-  border-bottom: 1px solid ${colors.buttonHover};
-  overflow-wrap: anywhere;
-`;
-export const Position = styled.span`
-  min-width: 24px;
-  color: ${colors.textSecondary};
-`;
-export const StudentName = styled.p`
-  margin: 0;
-  font-size: ${sizes.fontSizeMedium};
-  color: ${colors.textPrimary};
-  line-height: 1.5;
 `;
 export const Badge = styled.span`
   padding: 4px 8px;

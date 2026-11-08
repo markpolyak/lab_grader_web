@@ -10,8 +10,9 @@ import { FixedAdminButton } from "../course-list/styled";
 import { Page, Navigation, BackButton, Title } from "../course-actions/styled";
 import { Status, Description, RetryButton } from "../queue-lessons/styled";
 import { JoinQueueForm } from "./JoinQueueForm";
+import { QueueTable } from "../queue-table";
 import { queueErrorKey } from "./state";
-import { Content, Panel, Heading, Muted, Participants, Participant, Position, StudentName, Badge } from "./styled";
+import { Content, Panel, Heading, Muted } from "./styled";
 
 export function QueueDetail({ courseId, lessonId, onBack }) {
   const { t, i18n } = useTranslation();
@@ -47,17 +48,6 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
     hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
 
-  function participant(item, isCalled) {
-    return (
-      <Participant key={item.id} $own={item.id === ownEntryId}>
-        <Position>{isCalled ? "→" : item.position}</Position>
-        <div><StudentName>{item.full_name}</StudentName><Muted>{item.lab_name || "—"}</Muted></div>
-        {isCalled && <Badge>{t("queueDetail.calledBadge")}</Badge>}
-        {item.id === ownEntryId && <Badge>{t("queueDetail.you")}</Badge>}
-      </Participant>
-    );
-  }
-
   return (
     <Page>
       <FixedAdminButton onClick={() => navigate("/admin")}>{t("courseActions.forTeachers")}</FixedAdminButton>
@@ -76,10 +66,7 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
             {snapshot.lesson.original_starts_at && <Description>{t("adminQueues.movedFrom", { date: dateTime.format(new Date(snapshot.lesson.original_starts_at)) })}</Description>}
             <Panel aria-live="polite">
               <Heading>{t("queueDetail.participants")}</Heading>
-              <Muted>{t("queueDetail.autoRefresh")}</Muted>
-              {snapshot.called.length > 0 && <><Heading as="h3">{t("queueDetail.called")}</Heading><Participants>{snapshot.called.map((item) => participant(item, true))}</Participants></>}
-              <Heading as="h3">{t("queueDetail.waiting", { count: snapshot.waiting.length })}</Heading>
-              {snapshot.waiting.length ? <Participants>{snapshot.waiting.map((item) => participant(item, false))}</Participants> : <Muted>{t("queueDetail.empty")}</Muted>}
+              <QueueTable entries={snapshot.entries} ownEntryId={ownEntryId} />
             </Panel>
             <JoinQueueForm
               courseId={courseId} snapshot={snapshot} revision={revision}

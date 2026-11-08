@@ -26,12 +26,12 @@
     "move": "调整课次时间",
     "restore": "恢复课次",
     "cancelLesson": "取消课次",
-    "cancelHint": "取消后关闭报名，课次和报名记录保留。恢复课次后可单独开放报名。",
     "finished": "已完成记录",
     "waiting": "等待中",
-    "moveHint": "请输入新的莫斯科开始和结束时间，队列和报名记录将保留。",
     "starts": "开始时间（莫斯科）",
-    "ends": "结束时间（莫斯科）"
+    "ends": "结束时间（莫斯科）",
+    "cancelConfirm": "取消课程并关闭报名？",
+    "restoreConfirm": "恢复此课程？"
   },
   "queueDetail": {
     "fullName": "姓名",
@@ -40,7 +40,6 @@
     "loading": "正在加载队列…",
     "moscowTime": "莫斯科时间",
     "participants": "队列参与者",
-    "autoRefresh": "列表自动更新。",
     "called": "已叫号",
     "calledBadge": "已叫号",
     "waiting": "等待人数：{{count}}",
@@ -53,7 +52,6 @@
     "lab": "实验作业编号",
     "chooseLab": "选择实验作业",
     "noLabs": "该课程暂无可用的实验作业。",
-    "eligibility": "参加本课次的班级学生须先通过所选实验的检查才能报名。",
     "join": "加入队尾",
     "sending": "正在检查信息…",
     "checkEntry": "查看我的报名",
@@ -75,13 +73,15 @@
       "rateLimit": "请求过多，请稍后重试。",
       "requestFailed": "无法加载队列数据，请重试。",
       "required": "请输入姓名、GitHub 用户名、班级和实验作业。"
-    }
+    },
+    "surname": "姓",
+    "name": "名",
+    "patronymic": "父称"
   },
   "queueLessons": {
     "title": "课程课次",
     "back": "← 返回操作选择",
     "week": "本周：{{dates}} · 莫斯科时间",
-    "selectionUnavailable": "暂时无法选择课次或加入队列。",
     "loading": "正在加载课次…",
     "empty": "本周没有课次。",
     "notConfigured": "该课程的课表暂不可用。",
@@ -347,6 +347,23 @@
       "notOpenAt": "作业尚未开放，该链接将于 {{moment}} 生效。",
       "closed": "提交已截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。",
       "closedAt": "提交已于 {{moment}} 截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。"
+    }
+  },
+  "queueTable": {
+    "position": "序号",
+    "lab": "实验",
+    "actions": "操作",
+    "empty": "暂无学生排队。",
+    "finish": "结束答辩",
+    "callNext": "叫下一位",
+    "noWaiting": "没有等待的学生。",
+    "invalidState": "学生状态已变更，请刷新队列。",
+    "status": {
+      "waiting": "等待中",
+      "called": "答辩中",
+      "finished": "已结束",
+      "withdrawn": "已退出",
+      "expired": "已过期"
     }
   }
 }

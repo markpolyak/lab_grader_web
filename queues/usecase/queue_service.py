@@ -644,6 +644,8 @@ class QueueService:
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
                 raise EntryNotFoundError(lesson_id)
+            if lesson.cancelled:
+                raise InvalidStateError("Занятие отменено")
             ensure_entry_metadata(record)
             waiting = [
                 entry
@@ -660,7 +662,7 @@ class QueueService:
             return entry
 
     def finish(
-        self, lesson_id, entry_id, outcome: DefenseResult, *, now=None
+        self, lesson_id, entry_id, outcome: DefenseResult | None = None, *, now=None
     ) -> QueueEntry:
         """Завершить вызванную запись с результатом защиты."""
         with self._lock:

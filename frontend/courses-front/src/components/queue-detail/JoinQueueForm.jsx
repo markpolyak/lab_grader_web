@@ -9,7 +9,10 @@ import { Panel, Heading, Form, Label, Input, Select, Actions, PrimaryButton, Sec
 export function JoinQueueForm({ courseId, snapshot, revision, onChanged, onOwnEntry }) {
   const { t } = useTranslation();
   const [github, setGithub] = useState("");
-  const [fullName, setFullName] = useState("");
+  const [surname, setSurname] = useState("");
+  const [name, setName] = useState("");
+  const [patronymic, setPatronymic] = useState("");
+  const fullName = [surname, name, patronymic].map((part) => part.trim()).filter(Boolean).join(" ");
   const [open, setOpen] = useState(false);
   const [group, setGroup] = useState(snapshot.lesson.groups[0] || "");
   const [lab, setLab] = useState("");
@@ -21,12 +24,14 @@ export function JoinQueueForm({ courseId, snapshot, revision, onChanged, onOwnEn
   const entry = student?.entry;
   const called = snapshot.called.find((item) => item.id === entry?.id);
   const waiting = snapshot.waiting.find((item) => item.id === entry?.id);
-  const ownEntry = entry && (
+  const currentEntry = entry && (
     entry.lesson_id !== snapshot.queue_id || revision <= checkedRevision
       ? entry
       : called ? { ...entry, status: "called", position: null }
         : waiting ? { ...entry, status: "waiting", position: waiting.position } : null
   );
+  const row = snapshot.entries.find((item) => item.id === currentEntry?.id);
+  const ownEntry = currentEntry && row ? { ...currentEntry, position: row.position } : currentEntry;
 
   useEffect(() => {
     onOwnEntry(ownEntry?.id || null);
@@ -38,7 +43,7 @@ export function JoinQueueForm({ courseId, snapshot, revision, onChanged, onOwnEn
   }
 
   async function submit(join) {
-    if (!fullName.trim() || !github.trim() || !group || (join && !lab)) {
+    if (!surname.trim() || !name.trim() || !github.trim() || !group || (join && !lab)) {
       setError("required");
       return;
     }
@@ -52,7 +57,7 @@ export function JoinQueueForm({ courseId, snapshot, revision, onChanged, onOwnEn
       }
       if (join && !result.entry) {
         result = await joinLessonQueue(courseId, {
-          github: github.trim(), full_name: fullName.trim(), lesson_id: snapshot.queue_id, lab_id: lab,
+          github: github.trim(), surname: surname.trim(), name: name.trim(), patronymic: patronymic.trim(), lesson_id: snapshot.queue_id, lab_id: lab,
         });
       }
       setStudent(result);
@@ -94,9 +99,15 @@ export function JoinQueueForm({ courseId, snapshot, revision, onChanged, onOwnEn
         <DialogContent>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{t(`queueDetail.errors.${error}`)}</Alert>}
           <Form id="join-queue-form" onSubmit={(event) => { event.preventDefault(); submit(true); }}>
-            <Label htmlFor="queue-full-name">{t("queueDetail.fullName")}</Label>
-            <Input id="queue-full-name" value={fullName} disabled={pending} autoComplete="name" required
-              onChange={(event) => { setFullName(event.target.value); resetIdentity(); }} />
+            <Label htmlFor="queue-surname">{t("queueDetail.surname")}</Label>
+            <Input id="queue-surname" value={surname} disabled={pending} autoComplete="family-name" required
+              onChange={(event) => { setSurname(event.target.value); resetIdentity(); }} />
+            <Label htmlFor="queue-name">{t("queueDetail.name")}</Label>
+            <Input id="queue-name" value={name} disabled={pending} autoComplete="given-name" required
+              onChange={(event) => { setName(event.target.value); resetIdentity(); }} />
+            <Label htmlFor="queue-patronymic">{t("queueDetail.patronymic")}</Label>
+            <Input id="queue-patronymic" value={patronymic} disabled={pending} autoComplete="additional-name"
+              onChange={(event) => { setPatronymic(event.target.value); resetIdentity(); }} />
             <Label htmlFor="queue-github">{t("queueDetail.github")}</Label>
             <Input id="queue-github" value={github} disabled={pending} autoComplete="off" autoCapitalize="none" spellCheck={false} required
               onChange={(event) => { setGithub(event.target.value); resetIdentity(); }} />
@@ -112,14 +123,13 @@ export function JoinQueueForm({ courseId, snapshot, revision, onChanged, onOwnEn
               {snapshot.labs.map((item) => <option key={item.id} value={item.id}>{item.id} — {item.name}</option>)}
             </Select>
             {!snapshot.labs.length && <Muted>{t("queueDetail.noLabs")}</Muted>}
-            <Muted>{t("queueDetail.eligibility")}</Muted>
           </Form>
         </DialogContent>
         <DialogActions sx={{ p: 3, flexWrap: "wrap", gap: 1 }}>
           <PrimaryButton type="submit" form="join-queue-form" disabled={pending || snapshot.closed || !snapshot.labs.length || !!ownEntry}>
             {pending ? t("queueDetail.sending") : t("queueDetail.join")}
           </PrimaryButton>
-          <SecondaryButton type="button" disabled={pending || !fullName.trim() || !github.trim() || !group} onClick={() => submit(false)}>
+          <SecondaryButton type="button" disabled={pending || !surname.trim() || !name.trim() || !github.trim() || !group} onClick={() => submit(false)}>
             {t("queueDetail.checkEntry")}
           </SecondaryButton>
           <SecondaryButton type="button" disabled={pending} onClick={() => setOpen(false)}>{t("cancel")}</SecondaryButton>

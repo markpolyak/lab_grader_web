@@ -3,10 +3,11 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { Alert, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/material";
 import { Spin } from "antd";
-import { fetchAdminQueues, fetchAdminQueue, setQueueRegistration, updateAdminQueue } from "../../../api/adminQueues";
+import { fetchAdminQueues, fetchAdminQueue, setQueueRegistration, updateAdminQueue, callNextStudent, finishStudent } from "../../../api/adminQueues";
+import { QueueTable } from "../../queue-table";
 import { Breadcrumb } from "../../breadcrumb";
 import { Page, Navigation, BackButton, Title } from "../../course-actions/styled";
-import { Content, Panel, Heading, Muted, Participants, Participant, Position, StudentName, Badge, Actions, PrimaryButton, SecondaryButton, Form, Label, Input } from "../../queue-detail/styled";
+import { Content, Panel, Heading, Muted, Badge, Actions, PrimaryButton, SecondaryButton, Form, Label, Input } from "../../queue-detail/styled";
 import { Status } from "../../queue-lessons/styled";
 
 function localInput(value) {
@@ -41,7 +42,10 @@ function QueueView({ courseId, queueId }) {
         const result = queueId
           ? await fetchAdminQueue(courseId, queueId, { signal: controller.signal })
           : await fetchAdminQueues(courseId, { signal: controller.signal });
-        if (!controller.signal.aborted) { setData(result); setError(null); }
+        if (!controller.signal.aborted) {
+          setData((current) => queueId && current?.version > result.version ? current : result);
+          setError(null);
+        }
       } catch (cause) {
         if (!controller.signal.aborted) {
           if (cause.status === 401) navigate("/admin", { replace: true });
@@ -64,10 +68,15 @@ function QueueView({ courseId, queueId }) {
     setError(null);
     try {
       await action();
+      const result = await fetchAdminQueue(courseId, queueId);
+      setData((current) => current?.version > result.version ? current : result);
       setDialog(null);
       setRefresh((value) => value + 1);
     } catch (cause) {
       if (cause.status === 401) navigate("/admin", { replace: true });
+      else if (cause.code === "QUEUE_EMPTY") setError(t("queueTable.noWaiting"));
+      else if (cause.code === "INVALID_STATE") setError(t("queueTable.invalidState"));
+      else if (cause.code === "LESSON_CANCELLED") setError(t("adminQueues.cancelled"));
       else setError(cause.status === 422 ? t("adminQueues.invalidTimes") : t("adminQueues.saveFailed"));
     } finally {
       setPending(false);
@@ -79,22 +88,6 @@ function QueueView({ courseId, queueId }) {
       <Badge>{t(lesson.cancelled ? "adminQueues.cancelled" : closed ? "adminQueues.closed" : "adminQueues.open")}</Badge>
       {lesson.original_starts_at && <Muted>{t("adminQueues.movedFrom", { date: format(lesson.original_starts_at) })}</Muted>}
     </>;
-  }
-
-  function roster(title, entries) {
-    return <Panel>
-      <Heading>{title} ({entries.length})</Heading>
-      {entries.length === 0 ? <Muted>{t("adminQueues.noStudents")}</Muted> : <Participants>
-        {entries.map((entry) => <Participant key={entry.id}>
-          <Position>{entry.position ?? "—"}</Position>
-          <div>
-            <StudentName>{entry.full_name}</StudentName>
-            <Muted>GitHub: {entry.github}</Muted>
-            <Muted>{t("adminQueues.lab")}: {entry.lab_name || entry.lab_id}</Muted>
-          </div>
-        </Participant>)}
-      </Participants>}
-    </Panel>;
   }
 
   return <Page>
@@ -124,7 +117,6 @@ function QueueView({ courseId, queueId }) {
           <Muted>{data.lesson.kind} · {t("queueLessons.groups")}: {data.lesson.groups.join(", ")}</Muted>
           {data.lesson.room && <Muted>{t("queueLessons.room")}: {data.lesson.room}</Muted>}
           {badges(data.lesson, data.closed)}
-          {data.lesson.cancelled && <Alert severity="info">{t("adminQueues.cancelHint")}</Alert>}
           <Actions>
             <PrimaryButton disabled={pending || data.lesson.cancelled} onClick={() => mutate(() => setQueueRegistration(courseId, queueId, !data.closed))}>
               {t(data.closed ? "adminQueues.openQueue" : "adminQueues.closeQueue")}
@@ -133,9 +125,13 @@ function QueueView({ courseId, queueId }) {
             <SecondaryButton disabled={pending} onClick={() => setDialog("cancel")}>{t(data.lesson.cancelled ? "adminQueues.restore" : "adminQueues.cancelLesson")}</SecondaryButton>
           </Actions>
         </Panel>
-        {roster(t("adminQueues.waiting"), data.waiting)}
-        {roster(t("queueDetail.called"), data.called)}
-        {data.finished.length > 0 && roster(t("adminQueues.finished"), data.finished)}
+        <Panel>
+          <Heading>{t("queueDetail.participants")}</Heading>
+          <Actions><PrimaryButton disabled={pending || data.lesson.cancelled || !data.waiting.length}
+            onClick={() => mutate(() => callNextStudent(courseId, queueId))}>{t("queueTable.callNext")}</PrimaryButton></Actions>
+          <QueueTable entries={data.entries} pending={pending}
+            onFinish={(entryId) => mutate(() => finishStudent(courseId, queueId, entryId))} />
+        </Panel>
       </>}
     </Content>
     <Dialog open={!!dialog} onClose={() => { if (!pending) setDialog(null); }} fullWidth maxWidth="sm" sx={{ zIndex: 3400 }} aria-labelledby="admin-queue-dialog-title">
@@ -147,12 +143,11 @@ function QueueView({ courseId, queueId }) {
           const values = new FormData(event.currentTarget);
           mutate(() => updateAdminQueue(courseId, queueId, { lesson_starts_at: `${values.get("starts")}:00+03:00`, lesson_ends_at: `${values.get("ends")}:00+03:00` }));
         }}>
-          <Muted>{t("adminQueues.moveHint")}</Muted>
           <Label htmlFor="lesson-start">{t("adminQueues.starts")}</Label>
           <Input id="lesson-start" name="starts" type="datetime-local" required value={starts} onChange={(event) => setStarts(event.target.value)} />
           <Label htmlFor="lesson-end">{t("adminQueues.ends")}</Label>
           <Input id="lesson-end" name="ends" type="datetime-local" required value={ends} onChange={(event) => setEnds(event.target.value)} />
-        </Form> : <Muted>{t("adminQueues.cancelHint")}</Muted>}
+        </Form> : <Muted>{t(data?.lesson?.cancelled ? "adminQueues.restoreConfirm" : "adminQueues.cancelConfirm")}</Muted>}
       </DialogContent>
       <DialogActions sx={{ p: 3, gap: 1, flexWrap: "wrap" }}>
         {dialog === "move" ? <PrimaryButton type="submit" form="admin-move-form" disabled={pending}>{t("save")}</PrimaryButton> :

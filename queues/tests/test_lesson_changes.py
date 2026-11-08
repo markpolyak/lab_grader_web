@@ -61,3 +61,19 @@ def test_invalid_move_does_not_change_existing_state(tmp_path):
     assert (lesson.starts_at, lesson.ends_at) == (old_start, old_end)
     assert lesson.original_starts_at is None
     assert service.get_record(lesson.id).version == 0
+
+
+def test_defense_statuses_and_order_survive_restart(tmp_path):
+    service = build(tmp_path)
+    lesson = service.schedules["os-2026"].lessons[0]
+    service.set_registration(lesson.id, closed=False)
+    entries = [lesson.queue.add_entry(Student(f"Студент{i}", "Тестовый", "", f"demo-{i}"), "1") for i in range(3)]
+    service.save_lesson(lesson.id)
+    assert service.call_next(lesson.id).id == entries[0].id
+    assert service.call_next(lesson.id).id == entries[1].id
+    service.finish(lesson.id, entries[0].id)
+    restored = build(tmp_path)
+    record = restored.get_record(lesson.id)
+    assert [item.id for item in record.queue.entries] == [item.id for item in entries]
+    assert [record.entry_metadata[item.id].status for item in entries] == ["finished", "called", "waiting"]
+    assert record.entry_metadata[entries[0].id].result is None

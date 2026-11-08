@@ -99,9 +99,11 @@ def queue_detail(
     waiting: list[AdminQueueEntryResponse] = []
     called: list[AdminQueueEntryResponse] = []
     finished: list[AdminQueueEntryResponse] = []
+    entries: list[AdminQueueEntryResponse] = []
 
-    for entry in lesson.queue.entries:
+    for position, entry in enumerate(lesson.queue.entries, start=1):
         meta = metadata.get(entry.id)
+        entries.append(queue_entry(entry, meta, position=position))
         status = meta.status if meta is not None else EntryStatus.WAITING
         if status == EntryStatus.WAITING:
             waiting.append(queue_entry(entry, meta, position=len(waiting) + 1))
@@ -120,6 +122,7 @@ def queue_detail(
         waiting=waiting,
         called=called,
         finished=finished,
+        entries=entries,
     )
 
 
@@ -139,6 +142,7 @@ def lesson_queue_response(schedule: Schedule, lesson: Lesson, record: QueueRecor
     def participant(entry):
         return QueueParticipantResponse(
             id=entry.id, full_name=entry.full_name,
+            github=entry.github, lab_id=entry.lab_id, status=entry.status,
             lab_name=entry.lab_name, position=entry.position,
         )
 
@@ -148,6 +152,7 @@ def lesson_queue_response(schedule: Schedule, lesson: Lesson, record: QueueRecor
         closed=detail.closed, version=detail.version,
         waiting=[participant(entry) for entry in detail.waiting],
         called=[participant(entry) for entry in detail.called],
+        entries=[participant(entry) for entry in detail.entries],
         labs=labs,
     )
 

@@ -1109,6 +1109,8 @@ def admin_call_next(
         entry = service.call_next(lesson.id)
     except QueueEmptyError:
         raise HTTPException(status_code=409, detail="QUEUE_EMPTY")
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="LESSON_CANCELLED")
     except EntryNotFoundError:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
 
@@ -1302,8 +1304,8 @@ def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
     except LabNotPassedError:
         raise HTTPException(status_code=403, detail="LAB_NOT_PASSED")
 
-    if body.full_name is not None:
-        submitted_name = " ".join(body.full_name.split()).casefold().replace("ё", "е")
+    if body.submitted_full_name is not None:
+        submitted_name = " ".join(body.submitted_full_name.split()).casefold().replace("ё", "е")
         actual_name = " ".join(eligible.full_name.split()).casefold().replace("ё", "е")
         if submitted_name != actual_name:
             raise HTTPException(status_code=403, detail="STUDENT_NAME_MISMATCH")

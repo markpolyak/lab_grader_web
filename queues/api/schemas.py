@@ -6,7 +6,7 @@
 import uuid
 from datetime import date, datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..domain.status import DefenseResult, EntryStatus
 
@@ -60,6 +60,7 @@ class AdminQueueDetailResponse(BaseModel):
     waiting: list[AdminQueueEntryResponse]
     called: list[AdminQueueEntryResponse]
     finished: list[AdminQueueEntryResponse]
+    entries: list[AdminQueueEntryResponse]
 
 
 class QueueRegistrationRequest(BaseModel):
@@ -112,8 +113,24 @@ class QueueEntryRemovedResponse(BaseModel):
 class QueueJoinRequest(BaseModel):
     github: str = Field(..., min_length=1)
     full_name: str | None = Field(default=None, min_length=1)
+    surname: str | None = None
+    name: str | None = None
+    patronymic: str | None = None
     lesson_id: uuid.UUID
     lab_id: str = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def validate_name_parts(self):
+        if any(part is not None for part in (self.surname, self.name, self.patronymic)):
+            if not (self.surname and self.surname.strip() and self.name and self.name.strip()):
+                raise ValueError("Укажите фамилию и имя")
+        return self
+
+    @property
+    def submitted_full_name(self) -> str | None:
+        if self.surname is not None:
+            return " ".join(part.strip() for part in (self.surname, self.name, self.patronymic or "") if part and part.strip())
+        return self.full_name
 
 
 class QueueLeaveRequest(BaseModel):
@@ -126,7 +143,7 @@ class QueueLeaveResponse(BaseModel):
 
 
 class QueueFinishRequest(BaseModel):
-    outcome: DefenseResult
+    outcome: DefenseResult | None = None
 
 
 class StudentQueueEntryResponse(BaseModel):
@@ -150,6 +167,9 @@ class StudentQueueStateResponse(BaseModel):
 class QueueParticipantResponse(BaseModel):
     id: uuid.UUID
     full_name: str
+    github: str
+    lab_id: str
+    status: EntryStatus
     lab_name: str | None = None
     position: int | None = None
 
@@ -168,6 +188,7 @@ class LessonQueueResponse(BaseModel):
     version: int
     waiting: list[QueueParticipantResponse]
     called: list[QueueParticipantResponse]
+    entries: list[QueueParticipantResponse]
     labs: list[QueueLabResponse]
 
 
