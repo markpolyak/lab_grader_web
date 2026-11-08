@@ -9,7 +9,7 @@ from ..domain.lesson import Lesson
 from ..domain.queue_entry import QueueEntry
 from ..domain.queue_record import QueueEntryMetadata, QueueRecord
 from ..domain.schedule import Schedule
-from ..domain.status import EntryStatus
+from ..domain.status import DefenseResult, EntryStatus
 from .schemas import (
     AdminQueueDetailResponse,
     AdminQueueEntryResponse,
@@ -51,6 +51,7 @@ def queue_entry(
         lab_id=entry.lab_id,
         lab_name=entry.lab_name,
         status=metadata.status if metadata is not None else EntryStatus.WAITING,
+        absent=metadata is not None and metadata.result == DefenseResult.ABSENT,
         joined_at=entry.enqueued_time,
         called_at=metadata.called_at if metadata is not None else None,
         finished_at=metadata.finished_at if metadata is not None else None,
@@ -143,6 +144,7 @@ def lesson_queue_response(schedule: Schedule, lesson: Lesson, record: QueueRecor
         return QueueParticipantResponse(
             id=entry.id, full_name=entry.full_name,
             github=entry.github, lab_id=entry.lab_id, status=entry.status,
+            absent=entry.absent,
             lab_name=entry.lab_name, position=entry.position,
         )
 

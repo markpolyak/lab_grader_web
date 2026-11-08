@@ -142,7 +142,7 @@ def test_parallel_refreshes_do_not_replace_queue_objects():
 def test_duplicates_merge_but_distinct_kind_and_time_have_their_own_queue():
     service = QueueService()
     doc = document({"2026-11-09": [
-        item(), item(), item(kind="Лекция"), item(**{"starts-at": "17:00", "ends-at": "18:30"}),
+        item(), item(), item(kind="Практическое занятие"), item(**{"starts-at": "17:00", "ends-at": "18:30"}),
     ]})
     schedules = service.generate_week(courses(), [doc, deepcopy(doc)], week_start=MONDAY)
     lessons = schedules["os"].lessons
@@ -181,13 +181,47 @@ def test_default_week_uses_moscow_date_not_utc(monkeypatch):
         QueueService().generate_week(courses(), [], week_start=date(2026, 11, 10))
 
 
-def test_saved_real_export_can_seed_four_lessons_without_network():
+def test_saved_real_export_seeds_only_three_labs_without_network():
     root = Path(__file__).resolve().parents[2]
     service = QueueService()
     schedule = service.load_saved_week(courses(), root / "schedule", week_start=MONDAY)["os"]
-    assert len(schedule.lessons) == 4
+    assert len(schedule.lessons) == 3
     assert sum(lesson.kind == "Лабораторное занятие" for lesson in schedule.lessons) == 3
     assert all(lesson.queue.entries == [] for lesson in schedule.lessons)
+
+
+def test_only_labs_and_practicals_generate_queues():
+    service = QueueService()
+    doc = document({"2026-11-09": [
+        item(), item(kind="Практическое занятие"), item(kind="ЛР"),
+        item(kind="Лекция", **{"starts-at": None}),
+        item(kind="Консультация"), item(kind="Экзамен"),
+    ]})
+    lessons = generate(service, doc)["os"].lessons
+    assert {lesson.kind for lesson in lessons} == {"Лабораторное занятие", "Практическое занятие", "ЛР"}
+    assert len(service._lessons) == 3
+
+
+def test_previously_saved_rescheduled_lecture_stays_out_of_public_and_admin_schedule():
+    from queues.repositories.mappers import record_from_lesson
+
+    service = QueueService()
+    schedule = generate(service, document())["os"]
+    lecture = deepcopy(schedule.lessons[0])
+    from uuid import uuid4
+    lecture.id = uuid4()
+    lecture.kind = "Лекция"
+    lecture.original_starts_at = lecture.starts_at
+    record = record_from_lesson(schedule, lecture)
+    service.repository.create(record)
+    service._lessons[lecture.id] = lecture
+    service._records[lecture.id] = record
+    schedule.lessons.append(lecture)
+    schedule = generate(service, document())["os"]
+    assert all(lesson.kind != "Лекция" for lesson in schedule.lessons)
+    assert all(lesson.kind != "Лекция" for lesson in service.admin_lessons("os", MONDAY))
+    assert service.get_lesson("os", lecture.id) is None
+    assert service.repository.get(lecture.id) is not None
 
 
 def test_corrupt_yaml_preserves_loaded_queues(tmp_path):

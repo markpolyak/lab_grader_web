@@ -1,5 +1,6 @@
 import styled from "styled-components";
 import { colors, sizes } from "../../../theme";
+import { SecondaryButton } from "../queue-detail/styled";
 
 export const ScrollArea = styled.div`
   width: 100%;
@@ -27,8 +28,8 @@ export const Table = styled.table`
   button { white-space: nowrap; }
 `;
 export const Row = styled.tr`
-  background: ${({ $status }) => $status === "called" ? "#edf7ed" : ["finished", "withdrawn", "expired"].includes($status) ? "#f3f3f3" : "#fff"};
-  color: ${({ $status }) => $status === "called" ? "#1b5e20" : ["finished", "withdrawn", "expired"].includes($status) ? "#757575" : colors.textPrimary};
+  background: ${({ $status, $absent }) => $absent ? "#ffebee" : $status === "called" ? "#edf7ed" : ["finished", "withdrawn", "expired"].includes($status) ? "#f3f3f3" : "#fff"};
+  color: ${({ $status, $absent }) => $absent ? "#b71c1c" : $status === "called" ? "#1b5e20" : ["finished", "withdrawn", "expired"].includes($status) ? "#757575" : colors.textPrimary};
   ${({ $own }) => $own && `td:first-child { box-shadow: inset 3px 0 ${colors.buttonBorder}; }`}
 `;
 export const Name = styled.div`
@@ -37,4 +38,14 @@ export const Name = styled.div`
 export const EntryStatus = styled.div`
   font-size: ${sizes.fontSizeSmall};
   line-height: 1.6;
+`;
+export const RowActions = styled.div`
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+`;
+export const AbsentButton = styled(SecondaryButton)`
+  color: #b71c1c;
+  border-color: #b71c1c;
 `;

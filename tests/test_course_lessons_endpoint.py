@@ -52,7 +52,7 @@ def test_returns_actual_lessons_and_public_queue_state(endpoint):
     assert data["course_name"] == "Операционные системы"
     assert data["week_start"] == "2026-11-09"
     assert data["week_end"] == "2026-11-15"
-    assert len(data["lessons"]) == 4
+    assert len(data["lessons"]) == 3
     first = data["lessons"][0]
     assert first["id"] == str(lesson.id)
     assert first["starts_at"] == "2026-11-09T15:10:00+03:00"

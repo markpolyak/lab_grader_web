@@ -4,6 +4,7 @@ import pytest
 
 from queues.domain.err import InvalidStateError
 from queues.domain.student import Student
+from queues.domain.status import DefenseResult
 from queues.tests.test_queue_management import build, COURSES, SCHEDULE_DIR, MONDAY, TZ
 
 
@@ -77,3 +78,18 @@ def test_defense_statuses_and_order_survive_restart(tmp_path):
     assert [item.id for item in record.queue.entries] == [item.id for item in entries]
     assert [record.entry_metadata[item.id].status for item in entries] == ["finished", "called", "waiting"]
     assert record.entry_metadata[entries[0].id].result is None
+
+
+def test_absence_survives_restart_without_removing_student(tmp_path):
+    service = build(tmp_path)
+    lesson = service.schedules["os-2026"].lessons[0]
+    service.set_registration(lesson.id, closed=False)
+    entry = lesson.queue.add_entry(Student("Иван", "Иванов", "", "absent-demo"), "1")
+    service.call_next(lesson.id)
+    service.finish(lesson.id, entry.id, DefenseResult.ABSENT)
+    restored = build(tmp_path)
+    record = restored.get_record(lesson.id)
+    assert record.queue.entries[0].id == entry.id
+    assert record.entry_metadata[entry.id].status == "finished"
+    assert record.entry_metadata[entry.id].result == DefenseResult.ABSENT
+    assert restored.active_entry("os-2026", "absent-demo") is None

@@ -5,9 +5,12 @@ import { Alert, Dialog, DialogTitle, DialogContent, DialogActions } from "@mui/m
 import { Spin } from "antd";
 import { fetchAdminQueues, fetchAdminQueue, setQueueRegistration, updateAdminQueue, callNextStudent, finishStudent } from "../../../api/adminQueues";
 import { QueueTable } from "../../queue-table";
+import { CreateLessonForm } from "./CreateLessonForm";
+import { DateTimeField } from "../../date-time-field";
+import { RegistrationStatus } from "../../registration-status";
 import { Breadcrumb } from "../../breadcrumb";
 import { Page, Navigation, BackButton, Title } from "../../course-actions/styled";
-import { Content, Panel, Heading, Muted, Badge, Actions, PrimaryButton, SecondaryButton, Form, Label, Input } from "../../queue-detail/styled";
+import { Content, Panel, Heading, Muted, Actions, PrimaryButton, SecondaryButton, Form, Label } from "../../queue-detail/styled";
 import { Status } from "../../queue-lessons/styled";
 
 function localInput(value) {
@@ -33,6 +36,7 @@ function QueueView({ courseId, queueId }) {
   const [dialog, setDialog] = useState(null);
   const [starts, setStarts] = useState("");
   const [ends, setEnds] = useState("");
+  const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -85,9 +89,23 @@ function QueueView({ courseId, queueId }) {
 
   function badges(lesson, closed) {
     return <>
-      <Badge>{t(lesson.cancelled ? "adminQueues.cancelled" : closed ? "adminQueues.closed" : "adminQueues.open")}</Badge>
+      <RegistrationStatus cancelled={lesson.cancelled} closed={closed} />
       {lesson.original_starts_at && <Muted>{t("adminQueues.movedFrom", { date: format(lesson.original_starts_at) })}</Muted>}
     </>;
+  }
+
+  const inWeek = (queue) => {
+    const day = localInput(queue.lesson.starts_at).slice(0, 10);
+    return data.week_start <= day && day <= data.week_end;
+  };
+  function lessonCard(queue) {
+    return <Panel key={queue.queue_id}>
+      <Heading>{format(queue.lesson.starts_at)}</Heading>
+      <Muted>{queue.lesson.kind} · {t("queueLessons.groups")}: {queue.lesson.groups.join(", ")}</Muted>
+      {badges(queue.lesson, queue.closed)}
+      <Muted>{t("adminQueues.entries", { count: queue.entries_count })}</Muted>
+      <Actions><PrimaryButton onClick={() => navigate(`/admin/courses/${courseId}/queues/${queue.queue_id}`)}>{t("adminQueues.manage")}</PrimaryButton></Actions>
+    </Panel>;
   }
 
   return <Page>
@@ -101,15 +119,14 @@ function QueueView({ courseId, queueId }) {
       {!data && !error && <Status role="status"><Spin /><Muted>{t("adminQueues.loading")}</Muted></Status>}
       {!data && error && <SecondaryButton onClick={() => setRefresh((value) => value + 1)}>{t("queueLessons.retry")}</SecondaryButton>}
       {data && !queueId && <>
+        <Actions><PrimaryButton onClick={() => setCreating(true)}>{t("adminQueues.createLesson")}</PrimaryButton></Actions>
         <Muted>{data.course_name} · {data.week_start} — {data.week_end} · {t("queueDetail.moscowTime")}</Muted>
-        {data.queues.length === 0 && <Panel><Muted>{t("queueLessons.empty")}</Muted></Panel>}
-        {data.queues.map((queue) => <Panel key={queue.queue_id}>
-          <Heading>{format(queue.lesson.starts_at)}</Heading>
-          <Muted>{queue.lesson.kind} · {t("queueLessons.groups")}: {queue.lesson.groups.join(", ")}</Muted>
-          {badges(queue.lesson, queue.closed)}
-          <Muted>{t("adminQueues.entries", { count: queue.entries_count })}</Muted>
-          <Actions><PrimaryButton onClick={() => navigate(`/admin/courses/${courseId}/queues/${queue.queue_id}`)}>{t("adminQueues.manage")}</PrimaryButton></Actions>
-        </Panel>)}
+        {!data.queues.some(inWeek) && <Panel><Muted>{t("queueLessons.empty")}</Muted></Panel>}
+        {data.queues.filter(inWeek).map(lessonCard)}
+        {data.queues.some((queue) => !inWeek(queue)) && <>
+          <Heading>{t("adminQueues.otherDates")}</Heading>
+          {data.queues.filter((queue) => !inWeek(queue)).map(lessonCard)}
+        </>}
       </>}
       {data && queueId && <>
         <Panel>
@@ -130,10 +147,13 @@ function QueueView({ courseId, queueId }) {
           <Actions><PrimaryButton disabled={pending || data.lesson.cancelled || !data.waiting.length}
             onClick={() => mutate(() => callNextStudent(courseId, queueId))}>{t("queueTable.callNext")}</PrimaryButton></Actions>
           <QueueTable entries={data.entries} pending={pending}
+            onAbsent={(entryId) => mutate(() => finishStudent(courseId, queueId, entryId, "absent"))}
             onFinish={(entryId) => mutate(() => finishStudent(courseId, queueId, entryId))} />
         </Panel>
       </>}
     </Content>
+    {creating && <CreateLessonForm courseId={courseId} onClose={() => setCreating(false)}
+      onCreated={(id) => navigate(`/admin/courses/${courseId}/queues/${id}`)} />}
     <Dialog open={!!dialog} onClose={() => { if (!pending) setDialog(null); }} fullWidth maxWidth="sm" sx={{ zIndex: 3400 }} aria-labelledby="admin-queue-dialog-title">
       <DialogTitle id="admin-queue-dialog-title">{t(dialog === "move" ? "adminQueues.move" : data?.lesson?.cancelled ? "adminQueues.restore" : "adminQueues.cancelLesson")}</DialogTitle>
       <DialogContent>
@@ -141,12 +161,13 @@ function QueueView({ courseId, queueId }) {
         {dialog === "move" ? <Form id="admin-move-form" onSubmit={(event) => {
           event.preventDefault();
           const values = new FormData(event.currentTarget);
+          if (!values.get("starts") || !values.get("ends")) { setError(t("adminQueues.dateTimeRequired")); return; }
           mutate(() => updateAdminQueue(courseId, queueId, { lesson_starts_at: `${values.get("starts")}:00+03:00`, lesson_ends_at: `${values.get("ends")}:00+03:00` }));
         }}>
           <Label htmlFor="lesson-start">{t("adminQueues.starts")}</Label>
-          <Input id="lesson-start" name="starts" type="datetime-local" required value={starts} onChange={(event) => setStarts(event.target.value)} />
+          <DateTimeField id="lesson-start" name="starts" value={starts} onChange={setStarts} disabled={pending} />
           <Label htmlFor="lesson-end">{t("adminQueues.ends")}</Label>
-          <Input id="lesson-end" name="ends" type="datetime-local" required value={ends} onChange={(event) => setEnds(event.target.value)} />
+          <DateTimeField id="lesson-end" name="ends" value={ends} onChange={setEnds} disabled={pending} />
         </Form> : <Muted>{t(data?.lesson?.cancelled ? "adminQueues.restoreConfirm" : "adminQueues.cancelConfirm")}</Muted>}
       </DialogContent>
       <DialogActions sx={{ p: 3, gap: 1, flexWrap: "wrap" }}>

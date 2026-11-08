@@ -45,6 +45,7 @@ class AdminQueueEntryResponse(BaseModel):
     lab_id: str
     lab_name: str | None = None
     status: EntryStatus
+    absent: bool = False
     joined_at: datetime
     called_at: datetime | None = None
     finished_at: datetime | None = None
@@ -170,6 +171,7 @@ class QueueParticipantResponse(BaseModel):
     github: str
     lab_id: str
     status: EntryStatus
+    absent: bool = False
     lab_name: str | None = None
     position: int | None = None
 

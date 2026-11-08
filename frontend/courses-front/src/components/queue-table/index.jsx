@@ -1,9 +1,10 @@
 import { useTranslation } from "react-i18next";
 import { PrimaryButton } from "../queue-detail/styled";
-import { ScrollArea, Table, Row, Name, EntryStatus } from "./styled";
+import { ScrollArea, Table, Row, Name, EntryStatus, RowActions, AbsentButton } from "./styled";
 
-export function QueueTable({ entries, ownEntryId, onFinish, pending = false }) {
+export function QueueTable({ entries, ownEntryId, onFinish, onAbsent, pending = false }) {
   const { t } = useTranslation();
+  const nextWaitingId = entries.find((entry) => entry.status === "waiting")?.id;
   return <ScrollArea tabIndex={0}>
     <Table aria-label={t("queueDetail.participants")}>
       <thead><tr>
@@ -15,17 +16,21 @@ export function QueueTable({ entries, ownEntryId, onFinish, pending = false }) {
       </tr></thead>
       <tbody>
         {entries.length === 0 && <tr><td colSpan={onFinish ? 5 : 4}>{t("queueTable.empty")}</td></tr>}
-        {entries.map((entry) => <Row key={entry.id} $status={entry.status} $own={entry.id === ownEntryId}>
+        {entries.map((entry) => <Row key={entry.id} $status={entry.status} $absent={entry.absent} $own={entry.id === ownEntryId}>
           <td>{entry.position}</td>
           <td>
             <Name>{entry.full_name}{entry.id === ownEntryId && ` · ${t("queueDetail.you")}`}</Name>
-            <EntryStatus>{t(`queueTable.status.${entry.status}`)}</EntryStatus>
+            <EntryStatus>{t(`queueTable.status.${entry.absent ? "absent" : entry.status}`)}</EntryStatus>
           </td>
           <td>{entry.github}</td>
           <td>{entry.lab_name || entry.lab_id}</td>
-          {onFinish && <td>{entry.status === "called" && <PrimaryButton disabled={pending}
+          {onFinish && <td>{(entry.status === "called" || entry.id === nextWaitingId) && <RowActions>
+            {entry.status === "called" && <PrimaryButton disabled={pending}
             aria-label={`${t("queueTable.finish")} — ${entry.full_name}`}
-            onClick={() => onFinish(entry.id)}>{t("queueTable.finish")}</PrimaryButton>}</td>}
+            onClick={() => onFinish(entry.id)}>{t("queueTable.finish")}</PrimaryButton>}
+            {onAbsent && <AbsentButton disabled={pending} aria-label={`${t("queueTable.absent")} — ${entry.full_name}`}
+              onClick={() => onAbsent(entry.id)}>{t("queueTable.absent")}</AbsentButton>}
+          </RowActions>}</td>}
         </Row>)}
       </tbody>
     </Table>
