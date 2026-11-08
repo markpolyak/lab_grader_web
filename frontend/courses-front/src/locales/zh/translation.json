@@ -285,7 +285,11 @@
       "saveFailed": "无法保存课程表文件",
       "saved": "课程表已保存",
       "saving": "保存中…",
-      "placeholder": "课程表 YAML 配置…"
+      "placeholder": "课程表 YAML 配置…",
+      "errors": {
+        "startRequired": "每个时段必须填写开始时间",
+        "endRequired": "每个时段必须填写结束时间"
+      }
     },
     "corrections": {
       "title": "课程表修正 — 小组 {{groupId}}",
@@ -339,7 +343,19 @@
         "saveFailed": "无法保存修正",
         "requiredFields": "请填写 ID 和日期",
         "slotRequired": "请指定时段 ID (取消) 或 ID/时间 (添加)",
-        "startBeforeEnd": "开始时间必须早于结束时间"
+        "startBeforeEnd": "开始时间必须早于结束时间",
+        "removeSlotIdRequired": "remove_slots: slot_id 必填",
+        "removeSlotLabsArray": "remove_slots: labs 必须是数组或 null",
+        "addSlotIdRequired": "add_slots: id 必填",
+        "addSlotStartRequired": "add_slots: start 必填",
+        "addSlotEndRequired": "add_slots: end 必填",
+        "addSlotStartFormat": "add_slots: start 必须是 HH:MM 或 HH:MM:SS",
+        "addSlotEndFormat": "add_slots: end 必须是 HH:MM 或 HH:MM:SS",
+        "addSlotEndBeforeStart": "add_slots: end 必须晚于 start",
+        "addSlotRecurrenceObject": "add_slots: recurrence 必须是对象",
+        "addSlotRecurrenceDay": "add_slots: recurrence day 无效",
+        "addSlotRecurrenceWeek": "add_slots: recurrence.week 必须是 all/odd/even",
+        "addSlotLabsArray": "add_slots: labs 必须是数组或 null"
       },
       "actions": {
         "edit": "编辑",

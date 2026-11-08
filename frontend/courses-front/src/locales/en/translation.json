@@ -45,9 +45,6 @@
     "provisioningFork": "fork",
     "updateButton": "Update student repositories",
     "disabledReason": "Only available for labs with repo-provisioning: fork and a template-repo set",
-    "schedule": {
-      "button": "Schedule"
-    },
     "dryRun": {
       "title": "Preview update rollout",
       "summary": "{{count}} student repositories will receive an update proposal",
@@ -251,7 +248,6 @@
   },
   "schedule": {
     "title": "Schedule",
-    "loading": "Loading…",
     "groupSourcesDescription": "Only Google Sheets tabs with numeric group names are used for schedules. Add a numeric group ID manually if needed; the list is saved in the course config.",
     "manualGroupInput": "Group ID",
     "addManualGroup": "Add group",
@@ -282,7 +278,11 @@
       "saveFailed": "Failed to save schedule file",
       "saved": "Schedule saved",
       "saving": "Saving…",
-      "placeholder": "Schedule YAML configuration…"
+      "placeholder": "Schedule YAML configuration…",
+      "errors": {
+        "startRequired": "start is required for each slot",
+        "endRequired": "end is required for each slot"
+      }
     },
     "corrections": {
       "title": "Schedule Corrections — group {{groupId}}",
@@ -292,7 +292,7 @@
       "addButton": "Add correction",
       "saveChanges": "Save changes",
       "saving": "Saving…",
-      "loading": "Loading corrections…",
+      "loading": "Loading…",
       "empty": "No corrections. Click «Add correction» to create one.",
       "close": "Close",
       "types": {
@@ -317,8 +317,8 @@
         "recurrenceDay": "Weekday (recurrence)",
         "recurrenceDayHint": "Leave empty for one-off session and fill «Date» below.",
         "recurrenceWeek": "Week parity",
-        "dateOnce": "Date (one-off session)",
-        "dateOnceHint": "For one-off sessions without recurrence, specify the date here. Leave empty if using recurrence.",
+        "dateOnce": "Date (one-off)",
+        "dateOnceHint": "Alternative to recurrence: specific date.",
         "start": "Start",
         "end": "End",
         "subject": "Subject",
@@ -336,7 +336,19 @@
         "saveFailed": "Failed to save corrections",
         "requiredFields": "Fill in ID and date",
         "slotRequired": "Specify slot ID (for removal) or ID/time (for addition)",
-        "startBeforeEnd": "Start time must be before end time"
+        "startBeforeEnd": "Start time must be before end time",
+        "removeSlotIdRequired": "remove_slots: slot_id is required",
+        "removeSlotLabsArray": "remove_slots: labs must be an array or null",
+        "addSlotIdRequired": "add_slots: id is required",
+        "addSlotStartRequired": "add_slots: start is required",
+        "addSlotEndRequired": "add_slots: end is required",
+        "addSlotStartFormat": "add_slots: start must be HH:MM or HH:MM:SS",
+        "addSlotEndFormat": "add_slots: end must be HH:MM or HH:MM:SS",
+        "addSlotEndBeforeStart": "add_slots: end must be after start",
+        "addSlotRecurrenceObject": "add_slots: recurrence must be an object",
+        "addSlotRecurrenceDay": "add_slots: invalid recurrence day",
+        "addSlotRecurrenceWeek": "add_slots: recurrence.week must be all/odd/even",
+        "addSlotLabsArray": "add_slots: labs must be an array or null"
       },
       "actions": {
         "edit": "Edit",

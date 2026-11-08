@@ -282,7 +282,11 @@
       "saveFailed": "Не удалось сохранить файл расписания",
       "saved": "Расписание сохранено",
       "saving": "Сохранение…",
-      "placeholder": "YAML конфигурация расписания…"
+      "placeholder": "YAML конфигурация расписания…",
+      "errors": {
+        "startRequired": "Поле start обязательно для каждого слота",
+        "endRequired": "Поле end обязательно для каждого слота"
+      }
     },
     "corrections": {
       "title": "Коррекции расписания — группа {{groupId}}",
@@ -336,7 +340,19 @@
         "saveFailed": "Не удалось сохранить коррекции",
         "requiredFields": "Заполните ID и дату",
         "slotRequired": "Укажите ID слота (для отмены) или ID/время (для добавления)",
-        "startBeforeEnd": "Время начала должно быть раньше времени окончания"
+        "startBeforeEnd": "Время начала должно быть раньше времени окончания",
+        "removeSlotIdRequired": "remove_slots: slot_id обязателен",
+        "removeSlotLabsArray": "remove_slots.labs должен быть массивом или null",
+        "addSlotIdRequired": "add_slots: id обязателен",
+        "addSlotStartRequired": "add_slots: start обязателен",
+        "addSlotEndRequired": "add_slots: end обязателен",
+        "addSlotStartFormat": "add_slots: start должен быть HH:MM или HH:MM:SS",
+        "addSlotEndFormat": "add_slots: end должен быть HH:MM или HH:MM:SS",
+        "addSlotEndBeforeStart": "add_slots: end должен быть после start",
+        "addSlotRecurrenceObject": "add_slots: recurrence должен быть объектом",
+        "addSlotRecurrenceDay": "add_slots: неверный день недели в recurrence",
+        "addSlotRecurrenceWeek": "add_slots: recurrence.week должен быть all/odd/even",
+        "addSlotLabsArray": "add_slots: labs должен быть массивом или null"
       },
       "actions": {
         "edit": "Редактировать",

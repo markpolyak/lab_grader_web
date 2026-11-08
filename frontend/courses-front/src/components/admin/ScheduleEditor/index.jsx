@@ -200,6 +200,24 @@ function validateYaml(content) {
                   });
                 }
 
+                // Validate required start/end for all slots
+                if (!slot.start) {
+                  diagnostics.push({
+                    from: 0,
+                    to: content.length,
+                    severity: "error",
+                    message: `Group "${groupId}" slot "${slot.id}": start is required`,
+                  });
+                }
+                if (!slot.end) {
+                  diagnostics.push({
+                    from: 0,
+                    to: content.length,
+                    severity: "error",
+                    message: `Group "${groupId}" slot "${slot.id}": end is required`,
+                  });
+                }
+
                 if (slot.recurrence) {
                   if (typeof slot.recurrence !== "object") {
                     diagnostics.push({
@@ -321,6 +339,29 @@ function validateYaml(content) {
                       severity: "error",
                       message: `Group "${groupId}" correction ${i}: remove_slots must be an array`,
                     });
+                  } else {
+                    for (let j = 0; j < corr.remove_slots.length; j++) {
+                      const rem = corr.remove_slots[j];
+                      if (!rem || typeof rem !== "object") continue;
+                      if (!rem.slot_id) {
+                        diagnostics.push({
+                          from: 0,
+                          to: content.length,
+                          severity: "error",
+                          message: `Group "${groupId}" correction ${i} remove_slots[${j}]: slot_id is required`,
+                        });
+                      }
+                      if (rem.labs !== undefined) {
+                        if (!Array.isArray(rem.labs)) {
+                          diagnostics.push({
+                            from: 0,
+                            to: content.length,
+                            severity: "error",
+                            message: `Group "${groupId}" correction ${i} remove_slots[${j}]: labs must be an array or null`,
+                          });
+                        }
+                      }
+                    }
                   }
                 }
                 if (corr.add_slots !== undefined) {
@@ -331,6 +372,109 @@ function validateYaml(content) {
                       severity: "error",
                       message: `Group "${groupId}" correction ${i}: add_slots must be an array`,
                     });
+                  } else {
+                    for (let j = 0; j < corr.add_slots.length; j++) {
+                      const add = corr.add_slots[j];
+                      if (!add || typeof add !== "object") continue;
+                      
+                      // Validate add_slot as a slot (allow_no_date = true)
+                      if (!add.id) {
+                        diagnostics.push({
+                          from: 0,
+                          to: content.length,
+                          severity: "error",
+                          message: `Group "${groupId}" correction ${i} add_slots[${j}]: id is required`,
+                        });
+                      }
+                      
+                      if (!add.start) {
+                        diagnostics.push({
+                          from: 0,
+                          to: content.length,
+                          severity: "error",
+                          message: `Group "${groupId}" correction ${i} add_slots[${j}]: start is required`,
+                        });
+                      }
+                      if (!add.end) {
+                        diagnostics.push({
+                          from: 0,
+                          to: content.length,
+                          severity: "error",
+                          message: `Group "${groupId}" correction ${i} add_slots[${j}]: end is required`,
+                        });
+                      }
+                      
+                      const timeRegex = /^([01]\d|2[0-3]):([0-5]\d)(?::([0-5]\d))?$/;
+                      if (add.start && !timeRegex.test(add.start)) {
+                        diagnostics.push({
+                          from: 0,
+                          to: content.length,
+                          severity: "error",
+                          message: `Group "${groupId}" correction ${i} add_slots[${j}]: start time must be HH:MM or HH:MM:SS`,
+                        });
+                      }
+                      if (add.end && !timeRegex.test(add.end)) {
+                        diagnostics.push({
+                          from: 0,
+                          to: content.length,
+                          severity: "error",
+                          message: `Group "${groupId}" correction ${i} add_slots[${j}]: end time must be HH:MM or HH:MM:SS`,
+                        });
+                      }
+                      if (add.start && add.end && timeRegex.test(add.start) && timeRegex.test(add.end)) {
+                        const [sh, sm] = add.start.split(":").map(Number);
+                        const [eh, em] = add.end.split(":").map(Number);
+                        if (eh * 60 + em <= sh * 60 + sm) {
+                          diagnostics.push({
+                            from: 0,
+                            to: content.length,
+                            severity: "error",
+                            message: `Group "${groupId}" correction ${i} add_slots[${j}]: end must be after start`,
+                          });
+                        }
+                      }
+                      
+                      if (add.recurrence) {
+                        if (typeof add.recurrence !== "object") {
+                          diagnostics.push({
+                            from: 0,
+                            to: content.length,
+                            severity: "error",
+                            message: `Group "${groupId}" correction ${i} add_slots[${j}]: recurrence must be an object`,
+                          });
+                        } else {
+                          const validDays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+                          if (add.recurrence.day && !validDays.includes(add.recurrence.day)) {
+                            diagnostics.push({
+                              from: 0,
+                              to: content.length,
+                              severity: "error",
+                              message: `Group "${groupId}" correction ${i} add_slots[${j}]: invalid recurrence day "${add.recurrence.day}"`,
+                            });
+                          }
+                          const validWeeks = ["all", "odd", "even"];
+                          if (add.recurrence.week && !validWeeks.includes(add.recurrence.week)) {
+                            diagnostics.push({
+                              from: 0,
+                              to: content.length,
+                              severity: "error",
+                              message: `Group "${groupId}" correction ${i} add_slots[${j}]: recurrence.week must be 'all', 'odd', or 'even'`,
+                            });
+                          }
+                        }
+                      }
+                      
+                      if (add.labs !== undefined) {
+                        if (!Array.isArray(add.labs)) {
+                          diagnostics.push({
+                            from: 0,
+                            to: content.length,
+                            severity: "error",
+                            message: `Group "${groupId}" correction ${i} add_slots[${j}]: labs must be an array or null`,
+                          });
+                        }
+                      }
+                    }
                   }
                 }
               }
