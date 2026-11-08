@@ -201,7 +201,10 @@ async def lifespan(app: FastAPI):
         for course_id, course in iter_course_configs()
         if (spreadsheet_id := course.get("google", {}).get("queue-history-spreadsheet"))
     }
-    queue_service = QueueService(FileQueueRepository())
+    queue_service = QueueService(
+        FileQueueRepository(),
+        opens_before_minutes=int(os.getenv("QUEUE_OPENS_BEFORE_MINUTES", "15")),
+    )
     history_service = QueueHistoryService(queue_service, history, history_by_course=history_by_course)
     app.state.queue_history_service = history_service
     week_start = os.getenv("QUEUE_WEEK_START")
@@ -217,6 +220,10 @@ async def lifespan(app: FastAPI):
             load_queue_schedules()
         except Exception:
             logger.exception("Не удалось обновить занятия и очереди; прежнее состояние сохранено")
+        try:
+            queue_service.reconcile()
+        except Exception:
+            logger.exception("Не удалось сверить состояние очередей")
 
     sync_queue_schedules()
     app.state.queue_service = queue_service
@@ -238,12 +245,13 @@ async def lifespan(app: FastAPI):
         loop = asyncio.get_running_loop()
 
         def archive_queues(retry_only=False):
+            queue_service.reconcile()
             asyncio.run_coroutine_threadsafe(
                 history_service.archive_finished(retry_only=retry_only), loop,
             ).result()
 
         parser.scheduler.add_job(
-            archive_queues, "cron", hour=23, minute=59, timezone="Europe/Moscow",
+            archive_queues, "cron", hour=0, minute=0, timezone="Europe/Moscow",
             id="queue-history-daily", max_instances=1, coalesce=True,
             misfire_grace_time=3600,
         )
@@ -914,6 +922,7 @@ def _get_current_schedule(request: Request, course_id: str):
         if schedule is None:
             raise HTTPException(status_code=404, detail="Расписание очередей для этого курса не настроено")
 
+    service.reconcile()
     return service, schedule
 
 
@@ -1061,6 +1070,8 @@ async def admin_update_queue(
             registration_closes_at=body.registration_closes_at,
             service_until=body.service_until,
         )
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
     except EntryNotFoundError:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
     except ValueError as exc:
@@ -1090,6 +1101,8 @@ async def admin_delete_queue(
 
     try:
         await asyncio.to_thread(service.delete_queue, lesson.id)
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
     except EntryNotFoundError:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
     except QueueNotDeletableError:
@@ -1338,6 +1351,8 @@ async def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
 
     try:
         entry = await asyncio.to_thread(service.join, lesson.id, eligible)
+    except InvalidStateError:
+        raise HTTPException(status_code=409, detail="INVALID_STATE")
     except QueueClosedError:
         raise HTTPException(status_code=409, detail="QUEUE_CLOSED")
     except GroupNotAllowedError:

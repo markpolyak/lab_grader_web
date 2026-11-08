@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import main
 from queues.domain import DefenseResult, EntryStatus, QueueEntryMetadata
 from queues.domain.student import Student
+from queues.domain.status import RegistrationMode
 from queues.usecase.queue_service import QueueService
 
 
@@ -22,6 +23,8 @@ COURSES = {
 
 @pytest.fixture
 def endpoint(monkeypatch):
+    monkeypatch.setattr("queues.usecase.queue_service._now",
+                        lambda: datetime.fromisoformat("2026-11-09T14:50:00+03:00"))
     service = QueueService()
     service.load_saved_week(
         COURSES, Path(__file__).resolve().parents[1] / "schedule", week_start=MONDAY
@@ -73,6 +76,7 @@ def test_cancel_and_restore_lesson(endpoint):
 def test_lists_current_week_queues_without_private_data(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     lesson.queue.add_entry(Student("Иван", "Иванов", "", "private-login"), "1", "ЛР1")
     before = lesson.queue.entries[:]
@@ -163,6 +167,7 @@ def test_detail_requires_admin(endpoint):
 def test_detail_splits_waiting_called_and_finished(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     first = lesson.queue.add_entry(
         Student("Иван", "Иванов", "Иванович", "ivan"), "1", "ЛР1"
@@ -223,6 +228,7 @@ def test_detail_splits_waiting_called_and_finished(endpoint):
 def test_detail_defaults_an_entry_without_metadata_to_waiting(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     entry = lesson.queue.add_entry(
         Student("Иван", "Иванов", "", "ivan"), "1", "ЛР1"
@@ -353,6 +359,7 @@ def test_registration_unknown_queue_and_course_are_404(endpoint):
 def test_call_next_and_finish_move_entry_through_statuses(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     first = lesson.queue.add_entry(
         Student("Иван", "Иванов", "", "first"), "1", "ЛР1"
@@ -399,6 +406,7 @@ def test_call_next_empty_queue_is_409(endpoint):
 def test_several_called_students_form_fifo_prefix_and_finish_stays_in_table(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     entries = [lesson.queue.add_entry(Student(f"Студент{i}", "Тестовый", "", f"demo-{i}"), "1", "ЛР1") for i in range(4)]
     path = f"/admin/courses/os-2026/queues/{lesson.id}"
@@ -435,6 +443,7 @@ def test_cancelled_lesson_cannot_call_students(endpoint):
 def test_finish_requires_called_state_and_known_entry(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     entry = lesson.queue.add_entry(
         Student("Иван", "Иванов", "", "first"), "1", "ЛР1"
@@ -459,6 +468,7 @@ def test_finish_requires_called_state_and_known_entry(endpoint):
 def test_call_and_finish_require_admin(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     entry = lesson.queue.add_entry(
         Student("Иван", "Иванов", "", "first"), "1", "ЛР1"
@@ -476,6 +486,7 @@ def test_call_and_finish_require_admin(endpoint):
 def test_queue_history_returns_terminal_entries(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     finished = lesson.queue.add_entry(
         Student("Иван", "Иванов", "", "finished"), "1", "ЛР1"
@@ -599,6 +610,7 @@ def test_update_queue_accepts_scheduled_times_and_arbitrary_date_creation(endpoi
 def test_absent_student_is_terminal_and_visible_in_both_tables(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     entry = lesson.queue.add_entry(Student("Иван", "Иванов", "", "absent-student"), "1", "ЛР1")
     path = f"/admin/courses/os-2026/queues/{lesson.id}"
@@ -622,6 +634,7 @@ def test_absent_student_is_terminal_and_visible_in_both_tables(endpoint):
 def test_waiting_absence_cannot_skip_the_next_student(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     entries = [lesson.queue.add_entry(Student(str(i), "Тест", "", f"fifo-{i}"), "1") for i in range(4)]
     path = f"/admin/courses/os-2026/queues/{lesson.id}"
@@ -733,6 +746,7 @@ def test_delete_manual_queue_and_reject_others(endpoint):
         },
     ).json()["queue_id"]
     lesson = next(item for item in service.schedules["os-2026"].lessons if str(item.id) == manual)
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     lesson.queue.add_entry(Student("Иван", "Иванов", "", "ivan"), "1", "ЛР1")
     service.save_lesson(lesson.id)
@@ -745,6 +759,7 @@ def test_delete_manual_queue_and_reject_others(endpoint):
 def test_update_result_and_remove_entry(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     entry = lesson.queue.add_entry(
         Student("Иван", "Иванов", "", "ivan"), "1", "ЛР1"
@@ -781,3 +796,21 @@ def test_update_result_and_remove_entry(endpoint):
     assert client.delete(
         f"/admin/courses/os-2026/queues/{lesson.id}/entries/{waiting.id}"
     ).status_code == 409
+
+
+@pytest.mark.parametrize('action', ['registration', 'call-next', 'update', 'delete'])
+def test_archive_blocks_admin_http_mutations(endpoint, action):
+    client, service = endpoint
+    authenticate(client)
+    schedule = service.schedules['os-2026']
+    lesson = schedule.lessons[0]
+    service.begin_archive(schedule.id, lesson.id)
+    path = f'/admin/courses/os-2026/queues/{lesson.id}'
+    calls = {
+        'registration': lambda: client.put(path + '/registration', json={'closed': False}),
+        'call-next': lambda: client.post(path + '/call-next'),
+        'update': lambda: client.patch(path, json={'cancelled': True}),
+        'delete': lambda: client.delete(path),
+    }
+    assert calls[action]().status_code == 409
+    assert lesson.queue._archiving

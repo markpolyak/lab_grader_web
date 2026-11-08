@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from uuid import uuid4
 
@@ -14,6 +14,7 @@ from grading.queue_eligibility import (
     StudentNotFoundError,
 )
 from queues.domain import Student
+from queues.domain.status import RegistrationMode
 from queues.usecase.queue_service import QueueService
 
 MONDAY = date(2026, 11, 9)
@@ -30,6 +31,8 @@ SCHEDULE_DIR = Path(__file__).resolve().parents[1] / "schedule"
 
 @pytest.fixture
 def endpoint(monkeypatch):
+    monkeypatch.setattr("queues.usecase.queue_service._now",
+                        lambda: datetime.fromisoformat("2026-11-09T14:50:00+03:00"))
     service = QueueService()
     service.load_saved_week(COURSES, SCHEDULE_DIR, week_start=MONDAY)
     monkeypatch.setattr(main.app.state, "queue_service", service, raising=False)
@@ -69,6 +72,7 @@ def endpoint(monkeypatch):
 
 def open_first_lesson(service):
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     return lesson
 
@@ -328,3 +332,29 @@ def test_leave_rejects_foreign_and_unknown_entry(endpoint):
     )
     assert unknown.status_code == 404
     assert unknown.json()["detail"] == "ENTRY_NOT_FOUND"
+
+
+def test_reading_student_state_expires_unfinished_entry(endpoint, monkeypatch):
+    client, service = endpoint
+    lesson = open_first_lesson(service)
+    service.join(lesson.id, EligibleStudentLab(
+        student=Student('Иван', 'Иванов', '', 'student'),
+        full_name='Иванов Иван', group_id='4431', lab_id='1', lab_name='ЛР1',
+    ))
+    monkeypatch.setattr('queues.usecase.queue_service._now',
+                        lambda: datetime.fromisoformat('2026-11-10T00:00:00+03:00'))
+    response = client.get('/courses/os-2026/queue?github=student&group_id=4431')
+    assert response.status_code == 200
+    assert response.json()['entry'] is None
+
+
+def test_join_while_archiving_returns_conflict(endpoint):
+    client, service = endpoint
+    schedule = service.schedules['os-2026']
+    lesson = open_first_lesson(service)
+    service.begin_archive(schedule.id, lesson.id)
+    response = client.post('/courses/os-2026/queue/join', json={
+        'lesson_id': str(lesson.id), 'github': 'student', 'lab_id': '1',
+    })
+    assert response.status_code == 409
+    assert lesson.queue.entries == []

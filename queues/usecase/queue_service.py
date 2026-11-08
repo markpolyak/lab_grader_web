@@ -25,7 +25,7 @@ from ..domain.queue import Queue
 from ..domain.queue_entry import QueueEntry
 from ..domain.queue_record import QueueEntryMetadata, QueueRecord
 from ..domain.schedule import Schedule
-from ..domain.status import DefenseResult, EntryStatus
+from ..domain.status import DefenseResult, EntryStatus, RegistrationMode
 from ..repositories.mappers import (
     ensure_entry_metadata,
     group_ids,
@@ -90,7 +90,10 @@ def _validate_registration(record: QueueRecord) -> None:
 
 
 class QueueService:
-    def __init__(self, repository=None):
+    def __init__(self, repository=None, *, opens_before_minutes: int = 15):
+        if opens_before_minutes < 0:
+            raise ValueError("Время открытия не может быть отрицательным")
+        self.opens_before_minutes = opens_before_minutes
         self.repository = repository or InMemoryQueueRepository()
         self.schedules: dict[str, Schedule] = {}
         # Retain schedules of previous weeks and lessons removed from current YAML.
@@ -100,6 +103,41 @@ class QueueService:
         self._archive_week: date | None = None
         self._records: dict = {}
         self._lock = RLock()
+
+    def _assert_mutable(self, lesson_id) -> None:
+        lesson = self._lessons.get(lesson_id)
+        if lesson is not None and lesson.queue._archiving:
+            raise InvalidStateError("Очередь сохраняется в историю")
+
+    def reconcile(self, *, now=None) -> None:
+        """Apply clock-derived availability and persist expired entries."""
+        now = now or _now()
+        if now.tzinfo is None:
+            raise ValueError("Время должно содержать часовой пояс")
+        with self._lock:
+            for lesson_id, record in self._records.items():
+                lesson = self._lessons.get(lesson_id)
+                if lesson is None or lesson.queue._archiving:
+                    continue
+                lesson.queue.closed = not record.is_open_at(
+                    now, opens_before_minutes=self.opens_before_minutes,
+                )
+                if now < record.service_deadline():
+                    continue
+                ensure_entry_metadata(record)
+                previous = deepcopy(record.entry_metadata)
+                changed = False
+                for metadata in record.entry_metadata.values():
+                    if metadata.status in ACTIVE_STATUSES:
+                        metadata.status = EntryStatus.EXPIRED
+                        metadata.finished_at = record.service_deadline()
+                        changed = True
+                if changed:
+                    try:
+                        self.save_lesson(lesson_id)
+                    except Exception:
+                        record.entry_metadata = previous
+                        raise
 
     def load_saved_week(self, courses, directory="schedule", *, week_start=None):
         # Serialize file reads and publication with parser callbacks and HTTP reloads.
@@ -188,10 +226,14 @@ class QueueService:
                     elif not lesson.queue._archiving:
                         lesson.room = candidate.room
 
-                    record = self.repository.get(lesson_id)
+                    record = (self._records.get(lesson_id) if lesson.queue._archiving
+                              else self.repository.get(lesson_id))
+                    if record is not None and record.archived:
+                        self._lessons.pop(lesson_id, None)
+                        continue
                     if record is None:
                         record = record_from_lesson(schedule, lesson)
-                    else:
+                    elif not lesson.queue._archiving:
                         record = restore_record(record, schedule, lesson)
                     self._records[lesson_id] = record
 
@@ -201,6 +243,8 @@ class QueueService:
                 # Manual and rescheduled lessons may have no source entry in
                 # this week; restore them from the repository after a restart.
                 for record in self.repository.list_by_course(course_id):
+                    if record.archived:
+                        continue
                     if not (record.manual or record.original_starts_at is not None) or record.id in lessons:
                         continue
                     if record.id in self._archived_lesson_ids:
@@ -226,6 +270,8 @@ class QueueService:
                             original_starts_at=record.original_starts_at,
                         )
                         self._lessons[record.id] = lesson
+                    elif lesson.queue._archiving:
+                        record = self._records[record.id]
                     else:
                         lesson.queue = record.queue
                         lesson.starts_at = record.lesson_starts_at
@@ -273,6 +319,7 @@ class QueueService:
     def begin_archive(self, schedule_id: uuid.UUID, lesson_id: uuid.UUID):
         """Freeze a queue and return its course context and detached snapshot."""
         with self._lock:
+            self.reconcile()
             schedule = self._schedules.get(schedule_id)
             if schedule is None:
                 raise LookupError("Расписание не найдено")
@@ -301,6 +348,17 @@ class QueueService:
                 return
             if not lesson.queue._archiving:
                 raise RuntimeError("Архивирование занятия не начато")
+            record = self._records.get(lesson_id)
+            if record is not None:
+                candidate = deepcopy(record)
+                candidate.archived = True
+                candidate.queue.closed = True
+                candidate.queue._archiving = False
+                try:
+                    self.repository.save(candidate, expected_version=record.version)
+                except QueueNotFoundError:
+                    self.repository.create(candidate)
+                self._records.pop(lesson_id, None)
             lesson.queue._archiving = False
             if self._archive_week is not None:
                 lesson_date = lesson.starts_at.astimezone(ZoneInfo("Europe/Moscow")).date()
@@ -314,12 +372,14 @@ class QueueService:
 
 
     def finished_lessons(self) -> list[tuple[uuid.UUID, uuid.UUID]]:
-        now = datetime.now(ZoneInfo("Europe/Moscow"))
+        now = _now()
         with self._lock:
             return [
                 (schedule.id, lesson.id)
                 for schedule in self._schedules.values() for lesson in schedule.lessons
-                if lesson.id in self._lessons and lesson.ends_at <= now
+                if lesson.id in self._lessons
+                and (self._records[lesson.id].service_deadline() <= now
+                     if lesson.id in self._records else lesson.ends_at <= now)
                 and not lesson.queue._archiving
             ]
     def set_registration(self, lesson_id, *, closed: bool) -> QueueRecord:
@@ -329,11 +389,14 @@ class QueueService:
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
                 raise KeyError(f"Занятие {lesson_id} не найдено")
+            self._assert_mutable(lesson_id)
             closed = bool(closed)
             if lesson.cancelled and not closed:
                 raise InvalidStateError("Отменённое занятие нельзя открыть для записи")
-            if lesson.queue.closed == closed:
+            mode = RegistrationMode.MANUALLY_CLOSED if closed else RegistrationMode.MANUALLY_OPENED
+            if lesson.queue.closed == closed and record.registration_mode == mode:
                 return record
+            record.registration_mode = mode
             lesson.queue.closed = closed
             return self.save_lesson(lesson_id)
 
@@ -364,6 +427,7 @@ class QueueService:
     def save_lesson(self, lesson_id) -> QueueRecord:
         """Сохранить состояние очереди занятия (write-through после мутации)."""
         with self._lock:
+            self._assert_mutable(lesson_id)
             record = self._records.get(lesson_id)
             lesson = self._lessons.get(lesson_id)
             if record is None or lesson is None:
@@ -424,6 +488,7 @@ class QueueService:
                 lesson_ends_at=ends_at,
                 queue=lesson.queue,
                 manual=True,
+                registration_mode=RegistrationMode.MANUALLY_CLOSED if closed else RegistrationMode.MANUALLY_OPENED,
                 lesson_kind=lesson.kind,
             )
             _validate_registration(record)
@@ -474,6 +539,7 @@ class QueueService:
     ) -> QueueRecord:
         """Обновить время занятия и окно записи."""
         with self._lock:
+            self._assert_mutable(lesson_id)
             lesson = self._lessons.get(lesson_id)
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
@@ -533,6 +599,7 @@ class QueueService:
     def delete_queue(self, lesson_id) -> None:
         """Удалить пустую внештатную очередь."""
         with self._lock:
+            self._assert_mutable(lesson_id)
             record = self._records.get(lesson_id)
             lesson = self._lessons.get(lesson_id)
             if record is None or lesson is None:
@@ -560,6 +627,7 @@ class QueueService:
     def remove_entry(self, lesson_id, entry_id, *, now=None) -> QueueEntry:
         """Убрать активную запись преподавателем; она остаётся в истории."""
         with self._lock:
+            self._assert_mutable(lesson_id)
             lesson = self._lessons.get(lesson_id)
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
@@ -583,6 +651,7 @@ class QueueService:
     ) -> QueueEntry:
         """Исправить результат уже завершённой защиты."""
         with self._lock:
+            self._assert_mutable(lesson_id)
             lesson = self._lessons.get(lesson_id)
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
@@ -619,6 +688,8 @@ class QueueService:
     def join(self, lesson_id, eligible, *, now=None) -> QueueEntry:
         """Записать студента в очередь занятия."""
         with self._lock:
+            self._assert_mutable(lesson_id)
+            self.reconcile(now=now)
             lesson = self._lessons.get(lesson_id)
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
@@ -667,6 +738,7 @@ class QueueService:
                     continue
                 if entry.student.github.strip().casefold() != query:
                     raise EntryNotOwnedError()
+                self._assert_mutable(record.id)
                 ensure_entry_metadata(record)
                 metadata = record.entry_metadata[entry.id]
                 if metadata.status != EntryStatus.WAITING:
@@ -680,6 +752,8 @@ class QueueService:
     def call_next(self, lesson_id, *, now=None) -> QueueEntry:
         """Вызвать первого ожидающего."""
         with self._lock:
+            self._assert_mutable(lesson_id)
+            self.reconcile(now=now)
             lesson = self._lessons.get(lesson_id)
             record = self._records.get(lesson_id)
             if lesson is None or record is None:
@@ -706,6 +780,8 @@ class QueueService:
     ) -> QueueEntry:
         """Завершить вызванную запись с результатом защиты."""
         with self._lock:
+            self._assert_mutable(lesson_id)
+            self.reconcile(now=now)
             lesson = self._lessons.get(lesson_id)
             record = self._records.get(lesson_id)
             if lesson is None or record is None:

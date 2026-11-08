@@ -15,12 +15,18 @@ from queues.domain.err import (
     QueueClosedError,
     QueueEmptyError,
 )
+from queues.domain.status import RegistrationMode
 from queues.usecase.queue_service import QueueService
 
 MONDAY = date(2026, 11, 9)
 COURSES = {"os-2026": {"name": "Операционные системы", "university": "ГУАП"}}
 SCHEDULE_DIR = Path(__file__).resolve().parents[2] / "schedule"
 NOW = datetime(2026, 11, 9, 14, 50, tzinfo=timezone(timedelta(hours=3)))
+
+
+@pytest.fixture(autouse=True)
+def fixed_clock(monkeypatch):
+    monkeypatch.setattr("queues.usecase.queue_service._now", lambda: NOW)
 
 
 def build() -> QueueService:
@@ -41,6 +47,7 @@ def eligible(github="student", *, group_id="4431", lab_id="1", lab_name="ЛР1")
 
 def open_first_lesson(service):
     lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
     lesson.queue.closed = False
     return lesson
 

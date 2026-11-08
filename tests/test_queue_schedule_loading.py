@@ -148,7 +148,7 @@ def test_history_jobs_are_wired_to_async_service(tmp_path, monkeypatch):
         async with main.lifespan(app):
             jobs = {call.kwargs["id"]: call for call in parser.scheduler.add_job.call_args_list}
             daily = jobs["queue-history-daily"]
-            assert daily.kwargs["hour"] == 23 and daily.kwargs["minute"] == 59
+            assert daily.kwargs["hour"] == 0 and daily.kwargs["minute"] == 0
             assert jobs["queue-history-retry"].kwargs["kwargs"] == {"retry_only": True}
             end = datetime.now(timezone.utc) - timedelta(days=1)
             item = Lesson(starts_at=end - timedelta(hours=1), ends_at=end,

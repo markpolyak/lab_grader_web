@@ -20,6 +20,8 @@ COURSES = {
 
 @pytest.fixture
 def endpoint(monkeypatch):
+    monkeypatch.setattr("queues.usecase.queue_service._now",
+                        lambda: datetime.fromisoformat("2026-11-09T14:50:00+03:00"))
     service = QueueService()
     service.load_saved_week(COURSES, Path(__file__).resolve().parents[1] / "schedule", week_start=MONDAY)
     monkeypatch.setattr(main.app.state, "queue_service", service, raising=False)
@@ -41,7 +43,7 @@ def endpoint(monkeypatch):
 def test_returns_actual_lessons_and_public_queue_state(endpoint):
     client, service = endpoint
     lesson = service.schedules["os-2026"].lessons[0]
-    lesson.queue.closed = False
+    service.set_registration(lesson.id, closed=False)
     lesson.queue.add_entry(Student("Иван", "Иванов", "", "private-login"), "1")
     before = lesson.queue.entries[:]
     response = client.get("/courses/os-2026/lessons")
@@ -110,3 +112,13 @@ def test_unreadable_new_week_is_not_reported_as_empty(endpoint, monkeypatch):
     response = client.get("/courses/os-2026/lessons")
     assert response.status_code == 503
     assert service.schedules["os-2026"].week_start == MONDAY
+
+
+@pytest.mark.parametrize('clock,closed', [('14:54:59', True), ('14:55', False), ('16:40', True)])
+def test_public_state_reconciles_at_registration_boundaries(endpoint, monkeypatch, clock, closed):
+    client, service = endpoint
+    monkeypatch.setattr('queues.usecase.queue_service._now',
+                        lambda: datetime.fromisoformat('2026-11-09T' + clock + '+03:00'))
+    response = client.get('/courses/os-2026/lessons')
+    assert response.status_code == 200
+    assert response.json()['lessons'][0]['queue']['closed'] is closed

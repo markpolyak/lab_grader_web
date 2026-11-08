@@ -29,7 +29,8 @@ COPY queues/ queues/
 COPY schedule/ schedule/
 
 # Change ownership to non-root user
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /app/logs /app/queue_state /app/schedule \
+    && chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser
