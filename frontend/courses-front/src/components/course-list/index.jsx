@@ -22,7 +22,6 @@ import {
   FixedAdminButton,
 } from "./styled";
 import { fetchCourseDetails, fetchCourses } from "../../api";
-import SchedulePanel from "../admin/SchedulePanel";
 import { colors } from "../../../theme";
 import {
   Snackbar,
@@ -51,7 +50,6 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
   });
   const [openConfirmDialog, setOpenConfirmDialog] = useState(false);
   const [selectedCourseId, setSelectedCourseId] = useState(null);
-  const [scheduleCourseId, setScheduleCourseId] = useState(null);
 
   const fileInputRef = useRef();
 
@@ -484,12 +482,10 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                   </Button>
 
                   <Button
-                    onClick={() => {
-                      setScheduleCourseId(course.id);
-                    }}
+                    onClick={() => navigate(`/admin/courses/${course.id}/schedule`)}
                     style={{ backgroundColor: colors.buttonBackground, color: "#fff" }}
                   >
-                    {t("schedule.refreshButton")}
+                    {t("schedule.title")}
                   </Button>
 
                   <Button
@@ -504,17 +500,6 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
           )}
         </CourseCardContainer>
       ))}
-
-      {scheduleCourseId && (
-        <SchedulePanel
-          courseId={scheduleCourseId}
-          open
-          autoRefresh
-          onClose={() => {
-            setScheduleCourseId(null);
-          }}
-        />
-      )}
 
       {/* Диалог подтверждения удаления */}
       <Dialog open={openConfirmDialog} onClose={handleCancelDelete}>

@@ -12,6 +12,7 @@
   "cancel": "Cancel",
   "fullscreen": "Fullscreen",
   "collapse": "Collapse",
+  "back": "Back",
   "details": "Details",
   "hide": "Hide",
   "logout": "Logout",
@@ -44,6 +45,9 @@
     "provisioningFork": "fork",
     "updateButton": "Update student repositories",
     "disabledReason": "Only available for labs with repo-provisioning: fork and a template-repo set",
+    "schedule": {
+      "button": "Schedule"
+    },
     "dryRun": {
       "title": "Preview update rollout",
       "summary": "{{count}} student repositories will receive an update proposal",
@@ -247,6 +251,7 @@
   },
   "schedule": {
     "title": "Schedule",
+    "loading": "Loading…",
     "groupSourcesDescription": "Only Google Sheets tabs with numeric group names are used for schedules. Add a numeric group ID manually if needed; the list is saved in the course config.",
     "manualGroupInput": "Group ID",
     "addManualGroup": "Add group",
@@ -312,8 +317,8 @@
         "recurrenceDay": "Weekday (recurrence)",
         "recurrenceDayHint": "Leave empty for one-off session and fill «Date» below.",
         "recurrenceWeek": "Week parity",
-        "dateOnce": "Date (one-off)",
-        "dateOnceHint": "Alternative to recurrence: specific date.",
+        "dateOnce": "Date (one-off session)",
+        "dateOnceHint": "For one-off sessions without recurrence, specify the date here. Leave empty if using recurrence.",
         "start": "Start",
         "end": "End",
         "subject": "Subject",
@@ -330,7 +335,8 @@
         "loadFailed": "Failed to load corrections",
         "saveFailed": "Failed to save corrections",
         "requiredFields": "Fill in ID and date",
-        "slotRequired": "Specify slot ID (for removal) or ID/time (for addition)"
+        "slotRequired": "Specify slot ID (for removal) or ID/time (for addition)",
+        "startBeforeEnd": "Start time must be before end time"
       },
       "actions": {
         "edit": "Edit",

@@ -8,6 +8,7 @@
   "save": "保存",
   "fullscreen": "全屏",
   "collapse": "折叠",
+  "back": "返回",
   "semester": "学期",
   "information": "信息",
   "email": "电子邮件",
@@ -47,6 +48,9 @@
     "provisioningFork": "fork",
     "updateButton": "更新学生仓库",
     "disabledReason": "仅当 repo-provisioning 为 fork 且已设置 template-repo 时可用",
+    "schedule": {
+      "button": "课程表"
+    },
     "dryRun": {
       "title": "预览更新分发",
       "summary": "将有 {{count}} 个学生仓库收到更新提议",
@@ -250,6 +254,7 @@
   },
   "schedule": {
     "title": "课程表",
+    "loading": "加载中…",
     "groupSourcesDescription": "课程表仅使用名称为数字的 Google Sheets 工作表。如有需要，可手动添加数字小组编号；列表会保存在课程配置中。",
     "manualGroupInput": "小组编号",
     "addManualGroup": "添加小组",
@@ -315,8 +320,8 @@
         "recurrenceDay": "星期 (重复)",
         "recurrenceDayHint": "单次课时留空，填写下方「日期」。",
         "recurrenceWeek": "周奇偶",
-        "dateOnce": "日期 (单次)",
-        "dateOnceHint": "替代重复规则：具体日期。",
+        "dateOnce": "日期 (单次课时)",
+        "dateOnceHint": "若为单次课时（无重复），请在此填写具体日期。有重复规则则留空。",
         "start": "开始",
         "end": "结束",
         "subject": "科目",
@@ -333,7 +338,8 @@
         "loadFailed": "无法加载修正",
         "saveFailed": "无法保存修正",
         "requiredFields": "请填写 ID 和日期",
-        "slotRequired": "请指定时段 ID (取消) 或 ID/时间 (添加)"
+        "slotRequired": "请指定时段 ID (取消) 或 ID/时间 (添加)",
+        "startBeforeEnd": "开始时间必须早于结束时间"
       },
       "actions": {
         "edit": "编辑",

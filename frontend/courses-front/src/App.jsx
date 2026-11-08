@@ -8,6 +8,7 @@ import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
 import { JoinLab } from "./components/JoinLab";
 import { LabListWrapper as AdminLabListWrapper } from "./components/admin/LabList/labListWrapper";
+import { SchedulePage } from "./pages/SchedulePage";
 
 function App() {
   return (
@@ -27,6 +28,14 @@ function App() {
           element={
             <ProtectedRoute>
               <AdminLabListWrapper />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/admin/courses/:courseId/schedule"
+          element={
+            <ProtectedRoute>
+              <SchedulePage />
             </ProtectedRoute>
           }
         />
