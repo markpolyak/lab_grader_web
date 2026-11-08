@@ -79,7 +79,7 @@ from grading.course_index import (
 )
 from grading.schedule import (
     ScheduleConfigError,
-    parse_course_schedule,
+    GuapScheduleSource,
     manual_course_groups,
     load_schedule_data,
     parse_schedule_file,
@@ -2496,18 +2496,66 @@ def schedule_sessions(
     days: int = 7,
     admin: str = Depends(require_admin),
 ):
-    """Return upcoming sessions from the course's linked schedule file."""
+    """Return upcoming sessions, fetching GUAP schedules on demand."""
     try:
         course_info = get_course_by_id(course_id)
-        sources = parse_course_schedule(course_id, SCHEDULES_DIR)
+        schedule_path, schedule_data = load_schedule_data(course_id, SCHEDULES_DIR)
     except ScheduleConfigError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
-    source = sources.get(group_id)
-    if source is None:
-        raise HTTPException(status_code=404, detail=f"Для группы {group_id!r} расписание не настроено.")
+    schedule_defaults = schedule_data or {}
+    groups_config = schedule_defaults.get("groups", {})
+    if not isinstance(groups_config, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="В файле расписания поле `groups` должно быть YAML-объектом.",
+        )
+    group_config = groups_config.get(group_id, {})
+    if not isinstance(group_config, dict):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Настройки группы {group_id!r} должны быть YAML-объектом.",
+        )
+    configured_group_id = group_config.get("group_id")
+    if configured_group_id is not None and str(configured_group_id) != group_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Идентификатор группы в расписании должен быть {group_id!r}.",
+        )
+    source_name = group_config.get("source", schedule_defaults.get("source"))
+    if source_name is None:
+        source_name = "manual" if group_config else "guap"
+    if not re.fullmatch(r"\d+", group_id):
+        raise HTTPException(status_code=400, detail="Идентификатор группы должен содержать только цифры.")
+
+    source = None
+    if source_name != "guap":
+        try:
+            sources = (
+                parse_schedule_file(schedule_path, course_id)
+                if schedule_data is not None
+                else {}
+            )
+        except ScheduleConfigError as e:
+            raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")
+        source = sources.get(group_id)
+        if source is None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Для группы {group_id!r} расписание не настроено.",
+            )
 
     from datetime import datetime, timedelta, timezone
-    timezone_name = str(source.timezone or "Europe/Moscow")
+    timezone_name = str(
+        source.timezone
+        if source is not None
+        else group_config.get(
+            "timezone",
+            schedule_defaults.get(
+                "timezone", course_info.get("timezone", "Europe/Moscow")
+            ),
+        )
+        or "Europe/Moscow"
+    )
     try:
         fixed_offset = re.fullmatch(r"UTC([+-])(\d{1,2})(?::?(\d{2}))?", timezone_name)
         if fixed_offset:
@@ -2524,13 +2572,63 @@ def schedule_sessions(
     now = local_now.replace(tzinfo=None)
     since = now.replace(hour=0, minute=0, second=0, microsecond=0)
     until = since + timedelta(days=days)
-    sessions = list(source.list_sessions(group_id, since, until))
+    if source_name == "guap":
+        course_name = course_info.get("name")
+        if not isinstance(course_name, str) or not course_name.strip():
+            raise HTTPException(
+                status_code=400,
+                detail=f"В конфиге курса {course_id!r} не указано название предмета.",
+            )
+        try:
+            auto_open_minutes = int(
+                group_config.get(
+                    "auto_open_minutes_before",
+                    schedule_defaults.get("auto_open_minutes_before", 15),
+                )
+            )
+            auto_close_minutes = int(
+                group_config.get(
+                    "auto_close_minutes_after",
+                    schedule_defaults.get("auto_close_minutes_after", 10),
+                )
+            )
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="Интервалы открытия и закрытия очереди должны быть целыми числами.",
+            )
+        live_source = GuapScheduleSource(
+            group_code=group_config.get("guap_group_id") or group_id,
+            course_id=course_id,
+            course_name=course_name,
+            auto_open_minutes=auto_open_minutes,
+            auto_close_minutes=auto_close_minutes,
+        )
+        try:
+            sessions = list(live_source.list_sessions(group_id, since, until))
+        except ScheduleConfigError as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Не удалось получить расписание из GUAP: {e}",
+            )
+    else:
+        sessions = list(source.list_sessions(group_id, since, until))
+    queue_settings = (
+        source.queue_settings
+        if source is not None
+        else group_config.get("queue_settings", {})
+    )
+    if not isinstance(queue_settings, dict):
+        raise HTTPException(
+            status_code=400,
+            detail="Настройки очереди должны быть YAML-объектом.",
+        )
     return {
         "course_id": course_id,
         "group_id": group_id,
         "since": since.isoformat(),
         "until": until.isoformat(),
-        "queue_settings": source.queue_settings,
+        "queue_settings": queue_settings,
         "sessions": [
             {
                 "slot_id": s.slot_id,
@@ -2685,7 +2783,7 @@ def schedule_refresh_all(
             course_id=course_id,
             schedule_file_path=schedule_file_path,
             groups=groups,
-            snapshot_path="data/schedule.json",
+            course_name=course_info.get("name"),
         )
     except ScheduleConfigError as e:
         raise HTTPException(status_code=400, detail=f"Ошибка конфигурации расписания: {e}")

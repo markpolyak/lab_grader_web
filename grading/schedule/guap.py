@@ -2,32 +2,28 @@
 
 This source is special: it has two halves.
   1. `fetch_raw(group_code)` — used by the admin "refresh schedule" endpoint.
-     Runs `python -m suai_rasp dump --refresh` and loads the resulting
-     schedule.json via `suai_rasp.model.Schedule.from_json`. Returns the
-     parser's raw Lesson objects for the requested group.
+     Fetches the GUAP group directory once and then requests only that group's
+     timetable. It does not build or read the full-semester schedule snapshot.
   2. `to_yaml_sessions(raw_lessons)` — converts those Lesson objects into
      the YAML `slots:` structure that gets written back to
      schedules/<course_id>.yaml under the appropriate group.
 
 After a refresh, the YAML file is the source of truth — `ManualScheduleSource`
-reads it on every subsequent request. `GuapScheduleSource` is *not* used
-to serve `list_sessions` in production; it's a one-shot fetcher invoked
-only by the admin refresh endpoint.
+serves manually configured schedules. For `source: guap`, `list_sessions`
+fetches just the requested group and filters by the course name on each
+request, without reading a full-semester snapshot.
 
 The parser lives at https://github.com/markpolyak/suai-schedule-parser
 and is wired in as a git submodule under vendor/suai-schedule-parser/.
-We only use its read path (Schedule.from_json + by_group). The validate /
-check_hypothesis / plan modules are intentionally NOT imported — they solve
-a different problem (timetable conflict checking) and would pull in extra
-dependencies we don't need.
+The validate / check_hypothesis / plan modules are intentionally NOT imported.
 """
 from __future__ import annotations
 
-import subprocess
-import sys
 from datetime import datetime, time, timedelta
-from pathlib import Path
 from typing import Iterable
+
+from suai_rasp.fetch import Fetcher
+from suai_rasp.parse import parse_directories, parse_lessons
 
 from .base import ScheduleSource, ScheduledSession, ScheduleConfigError
 from .registry import register_source
@@ -63,61 +59,58 @@ GUAP_SLOTS = {
 }
 
 DEFAULT_LAB_KINDS = ("ЛР", "Лабораторная", "Лабораторное занятие")
-DEFAULT_SNAPSHOT = "data/schedule.json"
+
+
+def normalize_subject(value: object) -> str:
+    return " ".join(str(value or "").casefold().split())
 
 
 @register_source('guap')
 class GuapScheduleSource(ScheduleSource):
-    """GUAP schedule fetcher. Constructed by the admin refresh endpoint
-    with the GUAP group code from schedules/<course_id>.yaml.
+    """Fetch GUAP schedules for one group, optionally limited to a course.
 
     Usage:
 
-        src = GuapScheduleSource(group_code="4432", snapshot_path="data/schedule.json")
-        raw = src.fetch_raw("4432")            # returns list of Lesson objects
+        src = GuapScheduleSource(course_name="Операционные системы")
+        raw = src.fetch_raw("4432")            # fetch only this group's lessons
         yaml_slots = src.to_yaml_sessions(raw)  # list of dicts for YAML
 
-    `list_sessions` is *not* used in production — once fetched, lessons
-    live in the YAML file and are served by ManualScheduleSource. We
-    implement it anyway for completeness and for tests that want to
-    bypass the YAML roundtrip.
+    `list_sessions` fetches directly from the parser at request time.
     """
 
     def __init__(
         self,
         group_code: str | None = None,
-        snapshot_path: str | None = None,
         lab_kinds: tuple[str, ...] = DEFAULT_LAB_KINDS,
         course_id: str = "",
+        course_name: str | None = None,
         auto_open_minutes: int = 15,
         auto_close_minutes: int = 10,
     ):
         self._group_code = group_code
-        self._snapshot_path = snapshot_path or DEFAULT_SNAPSHOT
         self._lab_kinds = tuple(lab_kinds)
         self._course_id = course_id
+        self._course_name = normalize_subject(course_name)
         self._auto_open_minutes = auto_open_minutes
         self._auto_close_minutes = auto_close_minutes
-        # Lazy-loaded snapshot state.
-        self._schedule = None
-        self._group_internal_id = None
+        self._fetcher = None
+        self._group_directory = None
 
     # ------------------------------------------------------------------
-    # Public API for the admin refresh endpoint
+    # Public API for the admin refresh endpoint and live schedule requests
     # ------------------------------------------------------------------
     def fetch_raw(self, group_code: str | None = None) -> list:
-        """Run `python -m suai_rasp dump --refresh` and return raw lessons
-        for the group.
+        """Fetch only one group's timetable directly from GUAP.
 
-        group_code: GUAP group code, e.g. "4432". Falls back to the code
-        passed at construction time.
+        The directory page maps the displayed group name (e.g. "4432") to
+        GUAP's internal group ID. The timetable request then uses that ID,
+        avoiding a full-semester dump across every department.
 
-        Returns: list of suai_rasp.model.Lesson objects (or whatever the
-        parser exposes; we read attributes defensively in to_yaml_sessions).
+        Returns a list of parsed Lesson objects for this group.
 
-        Raises ScheduleConfigError on any setup problem (parser not
-        installed, snapshot missing, group not found). These are surfaced
-        as 400s by the admin endpoint.
+        The parser's HTTP cache is bypassed so this fetch requests current GUAP
+        data. The Fetcher instance and directory lookup are reused when this
+        source refreshes multiple groups.
         """
         gc = group_code or self._group_code
         if not gc:
@@ -125,9 +118,34 @@ class GuapScheduleSource(ScheduleSource):
                 "GuapScheduleSource.fetch_raw: group_code is required "
                 "(set `guap_group_id` in schedules/<course_id>.yaml under the group)"
             )
-        self._ensure_snapshot()
-        sch, gid = self._load(gc)
-        return list(sch.by_group.get(gid, []))
+        if self._fetcher is None:
+            self._fetcher = Fetcher(ttl=0)
+        if self._group_directory is None:
+            try:
+                self._group_directory = parse_directories(self._fetcher.index())["groups"]
+            except Exception as e:
+                raise ScheduleConfigError(
+                    f"Failed to load GUAP group directory: {type(e).__name__}: {e}"
+                )
+
+        normalized_group = " ".join(str(gc).casefold().split())
+        group_ids = [
+            group_id
+            for group_id, name in self._group_directory.items()
+            if " ".join(str(name).casefold().split()) == normalized_group
+        ]
+        if not group_ids:
+            raise ScheduleConfigError(f"Group {gc!r} not found in GUAP directory")
+        if len(group_ids) > 1:
+            raise ScheduleConfigError(f"Group {gc!r} is ambiguous in GUAP directory")
+
+        try:
+            return parse_lessons(self._fetcher.by_group(group_ids[0]))
+        except Exception as e:
+            raise ScheduleConfigError(
+                f"Failed to fetch GUAP timetable for group {gc!r}: "
+                f"{type(e).__name__}: {e}"
+            )
 
     def to_yaml_sessions(self, raw_lessons: list) -> list[dict]:
         """Convert raw lessons into the YAML `slots:` structure used by
@@ -195,9 +213,8 @@ class GuapScheduleSource(ScheduleSource):
         since: datetime,
         until: datetime,
     ) -> Iterable[ScheduledSession]:
-        self._ensure_snapshot()
-        sch, gid = self._load(self._group_code or group_id)
-        lessons = sch.by_group.get(gid, [])
+        """Fetch this group's timetable and return only this course's sessions."""
+        lessons = self.fetch_raw(self._group_code or group_id)
         day = since.date()
         last = until.date()
         while day <= last:
@@ -207,13 +224,20 @@ class GuapScheduleSource(ScheduleSource):
                     continue
                 if getattr(lesson, 'kind', None) not in self._lab_kinds:
                     continue
+                subject = str(getattr(lesson, 'subject', '') or '')
+                if self._course_name and normalize_subject(subject) != self._course_name:
+                    continue
                 starts_at, ends_at = self._lesson_times(lesson, day)
                 if starts_at < since or starts_at >= until:
                     continue
+                room_value = getattr(lesson, 'room', None)
+                room = str(room_value) if room_value else None
+                teachers = getattr(lesson, 'teachers', [])
+                teacher = ", ".join(str(value) for value in teachers) or None
                 yield ScheduledSession(
                     course_id=self._course_id,
                     group_id=group_id,
-                    subject=getattr(lesson, 'subject', 'Лабораторная') or 'Лабораторная',
+                    subject=subject or 'Лабораторная',
                     starts_at=starts_at,
                     ends_at=ends_at,
                     auto_open_at=starts_at - timedelta(minutes=self._auto_open_minutes),
@@ -221,8 +245,8 @@ class GuapScheduleSource(ScheduleSource):
                     source='guap',
                     slot_id=f"guap-{ISO_TO_SHORT_DAY[weekday]}-{getattr(lesson, 'slot', '?')}",
                     allowed_lab_ids=None,  # GUAP doesn't know our lab ids
-                    room=getattr(lesson, 'room', None),
-                    teacher=getattr(lesson, 'teacher', None),
+                    room=room,
+                    teacher=teacher,
                     raw={'day': getattr(lesson, 'day', None),
                          'slot': getattr(lesson, 'slot', None),
                          'kind': getattr(lesson, 'kind', None)},
@@ -232,74 +256,6 @@ class GuapScheduleSource(ScheduleSource):
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
-    def _ensure_snapshot(self) -> None:
-        """If the snapshot file is missing, run `python -m suai_rasp dump
-        --refresh` to build it. The dump takes ~30s on first run.
-
-        In production this should be refreshed by a nightly cron, but for
-        the admin "refresh" endpoint we want fresh data on demand, so we
-        refresh here too. The parser HTTP-caches under .cache/, so a
-        subsequent refresh within ~24h is fast.
-        """
-        path = Path(self._snapshot_path)
-        if path.exists():
-            return
-        path.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            subprocess.run(
-                [sys.executable, "-m", "suai_rasp", "dump", "--refresh"],
-                check=True,
-                cwd=str(path.parent),
-            )
-        except subprocess.CalledProcessError as e:
-            raise ScheduleConfigError(
-                f"`suai_rasp dump --refresh` failed (exit {e.returncode}). "
-                "Is suai-schedule-parser installed and on PYTHONPATH?"
-            )
-        except FileNotFoundError:
-            raise ScheduleConfigError(
-                "`python -m suai_rasp` not found. Install suai-schedule-parser "
-                "or vendor it under vendor/suai-schedule-parser/."
-            )
-        produced = path.parent / "schedule.json"
-        if produced.exists() and produced != path:
-            produced.rename(path)
-        if not path.exists():
-            raise ScheduleConfigError(
-                f"Snapshot was not created at {path}. Run "
-                f"`python -m suai_rasp dump --refresh` manually to debug."
-            )
-
-    def _load(self, group_code: str):
-        if self._schedule is not None and self._group_internal_id is not None:
-            return self._schedule, self._group_internal_id
-        try:
-            from suai_rasp.model import Schedule
-        except ImportError as e:
-            raise ScheduleConfigError(
-                "Cannot import `suai_rasp`. Either `pip install -e "
-                "vendor/suai-schedule-parser` or ensure the vendored package "
-                f"is on sys.path. Original error: {e}"
-            )
-        try:
-            self._schedule = Schedule.from_json(self._snapshot_path)
-        except FileNotFoundError:
-            raise ScheduleConfigError(
-                f"GUAP schedule snapshot not found at {self._snapshot_path}."
-            )
-        except Exception as e:
-            raise ScheduleConfigError(
-                f"Failed to load GUAP snapshot from {self._snapshot_path}: {e}"
-            )
-        try:
-            self._group_internal_id = self._schedule.find_group(group_code)
-        except Exception:
-            raise ScheduleConfigError(
-                f"Group {group_code!r} not found in snapshot. Verify the code "
-                "on https://guap.ru/rasp."
-            )
-        return self._schedule, self._group_internal_id
-
     def _lesson_times(self, lesson, day):
         start_str = getattr(lesson, 'start_time', None) or getattr(lesson, 'start', None)
         end_str = getattr(lesson, 'end_time', None) or getattr(lesson, 'end', None)

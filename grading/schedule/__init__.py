@@ -32,7 +32,7 @@ for _candidate in _CANDIDATE_PARSER_PATHS:
 from .base import ScheduleSource, ScheduledSession, ScheduleError, ScheduleConfigError
 from .registry import register_source, get_source_class, known_sources
 from .manual import ManualScheduleSource, WEEKDAYS, _validate_group
-from .guap import GuapScheduleSource
+from .guap import GuapScheduleSource, normalize_subject
 
 # Importing these modules triggers @register_source decorators.
 # New sources added to the project should be imported here.
@@ -224,10 +224,15 @@ def refresh_all_groups(
     course_id: str,
     schedule_file_path: str | Path,
     groups: list[dict[str, str]],
-    snapshot_path: str = "data/schedule.json",
+    course_name: str | None = None,
 ) -> dict[str, object]:
-    """Refresh numeric groups into `schedules/<course_id>.yaml`, creating it if needed."""
-    from .guap import GuapScheduleSource
+    """Fetch selected groups directly and refresh their schedule YAML.
+
+    If ``course_name`` is set, retain only sessions with an exact subject
+    match (case-insensitive, whitespace-normalized). If it is empty or omitted,
+    keep all fetched sessions.
+    """
+    from .guap import GuapScheduleSource, normalize_subject
 
     import os
     import tempfile
@@ -261,6 +266,12 @@ def refresh_all_groups(
 
     refreshed: dict[str, int] = {}
     errors: dict[str, str] = {}
+    not_found: list[str] = []
+    skipped: list[str] = []
+    normalized_course_name = normalize_subject(course_name) or None
+    source = GuapScheduleSource(
+        course_id=course_id,
+    )
     for group in groups:
         group_id = group["id"]
         guap_group_id = group.get("guap_group_id") or group_id
@@ -278,19 +289,26 @@ def refresh_all_groups(
         if configured_group_id is None or str(configured_group_id).strip() != group_id:
             errors[group_id] = f"group {group_id!r} requires matching `group_id`"
             continue
+        if group_config.get("source", config_data.get("source", "guap")) == "manual":
+            refreshed[group_id] = 0
+            skipped.append(group_id)
+            continue
         try:
-            source = GuapScheduleSource(
-                group_code=guap_group_id,
-                snapshot_path=snapshot_path,
-                course_id=course_id,
-            )
             raw_lessons = source.fetch_raw(guap_group_id)
             slots = source.to_yaml_sessions(raw_lessons)
+            if normalized_course_name:
+                slots = [
+                    slot
+                    for slot in slots
+                    if normalize_subject(slot.get("subject")) == normalized_course_name
+                ]
 
             group_config["slots"] = slots
             group_config["guap_group_id"] = guap_group_id
             schedule_groups[group_id] = group_config
             refreshed[group_id] = len(slots)
+            if not slots:
+                not_found.append(group_id)
         except Exception as e:
             errors[group_id] = f"{type(e).__name__}: {e}"
 
@@ -323,6 +341,8 @@ def refresh_all_groups(
         "filename": config_path.name,
         "refreshed": refreshed,
         "errors": errors,
+        "not_found": not_found,
+        "skipped": skipped,
     }
 
 

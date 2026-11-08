@@ -118,16 +118,58 @@ def test_save_manual_groups_rejects_non_numeric_ids(schedule_admin_client):
     assert "только числовые" in response.json()["detail"]
 
 
-def test_schedule_sessions_uses_linked_schedule_config_and_utc_offset(schedule_admin_client):
-    client, _, _ = schedule_admin_client
+@pytest.mark.parametrize("has_schedule_file", [True, False])
+def test_schedule_sessions_fetches_guap_group_and_course_on_demand(
+    schedule_admin_client, monkeypatch, has_schedule_file
+):
+    client, _, schedule_path = schedule_admin_client
+    if not has_schedule_file:
+        schedule_path.unlink()
+    captured = {}
+
+    class FakeGuapScheduleSource:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def list_sessions(self, group_id, since, until):
+            captured["query"] = (group_id, since, until)
+            return []
+
+    monkeypatch.setattr(main_module, "GuapScheduleSource", FakeGuapScheduleSource)
+    response = client.get(
+        "/admin/courses/test-course/groups/4433/schedule/sessions"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["course_id"] == "test-course"
+    assert response.json()["group_id"] == "4433"
+    assert "since" in response.json()
+    assert captured["group_code"] == "4433"
+    assert captured["course_name"] == "Test Course"
+    assert captured["query"][0] == "4433"
+
+
+def test_schedule_sessions_keeps_manual_yaml_source(schedule_admin_client, monkeypatch):
+    client, _, schedule_path = schedule_admin_client
+    schedule_path.write_text(
+        schedule_path.read_text(encoding="utf-8").replace(
+            "source: guap", "source: manual", 1
+        ),
+        encoding="utf-8",
+    )
+
+    def fail_if_guap_is_requested(**_kwargs):
+        raise AssertionError("manual schedules must not call the GUAP parser")
+
+    monkeypatch.setattr(
+        main_module, "GuapScheduleSource", fail_if_guap_is_requested
+    )
     response = client.get(
         "/admin/courses/test-course/groups/4432/schedule/sessions"
     )
 
     assert response.status_code == 200
-    assert response.json()["course_id"] == "test-course"
-    assert response.json()["group_id"] == "4432"
-    assert "since" in response.json()
+    assert response.json()["queue_settings"] == {}
 
 
 def test_refresh_all_returns_partial_results(schedule_admin_client, monkeypatch):
@@ -174,6 +216,7 @@ def test_refresh_all_creates_schedule_file_on_first_request(
             return [
                 {
                     "id": "first-slot",
+                    "subject": "Test Course",
                     "recurrence": {"day": "monday", "week": "all"},
                     "start": "10:00",
                     "end": "11:00",

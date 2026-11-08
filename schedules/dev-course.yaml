@@ -81,6 +81,7 @@ groups:
       room: 23-09 (Б. Морская 67)
       teacher: ''
     guap_group_id: '4431'
+    source: guap
   '4432':
     group_id: '4432'
     slots:
@@ -139,4 +140,5 @@ groups:
       room: 23-09 (Б. Морская 67)
       teacher: ''
     guap_group_id: '4432'
+    source: guap
 manual-groups: []
