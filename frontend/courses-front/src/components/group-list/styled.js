@@ -1,5 +1,35 @@
 import styled from "styled-components";
-import { colors, sizes, textStyles, breakpoints } from "../../../theme";
+import { CardTitle, MainContainer, colors, sizes, textStyles, breakpoints } from "../../../theme";
+
+// На телефоне карточка в 430px шире экрана: body центрирует её, и левый край
+// уходит туда, куда прокрутка не достаёт. Ширина считается от окна, а не в
+// процентах: #root - flex-элемент body и сам растягивается по карточке.
+// 48px - поля body (8px + 1em) с двух сторон. Включается ($fitPhone) только
+// там, где на странице есть блок очереди: страницы курсов без очереди как были.
+export const ListContainer = styled(MainContainer)`
+  ${({ $fitPhone }) =>
+    $fitPhone
+      ? `@media (max-width: ${breakpoints.tablet}) {
+          box-sizing: border-box;
+          max-width: calc(100vw - 48px);
+        }`
+      : ""}
+`;
+
+// Заголовок списка. Если у курса есть очередь, под ним пояснение, что список -
+// сдача работы на проверку, и отступ до списка переходит под пояснение.
+export const ListTitle = styled(CardTitle)`
+  ${({ $withHint }) => ($withHint ? "margin-bottom: 6px;" : "")}
+`;
+
+export const ListHint = styled.p`
+  ${textStyles}
+  margin: 0 0 18px;
+  color: ${colors.textSecondary};
+  font-size: ${sizes.fontSizeSmall};
+  line-height: 1.5;
+  text-align: center;
+`;
 
 export const CardContainer = styled.div`
   display: flex;

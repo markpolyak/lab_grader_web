@@ -1,11 +1,15 @@
 import { useState } from "react";
-import { registerAndCheck, gradeLab } from "../../api";
-import { CardTitle, colors, MainContainer } from "../../../theme";
+import { useTranslation } from "react-i18next";
+import { fetchCourseDetails, registerAndCheck, gradeLab } from "../../api";
+import { CardTitle, colors } from "../../../theme";
+import { ListContainer } from "../group-list/styled";
 import { Input, InputContainer, RegistrationButton } from "./styled";
 import Snackbar from "@mui/material/Snackbar";
 import Alert from "@mui/material/Alert";
 import { ButtonBack } from "../course-list/styled";
 import { Breadcrumb } from "../breadcrumb";
+import { QueueLink } from "../queue/styled";
+import { courseHasQueue, queuePagePath, shouldOfferQueue } from "../queue/state";
 
 export const RegistrationForm = ({ courseId, groupId, labId, onBack }) => {
   const [formState, setFormState] = useState({
@@ -17,6 +21,19 @@ export const RegistrationForm = ({ courseId, groupId, labId, onBack }) => {
 
   const [checkResult, setCheckResult] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [offerQueue, setOfferQueue] = useState(false);
+  const { t } = useTranslation();
+
+  // Автопредложение встать в очередь после успешной проверки. Записывается
+  // студент всё равно сам, после входа через GitHub, по обычным правилам.
+  const offerQueueIfEnabled = (gradeResponse) => {
+    if (!shouldOfferQueue(gradeResponse)) return;
+    fetchCourseDetails(courseId)
+      .then((details) => {
+        setOfferQueue(courseHasQueue(details));
+      })
+      .catch(() => setOfferQueue(false));
+  };
 
   const handleChange = (e) => {
     setFormState({ ...formState, [e.target.name]: e.target.value });
@@ -25,6 +42,7 @@ export const RegistrationForm = ({ courseId, groupId, labId, onBack }) => {
 const handleSubmit = async () => {
   setIsLoading(true);
   setCheckResult(null);
+  setOfferQueue(false);
 
   try {
     const registerResponse = await registerAndCheck(courseId, groupId, formState);
@@ -44,6 +62,7 @@ const handleSubmit = async () => {
     ) {
       // Registration successful, now grade the lab
       const gradeResponse = await gradeLab(courseId, groupId, labId, formState.github);
+      offerQueueIfEnabled(gradeResponse);
 
       if (gradeResponse.status === "updated") {
         setCheckResult({
@@ -95,7 +114,7 @@ const handleSubmit = async () => {
 };
 
   return (
-    <MainContainer>
+    <ListContainer $fitPhone={offerQueue}>
       <ButtonBack onClick={onBack}>← Назад</ButtonBack>
       <Breadcrumb courseId={courseId} groupId={groupId} labId={labId} />
       <CardTitle>Запуск проверки</CardTitle>
@@ -198,6 +217,25 @@ const handleSubmit = async () => {
             </div>
           )}
 
+          {offerQueue && (
+            <div style={{
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "flex-start",
+              gap: "8px",
+              margin: "12px 0",
+              fontSize: "14px",
+              color: colors.textSecondary,
+            }}>
+              <span>{t("queue.offer.text")}</span>
+              {/* В ссылке short-name: интерфейс проверки адресует работу им,
+                  страница очереди принимает и short-name, и ключ конфига. */}
+              <QueueLink to={queuePagePath(courseId, labId)} style={{ alignSelf: "flex-start" }}>
+                {t("queue.offer.button")}
+              </QueueLink>
+            </div>
+          )}
+
           {checkResult.checks && checkResult.checks.length > 0 && (
             <div style={{ marginTop: "12px" }}>
               <div style={{
@@ -222,6 +260,6 @@ const handleSubmit = async () => {
           )}
         </div>
       )}
-    </MainContainer>
+    </ListContainer>
   );
 };

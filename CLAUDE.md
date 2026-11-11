@@ -5,7 +5,7 @@ for local setup (own Google Sheet, service account, GitHub org, OAuth App).
 
 ## Quick Reference
 
-- **Backend**: `main.py` (FastAPI app, all HTTP endpoints, ~2500 LOC) + `grading/` (grading,
+- **Backend**: `main.py` (FastAPI app, all HTTP endpoints, ~3800 LOC) + `grading/` (grading,
   Sheets/GitHub clients, repo provisioning, teams, bulk jobs)
 - **Frontend**: `frontend/courses-front/` (React 19 + Vite)
 - **Courses**: `courses/index.yaml` + individual YAML files (see `docs/COURSE_CONFIG.md` for all options)
@@ -19,6 +19,7 @@ docker-compose up
 # Frontend: http://localhost:8080, Backend: http://localhost:8000
 
 # Without Docker
+# (FRONTEND_URL=http://localhost:5173 in .env, or the queue API is 403 BAD_ORIGIN)
 cd frontend/courses-front && npm install --legacy-peer-deps && npm run dev
 pip install -r requirements-dev.txt && uvicorn main:app --reload --port 8000
 
@@ -40,14 +41,24 @@ LOG_DIR=/app/logs         # Log directory (optional)
 LOG_LEVEL=INFO            # Logging level (optional)
 
 # Optional: only needed for /join/... (student repo auto-creation, see docs/REPO_GENERATION_PLAN.md)
+# and for the defense queue sign-in
 GITHUB_OAUTH_CLIENT_ID=...
 GITHUB_OAUTH_CLIENT_SECRET=...
+
+# Frontend address. Not only the redirect after GitHub sign-in: the queue API accepts an
+# Origin only from FRONTEND_URL, PUBLIC_BASE_URL or the request's own host, anything else
+# (GETs included) is 403 BAD_ORIGIN. Must match where the frontend runs:
+# http://localhost:8080 with docker compose, http://localhost:5173 with npm run dev
 FRONTEND_URL=http://localhost:8080
 
 # Optional: public address used to build secret /j/{token} links, and the
 # reverse proxies allowed to set X-Forwarded-For (empty = trust nobody)
 PUBLIC_BASE_URL=https://labgrader.example.ru
 FORWARDED_ALLOW_IPS=
+
+# Optional: SQLite file of the defense queue (default data/queue.sqlite3, relative to the
+# working directory). In Docker it must be on the queue-data volume (docs/DEPLOYMENT.md)
+QUEUE_DB_PATH=/app/data/queue.sqlite3
 ```
 
 ## Key Conventions
@@ -69,6 +80,8 @@ FORWARDED_ALLOW_IPS=
 | Add React component | `frontend/courses-front/src/components/` |
 | Add/edit course | `courses/` directory + `index.yaml` |
 | Secret link / availability window | `grading/join_links.py` |
+| Defense queue (sign-up rules, windows, statuses) | `grading/defense_queue.py` (`DefenseQueue`); storage `grading/queue_store.py` |
+| Schedule source (another university) | new `grading/schedule/<name>.py` + `queue.schedule.source: <name>` |
 | Add translation | `frontend/courses-front/src/locales/{en,ru,zh}/` |
 | Add tests | `tests/` |
 
@@ -188,6 +201,71 @@ teacher-facing instructions are in `docs/PROJECT_DESCRIPTION.md`).
   have to change.
 - The link is shown by the admin lab list page and by `scripts/join-link.py`,
   built from `PUBLIC_BASE_URL` (then `FRONTEND_URL`, then `request.base_url`).
+
+## Defense Queue
+
+`course.queue` turns on a queue for lab defenses: a student signs up for a lesson of their group,
+the teacher calls the next one and records the outcome (see `docs/COURSE_CONFIG.md`, the
+teacher-facing instructions in `docs/PROJECT_DESCRIPTION.md`, and the ADRs in
+`docs/hackathon/shaverma-driven-development/`).
+
+- **Never writes to Google Sheets.** The queue only orders defenses, grades stay the teacher's.
+  `grading/queue_roster.py` only reads the sheet (3 reads per refresh, 60 s cache); polling
+  `GET /courses/{id}/queue` touches neither Sheets nor GitHub.
+- **Login only from the cookie.** Student endpoints take the GitHub login from the signed
+  `queue_session_{course_id}` cookie (`require_queue_session` in `main.py`), issued by the shared
+  `/join/callback`, and never from the body, query or path. The entry's group comes from the sheet.
+  Per-course cookie names come from `_course_cookie_name`: an id outside `[A-Za-z0-9_.-]` becomes
+  `queue_session~<base64url of the id>`, so two Cyrillic ids never share a cookie. The OAuth nonce
+  cookie is per course too (`queue_oauth_{course_id}`), so two sign-ins in two tabs do not clash.
+- **SQLite, one transaction per change.** `grading/queue_store.py` (`QUEUE_DB_PATH`) runs every
+  change as `BEGIN IMMEDIATE` (`transaction()`) and every pure read as `BEGIN DEFERRED`
+  (`read()`), so in WAL polling neither waits for writers nor holds them up. The one write of a
+  poll besides the lazy ones below: with `source: guap`, the request that has just downloaded the
+  page (once per 30 min per process) saves the copy in a short `BEGIN IMMEDIATE` that waits for
+  the lock at most 1 s (`QueueStore.SNAPSHOT_BUSY_TIMEOUT_SECONDS`); a refused save is only
+  logged, the poll answers as usual. "One active entry per student per course" is checked
+  inside the transaction and backed by the partial UNIQUE index `entries_one_active`: double
+  sign-up is impossible even with several processes.
+  `call-next` with `expected_entry_id` (the head the teacher sees) never calls an extra student
+  on a repeat or from a second tab; without it every request calls the next one - parallel
+  defenses, by design. SQL of the queue logic lives in `grading/defense_queue.py`; the schema,
+  migrations and the schedule snapshot table are in `grading/queue_store.py`.
+- **Lazy windows, no background threads.** Today's sessions are materialized by the first view
+  or `sync_day` that misses them. Every change starts with `_expire_past`; a read takes a short
+  write only when `_has_overdue` finds waiting/called entries of a day that is over (see
+  `DefenseQueue._reading`). `defense_queue.py` and `queue_store.py` never read the clock: time is
+  always passed as `now`. History is limited to a period of at most 400 days and 2000 entries
+  (`truncated`), anything else is `INVALID_PERIOD`.
+- **"Passed the check" is `lab_cell_status`**: `v...` may sign up, `defended-prefix` (`vv...`) is
+  already defended, anything else - including manual marks like `X` or `н/я` - is not passed.
+  Stricter than `not can_overwrite_cell` on purpose.
+- **A new university is a module.** `grading/schedule/<name>.py` with `SOURCE_NAME` and
+  `build(cfg, ctx)` (no network in `build`: it is also the config check), named by
+  `queue.schedule.source`; neither the registry nor the queue changes. The registry glues lessons
+  of the same groups, type and subject that overlap or follow with a break of at most 40 min
+  (`merge_adjacent`), after applying `queue.schedule.changes` (cancelled and extra lessons,
+  `grading/schedule/changes.py`), which it takes out of the section: sources never see it.
+  `guap` caches the page for 30 min, downloads it within a 5 s budget, headers included (a
+  short-lived worker thread; while one that missed the budget still hangs, new downloads fail at
+  once instead of piling up), refuses a body over 2 MB as `BAD_PAGE` (other requests answer from
+  the copy at once, or wait at most 1 s without one), keeps the last good copy in SQLite for up to
+  14 days and accepts only a course timezone of UTC-6..UTC+5.
+- **Requests only from the service's own pages.** Every queue API endpoint, GETs included (all
+  but the `/queue/login` navigation), calls `_check_queue_origin`: a foreign `Origin` is
+  `403 BAD_ORIGIN` (CORS allows any origin with credentials, so names and history would
+  otherwise be readable cross-site).
+- Errors are stable `UPPER_SNAKE` codes in `detail`, translated by the frontend (ru/en/zh). The
+  teacher's day view, history and actions on existing sessions and entries work from the database
+  whatever the course status or config errors, with signup shown as closed while the queue does
+  not work; opening signup by hand needs a working queue (active course, valid enabled config).
+  Opening it again for the same groups on the same day changes the window of that manual session
+  (extends, shortens or reopens it) instead of starting a second queue. A late outcome or a fix
+  keeps `finished_at` (the end of that day, the time of the first outcome), and "already
+  defended" holds for the teacher's actions too: return answers `LAB_ALREADY_DEFENDED`, defended
+  while the student is queued again for the same lab answers `ALREADY_IN_QUEUE`. The teacher page
+  renews `admin_session` only during the first 11 h after the password sign-in
+  (`admin_session_start` cookie), so a session never outlives 12 h.
 
 ## Bulk Grading (admin)
 

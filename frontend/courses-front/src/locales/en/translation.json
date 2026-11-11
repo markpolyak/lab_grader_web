@@ -244,5 +244,297 @@
       "closed": "Submissions are closed: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored.",
       "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
     }
+  },
+  "queue": {
+    "title": "Defense queue",
+    "entry": {
+      "title": "Defense queue",
+      "text": "Has your lab already passed the check? Join the defense queue and follow your place in it.",
+      "button": "Go to the queue",
+      "groupsHint": "Submitting a lab from GitHub for checking: choose your group, then the lab.",
+      "labsHint": "Choose a lab to send it from GitHub for checking."
+    },
+    "back": "← Back to the course",
+    "language": "Language",
+    "today": "today, {{date}}",
+    "loading": "Loading the queue…",
+    "errorTitle": "Something went wrong",
+    "loginFailed": "Sign-in failed",
+    "retry": "Retry",
+    "connectionLost": "Could not refresh the queue: {{reason}} Showing the last data received.",
+    "updatedAt": "Updated at {{time}}. The page refreshes automatically.",
+    "noSessions": "There is no defense sign-up today. If a class was rescheduled, the teacher will open sign-up manually.",
+    "lastResult": "Last entry: {{lab}} — {{status}} ({{time}}).",
+    "schedule": {
+      "stale": "The timetable website is unavailable right now; a saved copy from {{moment}} is used.",
+      "staleNoTime": "The timetable website is unavailable right now; a saved copy is used.",
+      "unavailable": "The timetable website is unavailable right now: sign-up for timetable classes does not open, extra classes scheduled in advance by the teacher work as usual. The teacher can open sign-up manually."
+    },
+    "login": {
+      "description": "Sign in with GitHub to join the queue and see the list. Your name and group are taken from the course spreadsheet by your GitHub username.",
+      "button": "Sign in with GitHub",
+      "redirecting": "Redirecting to GitHub…",
+      "logout": "Sign out"
+    },
+    "viewer": {
+      "name": "Student",
+      "group": "Group",
+      "github": "GitHub"
+    },
+    "me": {
+      "title": "Your entry",
+      "placeCaption": "place in the queue",
+      "placeFirst": "you are next",
+      "details": "{{lab}}, joined at {{time}}",
+      "calledTitle": "You have been called!",
+      "calledText": "Go to the teacher to defend {{lab}}.",
+      "calledAt": "Called at {{time}}",
+      "leave": "Leave the queue",
+      "leaveConfirm": "Leave the queue? You will only be able to rejoin at the end.",
+      "leaveYes": "Yes, leave",
+      "skip": "Let the next student go first",
+      "skipConfirm": "Swap places with the student right behind you? You cannot move forward again.",
+      "skipYes": "Yes, let them go first",
+      "cancel": "Cancel",
+      "working": "Please wait…"
+    },
+    "form": {
+      "title": "Sign up for a defense",
+      "session": "Class",
+      "until": "sign-up until {{time}}",
+      "lab": "Lab",
+      "chooseLab": "Choose a lab",
+      "labDefended": "{{lab}} — already defended",
+      "labNotPassed": "{{lab}} — not passed yet",
+      "notPassedHint": "According to the spreadsheet as of {{time}}, this lab has not passed the check yet. The server will check the spreadsheet again when you sign up.",
+      "labsLoading": "Loading your labs…",
+      "labsNotLoaded": "The list of labs is not loaded.",
+      "labsRefresh": "Refresh lab statuses",
+      "noLabs": "The course has no labs to defend yet.",
+      "submit": "Join the queue",
+      "submitting": "Signing up…",
+      "closedForMe": "Sign-up for your group is closed right now.",
+      "opensAt": "Sign-up for your group opens at {{time}}."
+    },
+    "list": {
+      "title": "Today's queue",
+      "empty": "Nobody is in the queue yet.",
+      "you": "you"
+    },
+    "session": {
+      "kind": {
+        "schedule": "Scheduled class",
+        "manual": "Extra sign-up",
+        "all_day": "All-day queue"
+      },
+      "typeAndSubject": "{{type}} · {{subject}}",
+      "allGroups": "all groups",
+      "groups": "Groups: {{groups}}",
+      "counts": "Waiting: {{waiting}} · with the teacher: {{called}}",
+      "notForMe": "This sign-up is not for your group."
+    },
+    "signup": {
+      "upcoming": "Sign-up from {{time}}",
+      "open": "Sign-up open until {{time}}",
+      "closed": "Sign-up closed"
+    },
+    "status": {
+      "waiting": "waiting",
+      "called": "called",
+      "defended": "defended",
+      "not_defended": "not defended",
+      "no_show": "no-show",
+      "left": "left the queue",
+      "expired": "entry closed",
+      "unknown": "unknown"
+    },
+    "offer": {
+      "text": "The lab has passed the check — you can sign up for a defense. You will need to sign in with GitHub.",
+      "button": "Join the defense queue"
+    },
+    "errors": {
+      "SESSION_REQUIRED": "Your sign-in has expired. Sign in with GitHub again.",
+      "QUEUE_DISABLED": "The defense queue is not enabled for this course.",
+      "SESSION_NOT_FOUND": "This class was not found. Refresh the page.",
+      "LAB_NOT_FOUND": "There is no such lab in the course.",
+      "ENTRY_NOT_FOUND": "The entry was not found. Refresh the page.",
+      "NOT_IN_QUEUE": "You are not in the queue.",
+      "COURSE_NOT_FOUND": "Course not found.",
+      "NOT_YOUR_GROUP": "This sign-up is open for another group.",
+      "STUDENT_NOT_FOUND": "Your GitHub username was not found in the course spreadsheet. Make sure you are registered in the service, or contact the teacher.",
+      "BAD_ORIGIN": "Request rejected: open the queue page through the regular service link.",
+      "SIGNUP_CLOSED": "Sign-up for this class is closed right now.",
+      "LAB_NOT_PASSED": "The lab has not passed the check in the service yet. Run the check first.",
+      "LAB_ALREADY_DEFENDED": "This lab has already been defended.",
+      "ALREADY_IN_QUEUE": "You are already in the queue. Only one entry at a time is allowed.",
+      "ALREADY_CALLED": "You have already been called — go to the teacher.",
+      "NOTHING_TO_SKIP": "There is nobody behind you to let go first.",
+      "QUEUE_EMPTY": "Nobody is in the queue.",
+      "QUEUE_CHANGED": "The queue changed while you were looking at it. Check who is next and press again.",
+      "ENTRY_NOT_CALLED": "The student has not been called yet, or the entry is already finished.",
+      "DAY_OVER": "The day is over, the queue is closed.",
+      "STUDENT_AMBIGUOUS": "Your GitHub username appears in the course spreadsheet more than once. Contact the teacher.",
+      "INVALID_OUTCOME": "Unknown defense outcome.",
+      "INVALID_GROUPS": "Select at least one group.",
+      "INVALID_TIME": "The sign-up end time must be later than now and no later than the end of the day.",
+      "QUEUE_MISCONFIGURED": "The course queue is misconfigured. Let the teacher know.",
+      "SHEETS_UNAVAILABLE": "The course spreadsheet is not responding. Try again in a minute.",
+      "STORAGE_UNAVAILABLE": "Queue storage is temporarily unavailable. Try again.",
+      "state_expired": "Signing in took too long. Please try again.",
+      "state_mismatch": "Sign-in could not be confirmed. Start signing in again from this page.",
+      "access_denied": "GitHub sign-in was cancelled.",
+      "missing_code": "GitHub did not return a sign-in code. Please try again.",
+      "oauth_not_configured": "GitHub sign-in is not configured on the server. Let the teacher know.",
+      "oauth_exchange_failed": "Could not confirm the GitHub sign-in. Please try again.",
+      "request_timeout": "The server did not respond in time. Please try again.",
+      "network_error": "No connection to the server. Check your network connection.",
+      "rate_limit": "Too many requests. Please wait a minute.",
+      "not_found": "Not found.",
+      "unknown": "Something went wrong. Please try again."
+    }
+  },
+  "adminQueue": {
+    "openButton": "Queue",
+    "back": "← Back to courses",
+    "title": "Defense queue",
+    "titleWithCourse": "Defense queue: “{{course}}”",
+    "today": "Today, {{date}}",
+    "tabs": {
+      "today": "Today",
+      "history": "History"
+    },
+    "loading": "Loading the queue…",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "connectionLost": "Could not refresh the queue: {{reason}} Showing the last data received.",
+    "configError": "The course queue settings contain an error: {{error}}. Existing entries can still be handled.",
+    "disabled": "The queue is disabled in the course configuration. Saved entries are shown.",
+    "archived": "The course is not active (status: {{status}} in courses/index.yaml): new sign-ups are not accepted and sign-up cannot be opened manually. Saved entries and history are available.",
+    "schedule": {
+      "stale": "The timetable website is unavailable; a saved copy from {{moment}} is used. If a class is missing from the list, open sign-up manually.",
+      "unavailable": "The timetable website is unavailable: classes from the website do not open, extra classes from the course configuration (changes) work. Open other classes manually.",
+      "reason": "Reason: {{reason}}.",
+      "errors": {
+        "FETCH_FAILED": "the website did not respond",
+        "BAD_PAGE": "the timetable page could not be recognised",
+        "NO_LESSONS": "no matching classes were found on the page",
+        "SNAPSHOT_TOO_OLD": "the saved copy is older than 14 days"
+      }
+    },
+    "sessionsTitle": "Today's classes",
+    "noSessions": "There are no classes with a queue today. If a class was rescheduled or is an extra one, open sign-up manually.",
+    "noSessionsClosed": "No queue sign-ups today.",
+    "tile": {
+      "counts": "waiting: {{waiting}} · called: {{called}}",
+      "results": "defended: {{defended}} · not defended: {{notDefended}} · no-show: {{noShow}}"
+    },
+    "summary": {
+      "title": "Session summary",
+      "defended": "Defended",
+      "not_defended": "Not defended",
+      "no_show": "No-show",
+      "left": "Left the queue",
+      "waiting": "Waiting",
+      "called": "Called now",
+      "expired": "Entry closed"
+    },
+    "updatedAt": "Updated at {{time}}. The page refreshes every 5 seconds.",
+    "manual": {
+      "button": "Open sign-up manually",
+      "title": "Open sign-up manually",
+      "description": "For a class that is not in the timetable: a rescheduled or an extra class.",
+      "pickGroups": "Selected groups",
+      "allGroups": "All groups of the course",
+      "groupsError": "Could not load the list of groups.",
+      "closesAt": "Sign-up until",
+      "closesAtHint": "Course time zone. Leave empty for the end of the day.",
+      "submit": "Open sign-up"
+    },
+    "session": {
+      "close": "Close sign-up",
+      "reopen": "Reopen sign-up",
+      "finish": "Finish defenses",
+      "finishTitle": "Finish defenses?",
+      "finishText": "Sign-up will close and the students still waiting ({{count}}) will get the “entry closed” status. Outcomes of called students can still be recorded afterwards.",
+      "finishConfirm": "Finish defenses",
+      "dayOver": "The day is over, the queue is closed. Outcomes of finished entries can be corrected below."
+    },
+    "callNext": "Call the next student",
+    "nextUp": "Next: {{name}}, {{group}}, {{lab}}",
+    "queueEmpty": "Nobody is waiting",
+    "called": {
+      "title": "With the teacher ({{count}})",
+      "at": "called at {{time}}",
+      "empty": "Nobody has been called right now."
+    },
+    "outcome": {
+      "defended": "Defended",
+      "not_defended": "Not defended",
+      "no_show": "No-show",
+      "return": "Return to the queue",
+      "fix": "Correct outcome",
+      "set": "Record outcome",
+      "fixTitle": "Defense outcome: {{name}}",
+      "current": "current: {{status}}"
+    },
+    "waiting": {
+      "title": "Waiting ({{count}})",
+      "empty": "Nobody is in the queue."
+    },
+    "finished": {
+      "title": "Finished ({{count}})"
+    },
+    "columns": {
+      "place": "Place",
+      "name": "Full name",
+      "group": "Group",
+      "github": "GitHub",
+      "lab": "Lab",
+      "createdAt": "Joined",
+      "calledAt": "Called",
+      "finishedAt": "Finished",
+      "status": "Status",
+      "day": "Date"
+    },
+    "history": {
+      "from": "From",
+      "to": "To",
+      "group": "Group",
+      "anyGroup": "All groups",
+      "lab": "Lab",
+      "anyLab": "All labs",
+      "query": "Student (name or GitHub)",
+      "apply": "Show",
+      "download": "Download CSV",
+      "count": "Entries: {{count}}",
+      "empty": "No entries for the selected period.",
+      "truncated": "Only the first {{count}} entries (the newest) are shown, the rest did not fit. Narrow the period or the filters.",
+      "pageRange": "{{from}}–{{to}} of {{count}}",
+      "page": {
+        "first": "First page",
+        "previous": "Previous page",
+        "next": "Next page",
+        "last": "Last page"
+      }
+    },
+    "toast": {
+      "called": "Called: {{name}}",
+      "outcome": "{{name}}: {{status}}",
+      "returned": "{{name}}: back in the queue",
+      "finished": "Defenses finished",
+      "manualOpened": "Sign-up opened",
+      "closed": "Sign-up closed",
+      "reopened": "Sign-up reopened"
+    },
+    "errors": {
+      "ALREADY_IN_QUEUE": "The student is already back in the queue with a new entry. Until it is finished, this entry cannot be returned to the queue, and if it is the same lab, it cannot be marked as defended.",
+      "ENTRY_NOT_CALLED": "This action is not available for the entry: the student was not called, left the queue, or the entry is already finished. Check its current status.",
+      "DAY_OVER": "The class day is over and the queue is closed: a student can no longer be called or returned to the queue. The defense outcome can be recorded on the “History” tab.",
+      "SIGNUP_CLOSED": "The sign-up time for this class has passed, it cannot be reopened. If needed, open sign-up manually.",
+      "QUEUE_CHANGED": "The queue changed: the next student was already called from another tab, or the student left. Check who is next and press again.",
+      "QUEUE_EMPTY": "Nobody is in the queue: there is no one to call.",
+      "QUEUE_DISABLED": "The course queue does not accept sign-ups: it is disabled in the configuration or the course is not active.",
+      "INVALID_PERIOD": "Invalid period: the “From” date is after the “To” date, the period is longer than 400 days, or a date is outside 2000–2100."
+    }
   }
 }

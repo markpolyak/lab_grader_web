@@ -1,21 +1,29 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { fetchLabs } from "../../api";
 import { Spin } from "antd";
 import {
   CardContainer,
   DescriptionContainer,
+  ListContainer,
+  ListHint,
+  ListTitle,
   Number,
   Title,
 } from "../group-list/styled";
-import { CardTitle, MainContainer } from "../../../theme";
 import { ButtonBack } from "../course-list/styled";
 import { Breadcrumb } from "../breadcrumb";
 import { Snackbar, Alert } from "@mui/material";
+import { QueueEntryCard } from "../queue/QueueEntryCard";
+import { useCourseQueue } from "../queue/useCourseQueue";
 
 export const LabList = ({ courseId, groupId, onSelectLab, onBack }) => {
   const [labs, setLabs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Очередь на защиту - там же, где студент сдаёт свои работы.
+  const queueEnabled = useCourseQueue(courseId);
+  const { t } = useTranslation();
 
   useEffect(() => {
     setLoading(true);
@@ -32,10 +40,12 @@ export const LabList = ({ courseId, groupId, onSelectLab, onBack }) => {
   }, [courseId, groupId]);
 
   return (
-    <MainContainer>
+    <ListContainer $fitPhone={queueEnabled}>
       <ButtonBack onClick={onBack}>← Назад</ButtonBack>
       <Breadcrumb courseId={courseId} groupId={groupId} />
-      <CardTitle>Лабораторные работы</CardTitle>
+      {queueEnabled && <QueueEntryCard courseId={courseId} />}
+      <ListTitle $withHint={queueEnabled}>Лабораторные работы</ListTitle>
+      {queueEnabled && <ListHint>{t("queue.entry.labsHint")}</ListHint>}
       {loading ? (
         <Spin size="default" />
       ) : (
@@ -58,6 +68,6 @@ export const LabList = ({ courseId, groupId, onSelectLab, onBack }) => {
           {error}
         </Alert>
       </Snackbar>
-    </MainContainer>
+    </ListContainer>
   );
 };

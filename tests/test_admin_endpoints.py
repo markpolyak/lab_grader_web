@@ -102,6 +102,20 @@ PROTECTED_ROUTES = [
     ),
     ("GET", "/admin/bulk-grade-jobs/does-not-exist", {}),
     ("POST", "/admin/bulk-grade-jobs/does-not-exist/cancel", {}),
+    # Очередь на защиту: все действия преподавателя за require_admin
+    ("GET", "/admin/courses/test-course/queue", {}),
+    ("GET", "/admin/courses/test-course/queue/history", {}),
+    ("POST", "/admin/courses/test-course/queue/sessions", {"json": {"groups": [], "closes_at": None}}),
+    ("POST", "/admin/courses/test-course/queue/sessions/1/close", {}),
+    ("POST", "/admin/courses/test-course/queue/sessions/1/reopen", {}),
+    ("POST", "/admin/courses/test-course/queue/sessions/1/finish", {}),
+    (
+        "POST",
+        "/admin/courses/test-course/queue/sessions/1/call-next",
+        {"json": {"expected_entry_id": None}},
+    ),
+    ("POST", "/admin/courses/test-course/queue/entries/1/outcome", {"json": {"outcome": "defended"}}),
+    ("POST", "/admin/courses/test-course/queue/entries/1/return", {}),
 ]
 
 

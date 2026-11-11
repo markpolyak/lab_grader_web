@@ -63,6 +63,7 @@ services:
     image: ghcr.io/markpolyak/lab_grader_backend:main
     volumes:
       - ./google-credentials:/app/google-credentials/
+      - queue-data:/app/data   # база очереди на защиту, см. раздел ниже
     environment:
       CREDENTIALS_FILE: /app/google-credentials/credentials.json
       GITHUB_TOKEN: ${GITHUB_TOKEN}
@@ -71,6 +72,7 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS}
+      QUEUE_DB_PATH: /app/data/queue.sqlite3
     labels:
       caddy: labgrader.markpolyak.ru
       caddy.handle_path: /api/v1*
@@ -81,7 +83,13 @@ services:
 networks:
   caddy-proxy:
     external: true
+
+volumes:
+  queue-data:
 ```
+
+Полный вариант с комментариями (логи, курсы, вход через GitHub) - в
+`docker-compose.example.yaml`.
 
 3. **Create .env file with secrets:**
 
@@ -130,6 +138,132 @@ docker compose logs backend | grep "GET /j/"
 # адрес в логе останется настоящим
 curl -s -o /dev/null -H "X-Forwarded-For: 9.9.9.9" https://labgrader.markpolyak.ru/api/v1/j/aaaaaaaaaa
 ```
+
+## Очередь на защиту: база SQLite
+
+Очередь на защиту (секция `queue` в конфиге курса, `docs/COURSE_CONFIG.md`) -
+единственная часть сервиса со своим состоянием: записи, вызовы и история
+защит лежат в одном файле SQLite `QUEUE_DB_PATH` (в контейнере
+`/app/data/queue.sqlite3`). Отдельного сервиса базы нет, используется модуль
+`sqlite3` стандартной библиотеки. Почему так - ADR
+`docs/hackathon/shaverma-driven-development/01-queue-storage.md`.
+
+### Том и права
+
+- Файл должен лежать на томе. Всё, что в контейнере вне томов, пропадает при
+  каждом обновлении образа (Watchtower), а вместе с файлом - очередь посреди
+  пары и вся история.
+- В `docker-compose.example.yaml` это именованный том `queue-data:/app/data`.
+  Образ создаёт `/app/data` с владельцем `appuser` (uid/gid 999), и новый
+  именованный том при первом монтировании наследует этого владельца - больше
+  ничего делать не нужно. `docker compose down -v` удаляет том вместе с
+  историей.
+- Если вместо тома нужен каталог на хосте (bind mount `./data:/app/data`, как
+  у `./logs`), владельцем каталога должен быть uid 999:
+
+  ```bash
+  mkdir -p /opt/labgrader/data
+  sudo chown 999:999 /opt/labgrader/data
+  ```
+
+  Иначе backend стартует (в логе будет ошибка о каталоге, недоступном на
+  запись), но запросы к очереди отвечают `503 STORAGE_UNAVAILABLE`: SQLite не
+  может открыть файл. То же касается локального `docker-compose.yml`: там весь
+  репозиторий смонтирован в `/app`, и база ложится в `./data/` (каталог есть в
+  `.gitignore`).
+- База работает в режиме WAL: рядом с `queue.sqlite3` появляются
+  `queue.sqlite3-wal` и `queue.sqlite3-shm`, поэтому запись нужна в каталог, а
+  не только в файл. В WAL опрос очереди и история (чтения) не ждут записи и
+  не задерживают её. Исключение - курс с `source: guap`: запрос, который раз в
+  30 минут скачивает страницу расписания, сохраняет её копию короткой записью
+  и ждёт блокировку не дольше секунды; не дождался - в логе предупреждение,
+  копия обновится при следующей загрузке, а опрос отвечает как обычно. Если
+  WAL включить не удалось, очередь работает, но в логе предупреждение «не
+  удалось включить WAL: ...» или «журнал в режиме ..., а не WAL - опрос и
+  запись очереди будут ждать друг друга». Том должен быть на локальном
+  диске сервера: на сетевых файловых системах (NFS, SMB) блокировки SQLite
+  ненадёжны.
+- История хранится бессрочно. Объём небольшой - одна строка на запись
+  студента в очередь. Страница истории показывает период не длиннее 400 дней
+  и не больше 2000 записей за раз (самые новые), по 100 строк на странице.
+
+### Резервная копия
+
+Копировать `queue.sqlite3` через `cp` нельзя: в режиме WAL последние изменения
+лежат в `queue.sqlite3-wal`, и копия одного основного файла их теряет. Утилиты
+`sqlite3` в образе нет, поэтому копию делает Python через backup API - это
+безопасно и на работающем сервисе:
+
+```bash
+docker compose exec backend python -c "import sqlite3; sqlite3.connect('/app/data/queue.sqlite3').backup(sqlite3.connect('/app/data/queue-backup.sqlite3'))"
+docker compose cp backend:/app/data/queue-backup.sqlite3 ./queue-backup-$(date +%F).sqlite3
+```
+
+Получившийся файл самодостаточен, его можно копировать как обычно.
+Восстановление - при остановленном backend:
+
+```bash
+docker compose stop backend
+VOL=$(docker volume inspect -f '{{.Mountpoint}}' labgrader_queue-data)  # имя тома: docker volume ls
+sudo cp queue-backup-2026-11-09.sqlite3 "$VOL/queue.sqlite3"
+sudo rm -f "$VOL/queue.sqlite3-wal" "$VOL/queue.sqlite3-shm"   # журнал старого файла испортил бы новый
+sudo chown 999:999 "$VOL/queue.sqlite3"
+docker compose start backend
+```
+
+### Один процесс backend
+
+Backend рассчитан на один процесс uvicorn: в `backend.Dockerfile` нет
+`--workers`. **Но без `--workers` uvicorn берёт число процессов из
+`WEB_CONCURRENCY`**, и одна строка `WEB_CONCURRENCY=4` в окружении незаметно
+запускает четыре. Не задавайте эту переменную.
+
+- Очередь несколько процессов переживает: каждое изменение - транзакция
+  SQLite `BEGIN IMMEDIATE`, правило «одна активная запись на студента»
+  держит уникальный индекс в самой базе, а копию расписания ГУАП процессы
+  берут друг у друга из той же базы.
+- Остальной проект - нет. Командные лабораторные, массовая проверка и рассылка
+  шаблона держат блокировки и состояние работ в памяти процесса, лимиты
+  запросов тоже считаются отдельно в каждом процессе. Кэш таблицы курса у
+  очереди тоже свой у каждого процесса: свежая отметка `v` из проверки в
+  другом процессе станет видна очереди с задержкой до 60 секунд.
+
+### Адреса сервиса и вход студента
+
+- Студент входит в очередь через тот же GitHub OAuth App и тот же колбэк
+  `/join/callback`, что и при получении репозитория (`.env.example`):
+  отдельный Authorization callback URL регистрировать не нужно. Без
+  `GITHUB_OAUTH_CLIENT_ID` и `GITHUB_OAUTH_CLIENT_SECRET` студент
+  возвращается на страницу очереди с сообщением «Вход через GitHub не
+  настроен на сервере», в логе - ошибка о ненастроенном OAuth App.
+- `FRONTEND_URL` - куда браузер возвращается после входа
+  (`{FRONTEND_URL}/course/{course_id}/queue`) и с какого адреса принимаются
+  запросы очереди (ниже). Значение по умолчанию `http://localhost:8080`
+  годится только для локальной разработки в `docker compose`; при
+  `npm run dev` нужен `http://localhost:5173` (`docs/DEVELOPMENT.md`).
+- Все запросы к очереди - действия (POST) и чтение (GET состояния, списка
+  работ, страницы преподавателя и истории) - принимаются только со страниц
+  самого сервиса: если в запросе есть заголовок `Origin`, он должен совпасть
+  с адресом из `FRONTEND_URL`, `PUBLIC_BASE_URL`, с адресом самого запроса к
+  backend или иметь тот же `host:port`, что заголовок `Host` запроса (схема
+  при этом не важна: за TLS-прокси backend видит `http`). Иначе ответ
+  `403 BAD_ORIGIN`, в логе - «Запрос к очереди ... с чужого Origin ...
+  отклонён; задайте FRONTEND_URL=..., если это ваш фронтенд». Caddy передаёт
+  исходный `Host` сам, nginx - только с
+  `proxy_set_header Host $host`; если прокси подменяет `Host`, на сервере
+  `FRONTEND_URL` и `PUBLIC_BASE_URL` должны быть публичным адресом сервиса
+  (`https://labgrader.markpolyak.ru`). Признак ошибки: страница очереди не
+  загружается или действия отвечают «Запрос отклонён».
+- Лимиты запросов студента в очереди считаются по логину из cookie очереди, а
+  не по адресу, поэтому общий NAT аудитории им не мешает. До входа опрос
+  очереди (`GET /courses/{course_id}/queue`, раз в 60 с на страницу)
+  считается по адресу, лимит 120 в минуту: этого хватает группе за одним NAT.
+  Вход (`/courses/{course_id}/queue/login`, `/join/callback`) тоже считается
+  по адресу - для него нужен `FORWARDED_ALLOW_IPS` (раздел выше).
+- Успешные GET-запросы опроса очереди (`/courses/*/queue`,
+  `/admin/courses/*/queue`) в журнал доступа не пишутся: страница очереди
+  опрашивает сервер каждые несколько секунд, и за пару набегали бы десятки
+  тысяч строк.
 
 ## Switching Between Branches
 

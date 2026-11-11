@@ -25,6 +25,9 @@ services:
       - ./google-credentials:/app/google-credentials/
       - ./courses:/app/courses  # Mount courses directory for easy editing
       - ./logs:/app/logs  # Persistent logs (survive container restarts)
+      # База очереди на защиту: записи и история должны пережить обновление
+      # образа (docs/DEPLOYMENT.md, раздел «Очередь на защиту: база SQLite»)
+      - queue-data:/app/data
     environment:
       # Credentials and secrets
       CREDENTIALS_FILE: /app/google-credentials/credentials.json
@@ -34,6 +37,14 @@ services:
       SECRET_KEY: ${SECRET_KEY}
       # Публичный адрес сервиса - из него собирается секретная ссылка /j/{token}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://labgrader.markpolyak.ru}
+      # Вход студента через GitHub (/join/..., очередь на защиту). FRONTEND_URL -
+      # куда браузер возвращается после входа; вместе с PUBLIC_BASE_URL это
+      # адреса, с которых принимаются действия с очередью (заголовок Origin)
+      GITHUB_OAUTH_CLIENT_ID: ${GITHUB_OAUTH_CLIENT_ID:-}
+      GITHUB_OAUTH_CLIENT_SECRET: ${GITHUB_OAUTH_CLIENT_SECRET:-}
+      FRONTEND_URL: ${FRONTEND_URL:-https://labgrader.markpolyak.ru}
+      # Файл SQLite очереди на защиту, лежит на томе queue-data
+      QUEUE_DB_PATH: /app/data/queue.sqlite3
       # Адреса Caddy, которым можно доверять X-Forwarded-For: без этого все
       # студенты приходят с адреса прокси и делят одну корзину лимита запросов
       # (docs/DEPLOYMENT.md, раздел «Ограничение частоты запросов за прокси»)
@@ -57,6 +68,12 @@ services:
 networks:
   caddy-proxy:
     external: true
+
+volumes:
+  # Именованный том при первом создании получает владельца каталога /app/data
+  # из образа (appuser). Не удалять: `docker compose down -v` стирает очередь
+  # и всю её историю
+  queue-data:
 
 # Alternative configuration using environment variable for branch:
 #

@@ -26,6 +26,11 @@ COPY requirements.txt .
 COPY courses/ courses/
 COPY grading/ grading/
 
+# /app/data - каталог базы очереди на защиту (QUEUE_DB_PATH). Он создаётся в
+# образе до chown, чтобы смонтированный туда именованный том унаследовал владельца
+# appuser: без него том создаётся от root, и SQLite не может открыть файл.
+RUN mkdir -p /app/data
+
 # Change ownership to non-root user
 RUN chown -R appuser:appuser /app
 

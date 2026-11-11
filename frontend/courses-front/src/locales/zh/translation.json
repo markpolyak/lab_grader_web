@@ -247,5 +247,297 @@
       "closed": "提交已截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。",
       "closedAt": "提交已于 {{moment}} 截止：该链接不再创建新仓库。如果您已有仓库，请使用 GitHub 登录，系统会恢复您的访问权限。"
     }
+  },
+  "queue": {
+    "title": "答辩排队",
+    "entry": {
+      "title": "答辩排队",
+      "text": "实验已通过检查？加入答辩队列，随时查看自己的位置。",
+      "button": "前往队列",
+      "groupsHint": "从 GitHub 提交实验进行检查：先选择班级，再选择实验。",
+      "labsHint": "选择实验，即可将其从 GitHub 提交检查。"
+    },
+    "back": "← 返回课程",
+    "language": "语言",
+    "today": "今天，{{date}}",
+    "loading": "正在加载队列…",
+    "errorTitle": "操作失败",
+    "loginFailed": "登录失败",
+    "retry": "重试",
+    "connectionLost": "无法刷新队列：{{reason}} 当前显示的是最后一次获取的数据。",
+    "updatedAt": "更新于 {{time}}。页面会自动刷新。",
+    "noSessions": "今天没有答辩登记。如果课程调整了时间，教师会手动开放登记。",
+    "lastResult": "上一次登记：{{lab}} — {{status}}（{{time}}）。",
+    "schedule": {
+      "stale": "课表网站暂时无法访问，正在使用 {{moment}} 保存的副本。",
+      "staleNoTime": "课表网站暂时无法访问，正在使用保存的副本。",
+      "unavailable": "课表网站暂时无法访问：课表中的课程不会开放登记，教师提前安排的加课照常进行。教师可以手动开放登记。"
+    },
+    "login": {
+      "description": "使用 GitHub 登录后即可排队并查看名单。姓名和班级根据您的 GitHub 用户名从课程表格中获取。",
+      "button": "使用 GitHub 登录",
+      "redirecting": "正在跳转到 GitHub…",
+      "logout": "退出登录"
+    },
+    "viewer": {
+      "name": "学生",
+      "group": "班级",
+      "github": "GitHub"
+    },
+    "me": {
+      "title": "您的登记",
+      "placeCaption": "队列中的位置",
+      "placeFirst": "下一位就是您",
+      "details": "{{lab}}，登记于 {{time}}",
+      "calledTitle": "轮到您了！",
+      "calledText": "请到教师处答辩 {{lab}}。",
+      "calledAt": "叫号时间 {{time}}",
+      "leave": "退出队列",
+      "leaveConfirm": "确定退出队列吗？再次排队只能排到队尾。",
+      "leaveYes": "确定退出",
+      "skip": "让后面的同学先答辩",
+      "skipConfirm": "与排在您后面的同学交换位置吗？之后无法再往前移。",
+      "skipYes": "确定让位",
+      "cancel": "取消",
+      "working": "请稍候…"
+    },
+    "form": {
+      "title": "登记答辩",
+      "session": "课程",
+      "until": "登记截止 {{time}}",
+      "lab": "实验",
+      "chooseLab": "请选择实验",
+      "labDefended": "{{lab}} — 已通过答辩",
+      "labNotPassed": "{{lab}} — 尚未通过检查",
+      "notPassedHint": "根据 {{time}} 的表格数据，该实验尚未通过检查。登记时服务器会再次核对表格。",
+      "labsLoading": "正在加载您的实验…",
+      "labsNotLoaded": "实验列表未加载。",
+      "labsRefresh": "刷新实验状态",
+      "noLabs": "本课程暂时没有可答辩的实验。",
+      "submit": "加入队列",
+      "submitting": "正在登记…",
+      "closedForMe": "您所在班级的登记目前已关闭。",
+      "opensAt": "您所在班级的登记将于 {{time}} 开放。"
+    },
+    "list": {
+      "title": "今天的队列",
+      "empty": "队列中暂时没有人。",
+      "you": "您"
+    },
+    "session": {
+      "kind": {
+        "schedule": "课表中的课程",
+        "manual": "临时登记",
+        "all_day": "全天队列"
+      },
+      "typeAndSubject": "{{type}} · {{subject}}",
+      "allGroups": "所有班级",
+      "groups": "班级：{{groups}}",
+      "counts": "等待：{{waiting}} · 答辩中：{{called}}",
+      "notForMe": "此登记不面向您所在的班级。"
+    },
+    "signup": {
+      "upcoming": "{{time}} 开放登记",
+      "open": "登记开放至 {{time}}",
+      "closed": "登记已关闭"
+    },
+    "status": {
+      "waiting": "等待中",
+      "called": "已叫号",
+      "defended": "通过答辩",
+      "not_defended": "未通过答辩",
+      "no_show": "未到场",
+      "left": "主动退出",
+      "expired": "登记已关闭",
+      "unknown": "未知"
+    },
+    "offer": {
+      "text": "实验已通过检查，可以登记答辩。需要使用 GitHub 登录。",
+      "button": "加入答辩队列"
+    },
+    "errors": {
+      "SESSION_REQUIRED": "登录已过期，请重新使用 GitHub 登录。",
+      "QUEUE_DISABLED": "本课程未开启答辩排队。",
+      "SESSION_NOT_FOUND": "未找到该课程，请刷新页面。",
+      "LAB_NOT_FOUND": "本课程中没有该实验。",
+      "ENTRY_NOT_FOUND": "未找到该登记，请刷新页面。",
+      "NOT_IN_QUEUE": "您不在队列中。",
+      "COURSE_NOT_FOUND": "未找到课程。",
+      "NOT_YOUR_GROUP": "此登记面向其他班级。",
+      "STUDENT_NOT_FOUND": "在课程表格中找不到您的 GitHub 用户名。请确认已在系统中注册，或联系教师。",
+      "BAD_ORIGIN": "请求被拒绝：请通过系统的正常链接打开排队页面。",
+      "SIGNUP_CLOSED": "该课程的登记目前已关闭。",
+      "LAB_NOT_PASSED": "该实验尚未通过系统检查，请先运行检查。",
+      "LAB_ALREADY_DEFENDED": "该实验已通过答辩。",
+      "ALREADY_IN_QUEUE": "您已经在队列中，同一时间只能有一条登记。",
+      "ALREADY_CALLED": "已经叫到您了，请到教师处。",
+      "NOTHING_TO_SKIP": "您后面没有人，无需让位。",
+      "QUEUE_EMPTY": "队列中没有人。",
+      "QUEUE_CHANGED": "队列在您查看期间发生了变化。请确认下一位后再点一次。",
+      "ENTRY_NOT_CALLED": "该学生尚未被叫号，或登记已结束。",
+      "DAY_OVER": "今天已结束，队列已关闭。",
+      "STUDENT_AMBIGUOUS": "您的 GitHub 用户名在课程表格中出现了多次，请联系教师。",
+      "INVALID_OUTCOME": "未知的答辩结果。",
+      "INVALID_GROUPS": "请至少选择一个班级。",
+      "INVALID_TIME": "登记截止时间必须晚于当前时间，且不能晚于当天结束。",
+      "QUEUE_MISCONFIGURED": "本课程的队列配置有误，请告知教师。",
+      "SHEETS_UNAVAILABLE": "课程表格暂时无响应，请一分钟后重试。",
+      "STORAGE_UNAVAILABLE": "队列存储暂时不可用，请重试。",
+      "state_expired": "登录耗时过长，请重新登录。",
+      "state_mismatch": "无法确认登录，请在本页面重新开始登录。",
+      "access_denied": "已取消 GitHub 登录。",
+      "missing_code": "GitHub 未返回登录代码，请重试。",
+      "oauth_not_configured": "服务器未配置 GitHub 登录，请告知教师。",
+      "oauth_exchange_failed": "无法确认 GitHub 登录，请重试。",
+      "request_timeout": "服务器未及时响应，请重试。",
+      "network_error": "无法连接服务器，请检查网络连接。",
+      "rate_limit": "请求过于频繁，请稍等一分钟。",
+      "not_found": "未找到。",
+      "unknown": "出现问题，请重试。"
+    }
+  },
+  "adminQueue": {
+    "openButton": "答辩队列",
+    "back": "← 返回课程列表",
+    "title": "答辩排队",
+    "titleWithCourse": "答辩排队：《{{course}}》",
+    "today": "今天，{{date}}",
+    "tabs": {
+      "today": "今天",
+      "history": "历史记录"
+    },
+    "loading": "正在加载队列…",
+    "retry": "重试",
+    "cancel": "取消",
+    "connectionLost": "无法刷新队列：{{reason}} 当前显示的是最后一次获取的数据。",
+    "configError": "课程队列设置有误：{{error}}。已有的登记仍可处理。",
+    "disabled": "课程配置中已关闭队列，显示的是已保存的登记。",
+    "archived": "课程未激活（courses/index.yaml 中 status: {{status}}）：不再接受新的登记，也无法手动开放登记。已保存的登记和历史记录仍可查看。",
+    "schedule": {
+      "stale": "课表网站无法访问，正在使用 {{moment}} 保存的副本。如果列表中缺少课程，请手动开放登记。",
+      "unavailable": "课表网站无法访问：网站上的课程不会开放登记，课程配置中的加课（changes）照常开放。其他课程请手动开放登记。",
+      "reason": "原因：{{reason}}。",
+      "errors": {
+        "FETCH_FAILED": "网站未响应",
+        "BAD_PAGE": "无法识别课表页面",
+        "NO_LESSONS": "页面上没有找到符合条件的课程",
+        "SNAPSHOT_TOO_OLD": "保存的副本已超过 14 天"
+      }
+    },
+    "sessionsTitle": "今天的课程",
+    "noSessions": "今天没有开启队列的课程。如果课程调整了时间或是临时加课，请手动开放登记。",
+    "noSessionsClosed": "今天没有排队登记。",
+    "tile": {
+      "counts": "等待：{{waiting}} · 已叫号：{{called}}",
+      "results": "通过答辩：{{defended}} · 未通过：{{notDefended}} · 未到场：{{noShow}}"
+    },
+    "summary": {
+      "title": "本节课小结",
+      "defended": "通过答辩",
+      "not_defended": "未通过答辩",
+      "no_show": "未到场",
+      "left": "主动退出",
+      "waiting": "等待中",
+      "called": "当前已叫号",
+      "expired": "登记已关闭"
+    },
+    "updatedAt": "更新于 {{time}}。页面每 5 秒自动刷新。",
+    "manual": {
+      "button": "手动开放登记",
+      "title": "手动开放登记",
+      "description": "用于课表中没有的课程：调课或临时加课。",
+      "pickGroups": "指定班级",
+      "allGroups": "课程的所有班级",
+      "groupsError": "无法加载班级列表。",
+      "closesAt": "登记截止",
+      "closesAtHint": "课程所在时区。留空表示到当天结束。",
+      "submit": "开放登记"
+    },
+    "session": {
+      "close": "关闭登记",
+      "reopen": "重新开放登记",
+      "finish": "结束答辩",
+      "finishTitle": "结束答辩？",
+      "finishText": "新的登记将关闭，仍在等待的学生（{{count}} 人）将被标记为“登记已关闭”。已叫号学生的结果之后仍可记录。",
+      "finishConfirm": "结束答辩",
+      "dayOver": "今天已结束，队列已关闭。已结束登记的结果可在下方修改。"
+    },
+    "callNext": "叫下一位",
+    "nextUp": "下一位：{{name}}，{{group}}，{{lab}}",
+    "queueEmpty": "没有人在等待",
+    "called": {
+      "title": "答辩中（{{count}}）",
+      "at": "叫号于 {{time}}",
+      "empty": "目前没有已叫号的学生。"
+    },
+    "outcome": {
+      "defended": "通过答辩",
+      "not_defended": "未通过答辩",
+      "no_show": "未到场",
+      "return": "放回队列",
+      "fix": "修改结果",
+      "set": "记录结果",
+      "fixTitle": "答辩结果：{{name}}",
+      "current": "当前：{{status}}"
+    },
+    "waiting": {
+      "title": "等待中（{{count}}）",
+      "empty": "队列中没有人。"
+    },
+    "finished": {
+      "title": "已结束（{{count}}）"
+    },
+    "columns": {
+      "place": "位置",
+      "name": "姓名",
+      "group": "班级",
+      "github": "GitHub",
+      "lab": "实验",
+      "createdAt": "登记时间",
+      "calledAt": "叫号时间",
+      "finishedAt": "结束时间",
+      "status": "状态",
+      "day": "日期"
+    },
+    "history": {
+      "from": "开始日期",
+      "to": "结束日期",
+      "group": "班级",
+      "anyGroup": "所有班级",
+      "lab": "实验",
+      "anyLab": "所有实验",
+      "query": "学生（姓名或 GitHub）",
+      "apply": "查询",
+      "download": "下载 CSV",
+      "count": "记录数：{{count}}",
+      "empty": "所选期间没有记录。",
+      "truncated": "仅显示前 {{count}} 条记录（最新的），其余未能显示。请缩小日期范围或筛选条件。",
+      "pageRange": "第 {{from}}–{{to}} 条，共 {{count}} 条",
+      "page": {
+        "first": "第一页",
+        "previous": "上一页",
+        "next": "下一页",
+        "last": "最后一页"
+      }
+    },
+    "toast": {
+      "called": "已叫号：{{name}}",
+      "outcome": "{{name}}：{{status}}",
+      "returned": "{{name}}：已放回队列",
+      "finished": "答辩已结束",
+      "manualOpened": "登记已开放",
+      "closed": "登记已关闭",
+      "reopened": "登记已重新开放"
+    },
+    "errors": {
+      "ALREADY_IN_QUEUE": "该学生已经用新的登记重新排队。在新登记结束之前，这条登记不能放回队列；如果是同一份作业，也不能标记为“通过答辩”。",
+      "ENTRY_NOT_CALLED": "该登记无法执行此操作：学生未被叫号、已退出队列或登记已结束。请查看其当前状态。",
+      "DAY_OVER": "该课程当天已结束，队列已关闭：无法再叫号或放回队列。答辩结果可以在“历史记录”标签页中记录。",
+      "SIGNUP_CLOSED": "该课程的登记时间已过，无法重新开放。如有需要，请手动开放登记。",
+      "QUEUE_CHANGED": "队列已变化：下一位已在其他标签页被叫号，或学生已退出。请确认下一位后再点一次。",
+      "QUEUE_EMPTY": "队列中没有人，无人可叫。",
+      "QUEUE_DISABLED": "课程队列不接受登记：配置中已关闭队列或课程未激活。",
+      "INVALID_PERIOD": "日期范围无效：“开始日期”晚于“结束日期”、范围超过 400 天，或日期不在 2000–2100 年之间。"
+    }
   }
 }

@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Button, StyledInput, Text, TextError } from "./styled";
 import { CourseCardContainer } from "../course-list/styled";
+import { safeAdminNext } from "./Queue/state";
 
 export const AdminLogin = () => {
   const [login, setLogin] = useState("");
@@ -9,6 +10,9 @@ export const AdminLogin = () => {
   const [error, setError] = useState("");
 
   const navigate = useNavigate();
+  // ?next= ставят страница очереди и её ProtectedRoute: после входа
+  // преподаватель возвращается туда, где его застал конец сессии.
+  const [searchParams] = useSearchParams();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -22,7 +26,7 @@ export const AdminLogin = () => {
     });
 
         if (response.ok) {
-        navigate("/admin/courses");
+        navigate(safeAdminNext(searchParams.get("next")));
         } else {
             setError("Incorrect login or password");
         }

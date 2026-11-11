@@ -481,6 +481,15 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                     {t("manageLabs")}
                   </Button>
 
+                  {course.queue_configured && (
+                    <Button
+                      onClick={() => navigate(`/admin/courses/${course.id}/queue`)}
+                      style={{ backgroundColor: colors.buttonBackground, color: "#fff" }}
+                    >
+                      {t("adminQueue.openButton")}
+                    </Button>
+                  )}
+
                   <Button
                     onClick={() => handleDeleteConfirmation(course.id)}
                     style={{ backgroundColor: colors.error, color: "#fff" }}

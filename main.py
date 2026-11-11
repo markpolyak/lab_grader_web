@@ -1,4 +1,6 @@
-from fastapi import FastAPI, Request, Response, HTTPException, Depends
+from fastapi import FastAPI, Request, Response, HTTPException, Depends, Path, Query
+from fastapi.exception_handlers import request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 import os
 import yaml
@@ -10,14 +12,18 @@ from fastapi.responses import FileResponse, RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import UploadFile, File
 from dotenv import load_dotenv
-from itsdangerous import TimestampSigner, BadSignature
+from itsdangerous import TimestampSigner, BadSignature, SignatureExpired
 import re
 import json
 import base64
 import logging
+import secrets
 import threading
-from datetime import datetime
-from urllib.parse import quote, urlencode
+import time
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from typing import Annotated, Any
+from urllib.parse import quote, urlencode, urlsplit
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -77,6 +83,31 @@ from grading.course_index import (
     iter_course_configs as _iter_course_configs,
     load_course_index as _load_course_index,
 )
+from grading import queue_roster
+from grading.defense_queue import (
+    HISTORY_FIRST_DAY,
+    LAB_DEFENDED,
+    LAB_NOT_PASSED,
+    SIGNUP_CLOSED,
+    DefenseQueue,
+    QueueConfigError,
+    QueueError,
+    QueueSettings,
+    course_day,
+    day_start,
+    iso_utc,
+    lab_cell_status,
+    normalize_login,
+    parse_closes_at,
+    parse_history_day,
+    parse_queue_config,
+    parse_utc_offset,
+    queue_flag,
+    warn_about_queue_config,
+)
+from grading.queue_store import QueueStore
+from grading.schedule import ScheduleUnavailable, SourceContext, build_schedule_source
+from grading.schedule.changes import UnknownDay, parse_changes
 import tempfile
 
 # Configure logging to both file and console
@@ -112,6 +143,33 @@ root_logger.addHandler(file_handler)
 uvicorn_access = logging.getLogger("uvicorn.access")
 uvicorn_access.handlers = [console_handler, file_handler]
 
+
+class QueuePollAccessFilter(logging.Filter):
+    """
+    Keep successful polls of the defense queue out of the access log.
+
+    The student page polls every 10 s and the teacher's every 5 s: one lesson
+    of thirty students is tens of thousands of identical lines, and the log
+    file has no rotation (docs/LOGGING.md). Errors and every other request
+    are still logged.
+    """
+
+    POLL_PATH_RE = re.compile(r"(/admin)?/courses/[^/]+/queue")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn: '%s - "%s %s HTTP/%s" %d' % (client, method, path, version, status)
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != 5:
+            return True
+        _client, method, full_path, _version, status = args
+        if method != "GET" or not isinstance(status, int) or not 200 <= status < 400:
+            return True
+        path = str(full_path).split("?", 1)[0]
+        return self.POLL_PATH_RE.fullmatch(path) is None
+
+
+uvicorn_access.addFilter(QueuePollAccessFilter())
+
 uvicorn_error = logging.getLogger("uvicorn.error")
 uvicorn_error.handlers = [console_handler, file_handler]
 
@@ -134,12 +192,22 @@ SHEETS_SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis
 SHEETS_TIMEOUT_SECONDS = 30
 
 
-def sheets_client() -> gspread.Client:
+def sheets_client(timeout: float = SHEETS_TIMEOUT_SECONDS) -> gspread.Client:
     """Authorized gspread client with a request timeout set."""
     creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, SHEETS_SCOPE)
     client = gspread.authorize(creds)
-    client.set_timeout(SHEETS_TIMEOUT_SECONDS)
+    client.set_timeout(timeout)
     return client
+
+
+# Очередь читает таблицу, пока студент ждёт ответа на вход или запись: лучше
+# быстро ответить «повторите», чем держать запрос полминуты.
+QUEUE_SHEETS_TIMEOUT_SECONDS = 8
+
+
+def queue_sheets_client() -> gspread.Client:
+    """sheets_client() with the shorter timeout of the defense queue."""
+    return sheets_client(QUEUE_SHEETS_TIMEOUT_SECONDS)
 
 
 def _start_background_job(func, *args, name: str) -> None:
@@ -190,6 +258,11 @@ GITHUB_REQUEST_TIMEOUT = 10
 JOIN_SESSION_COOKIE = "join_session"
 JOIN_SESSION_MAX_AGE = 1800
 
+# SQLite-файл очереди на защиту (docs/DEPLOYMENT.md): в контейнере - на томе
+# queue-data, при локальном запуске - в ./data/. Само соединение открывается
+# лениво, при первом обращении к очереди (_queue_store).
+QUEUE_DB_PATH = os.getenv("QUEUE_DB_PATH", "data/queue.sqlite3")
+
 # Rate limiting configuration
 limiter = Limiter(key_func=get_remote_address)
 app.state.limiter = limiter
@@ -215,6 +288,14 @@ app.add_middleware(
     allow_headers=["*"],  # Разрешить все заголовки
 )
 signer = TimestampSigner(SECRET_KEY)
+ADMIN_SESSION_MAX_AGE = 3600
+# Когда преподаватель вошёл по паролю. Страница очереди продлевает
+# admin_session (_renew_admin_session), но так, чтобы она кончилась не
+# позже этого срока от входа: украденную cookie нельзя держать живой
+# сколько угодно.
+ADMIN_SESSION_START_COOKIE = "admin_session_start"
+ADMIN_SESSION_MAX_LIFETIME = 12 * 3600
+admin_start_signer = TimestampSigner(SECRET_KEY, salt="admin-session-start")
 
 # Course index management
 INDEX_FILE = os.path.join(COURSES_DIR, "index.yaml")
@@ -340,6 +421,7 @@ def validate_course_index():
                     return False
                 warn_about_team_labs(entry["file"], data["course"])
                 warn_about_join_links(entry["file"], data["course"])
+                warn_about_queue_config(entry["file"], data["course"])
         except Exception as e:
             print(f"❌ ERROR: Failed to load {entry['file']}: {e}")
             return False
@@ -386,6 +468,40 @@ if not validate_course_index():
 for _collision in check_token_collisions(SECRET_KEY, iter_course_configs()):
     logger.error(f"Конфликт секретных ссылок: {_collision}")
 
+
+def check_queue_storage() -> None:
+    """
+    Log an error when the queue database cannot be written, if any course uses the queue.
+
+    Only a log line, nothing is created: the rest of the service works
+    without the queue, and a missing volume is better seen in the startup
+    log than as STORAGE_UNAVAILABLE in the middle of a lesson.
+    """
+    try:
+        if not any(queue_flag(info) for _course_id, info in iter_course_configs()):
+            return
+        path = os.path.abspath(QUEUE_DB_PATH)
+        # В режиме WAL рядом с базой появляются файлы -wal и -shm, поэтому
+        # писать нужно и в сам файл, и в его каталог. Каталога может ещё не
+        # быть - тогда проверяем ближайший существующий родитель.
+        targets = [path] if os.path.exists(path) else []
+        directory = os.path.dirname(path)
+        while not os.path.exists(directory) and os.path.dirname(directory) != directory:
+            directory = os.path.dirname(directory)
+        targets.append(directory)
+        for target in targets:
+            if not os.access(target, os.W_OK):
+                logger.error(
+                    f"Очередь на защиту: нет прав на запись в {target} (QUEUE_DB_PATH={QUEUE_DB_PATH}). "
+                    "Очередь будет отвечать STORAGE_UNAVAILABLE - см. docs/DEPLOYMENT.md"
+                )
+                return
+    except Exception as e:
+        logger.error(f"Очередь на защиту: не удалось проверить QUEUE_DB_PATH={QUEUE_DB_PATH}: {e}")
+
+
+check_queue_storage()
+
 # Mount static files for course logos
 LOGOS_DIR = os.path.join(COURSES_DIR, "logos")
 if os.path.exists(LOGOS_DIR):
@@ -420,9 +536,17 @@ def admin_login(request: Request, data: AuthRequest, response: Response):
             key="admin_session",
             value=token,
             httponly=True,
-            max_age=3600,
+            max_age=ADMIN_SESSION_MAX_AGE,
             path="/",
             secure=False
+        )
+        response.set_cookie(
+            key=ADMIN_SESSION_START_COOKIE,
+            value=admin_start_signer.sign(data.login.encode()).decode(),
+            httponly=True,
+            max_age=ADMIN_SESSION_MAX_LIFETIME,
+            path="/",
+            secure=False,
         )
         return {"authenticated": True}
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
@@ -439,7 +563,7 @@ def require_admin(request: Request) -> str:
     if not cookie:
         raise HTTPException(status_code=401, detail="Нет сессии")
     try:
-        login = signer.unsign(cookie, max_age=3600).decode()
+        login = signer.unsign(cookie, max_age=ADMIN_SESSION_MAX_AGE).decode()
     except BadSignature:
         raise HTTPException(status_code=401, detail="Невалидная или просроченная сессия")
     if login != ADMIN_LOGIN:
@@ -456,6 +580,7 @@ def check_auth(request: Request, admin: str = Depends(require_admin)):
 @limiter.limit("30/minute")
 def logout(request: Request, response: Response):
     response.delete_cookie("admin_session", path="/")
+    response.delete_cookie(ADMIN_SESSION_START_COOKIE, path="/")
     return {"message": "Logged out"}
 
 
@@ -488,6 +613,9 @@ def get_courses(request: Request, status: str = "active"):
             "status": course_status,
             "priority": meta["priority"],
             "featured": meta["featured"],
+            "queue_enabled": queue_flag(course_info),
+            # The teacher's queue page and history work whatever `enabled` says.
+            "queue_configured": isinstance(course_info.get("queue"), dict),
         })
 
     # Sort by priority (descending), then by name
@@ -624,8 +752,14 @@ def find_public_lab_config(
     return resolved
 
 
-def visible_labs(course_info: dict, now: datetime | None = None) -> list[dict]:
-    """Конфиги лаб курса, открытых студенту сейчас (см. find_visible_lab_config)."""
+def visible_lab_items(course_info: dict, now: datetime | None = None) -> list[tuple[str, dict]]:
+    """
+    Лабы курса, открытые студенту сейчас, вместе с ключами конфига
+    (см. find_visible_lab_config).
+
+    Ключ нужен очереди на защиту: запись хранит канонический ключ лабы, а не
+    short-name, который преподаватель может переименовать.
+    """
     labs = course_info.get("labs", {})
     if not isinstance(labs, dict):
         return []
@@ -634,8 +768,13 @@ def visible_labs(course_info: dict, now: datetime | None = None) -> list[dict]:
     for lab_key in labs:
         resolved = find_visible_lab_config(course_info, str(lab_key), now)
         if resolved is not None:
-            visible.append(resolved[1])
+            visible.append(resolved)
     return visible
+
+
+def visible_labs(course_info: dict, now: datetime | None = None) -> list[dict]:
+    """Конфиги лаб курса, открытых студенту сейчас (см. find_visible_lab_config)."""
+    return [lab_config for _lab_key, lab_config in visible_lab_items(course_info, now)]
 
 
 @app.get("/courses/{course_id}")
@@ -654,6 +793,8 @@ def get_course(request: Request, course_id: str):
         "google-spreadsheet": course_info.get("google", {}).get("spreadsheet", "Unknown"),
         "status": course_info["_meta"]["status"],
         "priority": course_info["_meta"]["priority"],
+        "queue_enabled": queue_flag(course_info),
+        "queue_configured": isinstance(course_info.get("queue"), dict),
     }
 
 @app.delete("/courses/{course_id}")
@@ -759,6 +900,26 @@ def _validate_join_sections(new_data, old_data) -> None:
             )
 
 
+def _validate_queue_section(new_data) -> None:
+    """
+    Проверить секцию `queue` сохраняемого конфига, как и секции `join`.
+
+    Сломанная секция не роняет сервис (студенты получат QUEUE_MISCONFIGURED),
+    но во время пары это уже поздно: преподаватель должен увидеть ошибку в
+    редакторе. Расписание проверяется без сети - только разбор настроек.
+
+    Raises:
+        HTTPException(400): секция не разбирается
+    """
+    new_course = new_data.get("course") if isinstance(new_data, dict) else None
+    if not isinstance(new_course, dict):
+        return
+    try:
+        parse_queue_config(new_course)
+    except QueueConfigError as e:
+        raise HTTPException(status_code=400, detail=f"Очередь на защиту: {e}")
+
+
 def _write_file_atomically(file_path: str, content: str) -> None:
     """
     Записать файл целиком или не записать вовсе.
@@ -803,6 +964,7 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
         old_data = None
 
     _validate_join_sections(new_data, old_data)
+    _validate_queue_section(new_data)
 
     _write_file_atomically(file_path, data.content)
 
@@ -934,7 +1096,30 @@ def register_student(request: Request, course_id: str, group_id: str, student: S
         existing_github = sheet.cell(row_idx, github_col_idx).value
 
         if not existing_github:
+            # Очередь на защиту узнаёт студента по столбцу GitHub на всех
+            # листах курса и при двух строках с одним логином отказывает во
+            # входе: чужой логин, вписанный в пустую строку, закрыл бы очередь
+            # его владельцу. Если таблицу прочитать не удалось, регистрация
+            # идёт как раньше.
+            if queue_flag(course_info) and _queue_roster.login_exists(
+                course_info, student.github, queue_sheets_client
+            ):
+                logger.warning(
+                    f"GitHub '{student.github}' is already in another row of course {course_id}, "
+                    f"refused for '{full_name}'"
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Этот GitHub-аккаунт уже привязан к другой строке таблицы курса. "
+                        "Обратитесь к преподавателю"
+                    ),
+                )
             sheet.update_cell(row_idx, github_col_idx, student.github)
+            # Очередь на защиту ищет студента по столбцу GitHub в своём кэше
+            # таблицы: без сброса только что зарегистрированный студент ещё
+            # минуту не смог бы войти в очередь.
+            queue_roster.invalidate(spreadsheet_id)
             logger.info(f"Successfully registered GitHub '{student.github}' for student '{full_name}'")
             return {"status": "registered", "message": "Аккаунт GitHub успешно задан"}
 
@@ -1152,6 +1337,9 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         # Update Google Sheets with new grade
         logger.info(f"Updating cell at row {target['row']}, column {target['col']} with result '{outcome.cell_value}'")
         target["sheet"].update_cell(target["row"], target["col"], outcome.cell_value)
+        # Свежая отметка должна сразу пускать в очередь на защиту - сбрасываем
+        # её кэш таблицы. Это память процесса, к Sheets не обращается.
+        queue_roster.invalidate(spreadsheet_id)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
 
         response = {
@@ -1697,8 +1885,11 @@ def join_lab_start(request: Request, course_id: str, lab_id: str):
     return RedirectResponse(url=f"https://github.com/login/oauth/authorize?{urlencode(params)}")
 
 
+# Лимит поднят с 20 до 60 в минуту: через этот же колбэк в очередь на защиту
+# входит вся группа разом в начале пары, а за прокси без --proxy-headers все
+# студенты делят одну корзину лимита (ср. /j/{token}).
 @app.get("/join/callback")
-@limiter.limit("20/minute")
+@limiter.limit("60/minute")
 def join_callback(
     request: Request,
     code: str | None = None,
@@ -1708,7 +1899,15 @@ def join_callback(
     """
     Обрабатывает колбэк GitHub OAuth: проверяет state, получает подтверждённый
     username, создаёт репозиторий из шаблона и чинит доступ студента (§4 плана).
+
+    У OAuth App один адрес колбэка, поэтому сюда же возвращается вход в
+    очередь на защиту. State очереди подписан с другой солью: для /join это
+    чужая подпись, а state /join не примет очередь.
     """
+    queue_state = _parse_queue_state(state)
+    if queue_state is not None:
+        return _queue_oauth_callback(request, queue_state, code, error)
+
     # course_id/lab_id are unknown until state is decoded, so a missing/invalid/
     # expired state can't redirect to the (unknown) frontend course/lab page -
     # it goes to the course/lab-agnostic /join/error page instead.
@@ -2433,6 +2632,8 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
     # Validate course structure
     if not isinstance(course_data, dict) or "course" not in course_data:
         raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
+    # Секция queue проверяется так же, как в редакторе: файл подхватывается сразу.
+    _validate_queue_section(course_data)
 
     # Save course file
     with open(file_location, "wb") as f:
@@ -2471,3 +2672,1116 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
         "course_id": course_id,
         "filename": file.filename
     }
+
+# ---------------------------------------------------------------------------
+# Defense queue (issue #62): students queue up to defend a lab, the teacher
+# calls them one by one. The logic lives in grading/defense_queue.py (SQLite
+# in grading/queue_store.py, schedule sources in grading/schedule/, read-only
+# spreadsheet lookups in grading/queue_roster.py); here are only HTTP,
+# cookies and rate limits. The queue never writes to Google Sheets.
+# ---------------------------------------------------------------------------
+
+_QUEUE_STORE: QueueStore | None = None
+_queue_roster = queue_roster.CourseRoster()
+
+# Ошибки очереди - стабильные коды в `detail`, фронтенд переводит их сам.
+_QUEUE_ERROR_STATUS = {
+    code: status_code
+    for status_code, codes in {
+        400: ("INVALID_OUTCOME", "INVALID_GROUPS", "INVALID_TIME", "INVALID_PERIOD", "QUEUE_MISCONFIGURED"),
+        401: ("SESSION_REQUIRED",),
+        403: ("NOT_YOUR_GROUP", "STUDENT_NOT_FOUND", "BAD_ORIGIN"),
+        404: (
+            "QUEUE_DISABLED", "SESSION_NOT_FOUND", "LAB_NOT_FOUND", "ENTRY_NOT_FOUND",
+            "NOT_IN_QUEUE", "COURSE_NOT_FOUND",
+        ),
+        409: (
+            "SIGNUP_CLOSED", "LAB_NOT_PASSED", "LAB_ALREADY_DEFENDED", "ALREADY_IN_QUEUE",
+            "ALREADY_CALLED", "NOTHING_TO_SKIP", "QUEUE_EMPTY", "QUEUE_CHANGED",
+            "ENTRY_NOT_CALLED", "DAY_OVER", "STUDENT_AMBIGUOUS",
+        ),
+        503: ("SHEETS_UNAVAILABLE", "STORAGE_UNAVAILABLE"),
+    }.items()
+    for code in codes
+}
+
+QUEUE_OAUTH_COOKIE = "queue_oauth"
+QUEUE_OAUTH_MAX_AGE = 600
+# Подпись cookie очереди старше суток недействительна в любом случае; сам
+# вход живёт до конца дня по поясу курса (поле "e").
+QUEUE_SESSION_MAX_AGE = 24 * 3600
+QUEUE_SESSION_MIN_SECONDS = 60
+# Если Sheets не ответил, для входа и списка работ годится копия таблицы не
+# старше получаса. При записи в очередь копия старше минуты не
+# подставляется: нужна актуальная ячейка.
+QUEUE_ROSTER_STALE_SECONDS = 1800
+QUEUE_LAB_PARAM_MAX_LENGTH = 64
+QUEUE_HISTORY_DEFAULT_DAYS = 30
+# Страница очереди преподавателя продлевает admin_session, пока открыта
+# (сессия кончается не позже ADMIN_SESSION_MAX_LIFETIME от входа).
+ADMIN_SESSION_RENEW_AFTER_SECONDS = 600
+# Больше SQLite INTEGER не хранит: такой id заведомо ничему не соответствует.
+QUEUE_ID_MAX = 2 ** 63 - 1
+
+# Отдельные соли: state и cookie очереди нельзя выдать за state /join или
+# admin_session (и наоборот), хотя ключ у всех один - SECRET_KEY.
+queue_state_signer = TimestampSigner(SECRET_KEY, salt="defense-queue-state")
+queue_session_signer = TimestampSigner(SECRET_KEY, salt="defense-queue-session")
+
+
+@app.exception_handler(QueueError)
+async def queue_error_handler(request: Request, exc: QueueError) -> JSONResponse:
+    """A refused queue operation: {"detail": CODE} with the status of the code."""
+    return JSONResponse(
+        status_code=_QUEUE_ERROR_STATUS.get(exc.code, 400),
+        content={"detail": exc.code},
+    )
+
+
+# id в пути и теле запросов очереди - целое из 1..QUEUE_ID_MAX. Любой другой
+# id означает то же, что ответила бы база: такой сессии или записи нет.
+QueueIdPath = Annotated[int, Path(ge=1, le=QUEUE_ID_MAX)]
+QueueIdField = Annotated[int, Field(ge=1, le=QUEUE_ID_MAX)]
+_QUEUE_ID_CODES = {
+    "session_id": "SESSION_NOT_FOUND",
+    "entry_id": "ENTRY_NOT_FOUND",
+    # Такой записи нет - значит, первой в очереди стоит не она.
+    "expected_entry_id": "QUEUE_CHANGED",
+}
+
+
+@app.exception_handler(RequestValidationError)
+async def queue_validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """A bad id in a queue request is a stable code, like the rest of the queue; anything else stays 422."""
+    route_path = getattr(request.scope.get("route"), "path", "")
+    if "/queue" in route_path:
+        for error in exc.errors():
+            loc = error.get("loc") or ()
+            code = _QUEUE_ID_CODES.get(loc[-1]) if loc else None
+            if code is not None:
+                return JSONResponse(status_code=_QUEUE_ERROR_STATUS[code], content={"detail": code})
+    return await request_validation_exception_handler(request, exc)
+
+
+def _queue_store() -> QueueStore:
+    """The queue database at QUEUE_DB_PATH, opened on first use."""
+    global _QUEUE_STORE
+    # Без блокировки: QueueStore не держит соединений, и два объекта на
+    # одном файле, созданные одновременно, друг другу не мешают.
+    if _QUEUE_STORE is None:
+        _QUEUE_STORE = QueueStore(QUEUE_DB_PATH)
+    return _QUEUE_STORE
+
+
+def _defense_queue() -> DefenseQueue:
+    return DefenseQueue(_queue_store())
+
+
+def _queue_now() -> datetime:
+    """Current time of the queue endpoints (tests replace it)."""
+    return datetime.now(timezone.utc)
+
+
+def _utc_offset_minutes(tz) -> int:
+    return int(tz.utcoffset(None).total_seconds() // 60)
+
+
+@dataclass(frozen=True)
+class QueueViewer:
+    """The signed-in student, as the course's queue cookie says."""
+    github: str
+    login: str      # casefolded, the queue's identity key
+    group: str
+    name: str
+
+
+# --- Course and schedule ---------------------------------------------------
+
+
+def _queue_course(course_id: str) -> dict:
+    try:
+        return get_course_by_id(course_id)
+    except HTTPException as e:
+        if e.status_code == 404:
+            raise QueueError("COURSE_NOT_FOUND")
+        raise
+
+
+def _schedule_source(settings: QueueSettings):
+    return build_schedule_source(
+        settings.schedule_cfg,
+        SourceContext(snapshots=_queue_store(), course_tz=settings.tz),
+    )
+
+
+def _queue_settings(course_id: str, course_info: dict) -> tuple[QueueSettings | None, str | None]:
+    """(settings or None if the queue is off, text of the config error or None)."""
+    try:
+        return parse_queue_config(course_info), None
+    except QueueConfigError as e:
+        return None, str(e)
+    except Exception as e:
+        # Например, модуль источника расписания не импортируется (в образе
+        # нет зависимости). Это ошибка развёртывания, но страница
+        # преподавателя всё равно должна открыться и показать её.
+        logger.exception(f"Очередь курса {course_id}: не удалось разобрать секцию queue")
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _course_status(course_info: dict) -> str:
+    return (course_info.get("_meta") or {}).get("status", "active")
+
+
+def _queue_enabled(course_info: dict) -> bool:
+    """The course is active and its `queue` section says `enabled: true`."""
+    return queue_flag(course_info) and _course_status(course_info) == "active"
+
+
+def _queue_student_context(course_id: str) -> tuple[dict, QueueSettings, Any]:
+    """
+    Course, queue settings and schedule source for the student endpoints
+    and the teacher's manual opening.
+
+    Raises:
+        QueueError: COURSE_NOT_FOUND; QUEUE_DISABLED when the course is not
+        active or the queue is off; QUEUE_MISCONFIGURED for a broken `queue`
+        section (`enabled: "true"` included - that is not "off")
+    """
+    course_info = _queue_course(course_id)
+    if _course_status(course_info) != "active":
+        raise QueueError("QUEUE_DISABLED")
+    settings, config_error = _queue_settings(course_id, course_info)
+    if config_error is not None:
+        logger.warning(f"Очередь курса {course_id} настроена с ошибкой: {config_error}")
+        raise QueueError("QUEUE_MISCONFIGURED")
+    if settings is None:
+        raise QueueError("QUEUE_DISABLED")
+    return course_info, settings, _schedule_source(settings)
+
+
+def _queue_admin_context(course_id: str) -> tuple[dict, QueueSettings | None, str | None]:
+    """
+    Course and queue settings for the teacher: only the course has to exist.
+
+    The day, the history and the actions on existing entries work from the
+    database whatever the course status, and even with a broken config -
+    the error is returned to be shown on the page.
+
+    Returns:
+        (course_info, settings or None, text of the config error or None)
+    """
+    course_info = _queue_course(course_id)
+    return (course_info, *_queue_settings(course_id, course_info))
+
+
+def _queue_tz(course_info: dict, settings: QueueSettings | None) -> timezone:
+    if settings is not None:
+        return settings.tz
+    try:
+        return parse_utc_offset(course_info.get("timezone"))
+    except QueueConfigError:
+        # Без пояса дни очереди не посчитать; UTC - только чтобы показать
+        # преподавателю историю и ошибку конфигурации.
+        return timezone.utc
+
+
+def _today(course_id: str, settings: QueueSettings, source, now: datetime) -> tuple[date, list | UnknownDay | None]:
+    """
+    The course's day and today's lessons from the schedule source.
+
+    The sessions themselves are created by the view that gets the lessons
+    (student_view / day_view), in the same read.
+
+    Returns:
+        (the course's day, today's lessons - None when the schedule is
+        unknown right now: no session is created then and nothing about
+        missing lessons is concluded; UnknownDay when it is unknown, but
+        the config cancels lessons that day)
+    """
+    day = course_day(now, settings.tz)
+    try:
+        return day, source.lessons_on(day, now)
+    except ScheduleUnavailable:
+        # Ни свежего расписания, ни сохранённой копии: новые сессии не
+        # создаются, уже созданные и ручные работают как работали. Источник
+        # сам пишет причину в лог, преподаватель видит её в `schedule`.
+        pass
+    except Exception:
+        logger.exception(f"Очередь курса {course_id}: ошибка источника расписания {source.name}")
+    # Отмены из конфига от источника не зависят: в сессию, созданную раньше,
+    # отменённая группа не записывается и без расписания.
+    changes = parse_changes((settings.schedule_cfg or {}).get("changes"), SourceContext(None, settings.tz))
+    return day, changes.unknown_day(day)
+
+
+def _lesson_keys(lessons) -> set[str] | UnknownDay | None:
+    if lessons is None or isinstance(lessons, UnknownDay):
+        return lessons
+    return {lesson.key for lesson in lessons}
+
+
+def _schedule_json(source, now: datetime) -> dict:
+    status = source.status(now)
+    return {
+        "source": status.source,
+        "state": status.state,
+        "fetched_at": None if status.fetched_at is None else iso_utc(status.fetched_at),
+        "error": status.error,
+    }
+
+
+def _student_state(
+    course_id: str,
+    course_info: dict,
+    settings: QueueSettings,
+    source,
+    viewer: QueueViewer | None,
+    now: datetime,
+    today: tuple[date, list | None] | None = None,
+) -> dict:
+    """Today's queue as the student page shows it (docs/PROJECT_DESCRIPTION.md, «Очередь на защиту»)."""
+    if today is None or today[0] != course_day(now, settings.tz):
+        today = _today(course_id, settings, source, now)
+    day, lessons = today
+    view = _defense_queue().student_view(
+        course_id,
+        day,
+        now,
+        login=viewer.login if viewer else None,
+        group=viewer.group if viewer else None,
+        current_keys=_lesson_keys(lessons),
+        settings=settings,
+        lessons=lessons,
+    )
+    return {
+        "course_id": course_id,
+        "course_name": course_info.get("name", "Unknown"),
+        "utc_offset_minutes": _utc_offset_minutes(settings.tz),
+        "now": iso_utc(now),
+        "day": day.isoformat(),
+        "schedule": _schedule_json(source, now),
+        "viewer": None if viewer is None else {
+            "github": viewer.github,
+            "name": viewer.name,
+            "group": viewer.group,
+        },
+        **view,
+    }
+
+
+def _admin_queue_state(
+    course_id: str,
+    course_info: dict,
+    settings: QueueSettings | None,
+    config_error: str | None,
+    now: datetime,
+) -> dict:
+    """
+    Today's sessions with every entry, for the teacher's page.
+
+    Sessions are materialized from the schedule only for a course whose
+    queue works (valid config, enabled, active course); otherwise the page
+    shows what the database already has, with signup closed: students get
+    QUEUE_DISABLED or QUEUE_MISCONFIGURED there.
+    """
+    enabled = _queue_enabled(course_info)
+    tz = _queue_tz(course_info, settings)
+    working = settings if enabled else None
+    day, lessons, schedule = course_day(now, tz), None, None
+    if working is not None:
+        source = _schedule_source(working)
+        day, lessons = _today(course_id, working, source, now)
+        schedule = _schedule_json(source, now)
+    sessions = _defense_queue().day_view(
+        course_id, day, now, _lesson_keys(lessons), settings=working, lessons=lessons
+    )
+    if working is None:
+        for session in sessions:
+            session["signup"] = SIGNUP_CLOSED
+
+    return {
+        "course_id": course_id,
+        "course_name": course_info.get("name", "Unknown"),
+        "course_status": _course_status(course_info),
+        "utc_offset_minutes": _utc_offset_minutes(tz),
+        "now": iso_utc(now),
+        "day": day.isoformat(),
+        "queue_enabled": enabled,
+        "config_error": config_error,
+        "schedule": schedule,
+        "sessions": sessions,
+    }
+
+
+# --- Student sign-in: GitHub OAuth through the shared /join/callback --------
+
+
+def _encode_payload(payload: dict) -> bytes:
+    return base64.urlsafe_b64encode(json.dumps(payload).encode("utf-8"))
+
+
+def _decode_payload(value):
+    if isinstance(value, str):
+        value = value.encode("ascii")
+    return json.loads(base64.urlsafe_b64decode(value))
+
+
+def _course_cookie_name(prefix: str, course_id: str) -> str:
+    """
+    Name of a per-course cookie, different for different courses.
+
+    An id of [A-Za-z0-9_.-] goes as is (prefix_id); any other id (Cyrillic,
+    spaces) is base64url without padding after "~", which no plain id has.
+    """
+    if re.fullmatch(r"[A-Za-z0-9_.-]+", course_id):
+        return f"{prefix}_{course_id}"
+    encoded = base64.urlsafe_b64encode(course_id.encode("utf-8")).rstrip(b"=").decode("ascii")
+    return f"{prefix}~{encoded}"
+
+
+def _queue_cookie_name(course_id: str) -> str:
+    # Своя cookie на каждый курс: в очередях двух курсов студент сидит независимо.
+    return _course_cookie_name("queue_session", course_id)
+
+
+def _queue_oauth_cookie_name(course_id: str) -> str:
+    # Тоже по курсу: два входа в двух вкладках не затирают nonce друг друга.
+    return _course_cookie_name(QUEUE_OAUTH_COOKIE, course_id)
+
+
+def _parse_queue_session(cookie: str | None, course_id: str, now: datetime) -> QueueViewer | None:
+    """The student of a queue cookie, or None if it is missing, forged, expired or of another course."""
+    if not cookie:
+        return None
+    try:
+        payload = _decode_payload(queue_session_signer.unsign(cookie, max_age=QUEUE_SESSION_MAX_AGE))
+    except (BadSignature, ValueError, TypeError):
+        return None
+
+    if not isinstance(payload, dict) or payload.get("c") != course_id:
+        return None
+    github, expires = payload.get("u"), payload.get("e")
+    if not isinstance(github, str) or not github.strip():
+        return None
+    if isinstance(expires, bool) or not isinstance(expires, (int, float)) or expires <= now.timestamp():
+        return None
+    return QueueViewer(
+        github=github,
+        login=normalize_login(github),
+        group=str(payload.get("g") or ""),
+        name=str(payload.get("n") or ""),
+    )
+
+
+def _optional_queue_viewer(request: Request, course_id: str, now: datetime | None = None) -> QueueViewer | None:
+    """The signed-in student of this course, or None for an anonymous visitor."""
+    return _parse_queue_session(
+        request.cookies.get(_queue_cookie_name(course_id)), course_id, now or _queue_now()
+    )
+
+
+def require_queue_session(request: Request, course_id: str, now: datetime | None = None) -> QueueViewer:
+    """
+    The confirmed student behind a queue request.
+
+    Same rule as require_join_session: the login comes from the signed
+    cookie and from nowhere else - never from the body, a query parameter or
+    the path. The cookie must be of this course and of today.
+
+    Raises:
+        QueueError: SESSION_REQUIRED
+    """
+    viewer = _optional_queue_viewer(request, course_id, now)
+    if viewer is None:
+        raise QueueError("SESSION_REQUIRED")
+    return viewer
+
+
+def _set_queue_session_cookie(
+    response: Response,
+    viewer: QueueViewer,
+    course_id: str,
+    tz: timezone,
+    now: datetime,
+) -> None:
+    """Sign the student in until the end of the course's day."""
+    day_end = day_start(course_day(now, tz), tz) + timedelta(days=1)
+    payload = {
+        "u": viewer.github,
+        "c": course_id,
+        "g": viewer.group,
+        "n": viewer.name,
+        "e": int(day_end.timestamp()),
+    }
+    response.set_cookie(
+        key=_queue_cookie_name(course_id),
+        value=queue_session_signer.sign(_encode_payload(payload)).decode("ascii"),
+        httponly=True,
+        samesite="lax",
+        max_age=max(int((day_end - now).total_seconds()), QUEUE_SESSION_MIN_SECONDS),
+        # Path=/: за обратным прокси backend отвечает с префиксом /api/v1,
+        # и cookie с путём /courses/... браузер туда бы не отправил.
+        path="/",
+        secure=False,
+    )
+
+
+def _queue_rate_key(request: Request) -> str:
+    """
+    Rate-limit key of the student queue endpoints: the student, not the address.
+
+    A whole group often sits behind one NAT (or a proxy without
+    --proxy-headers), and per-address limits would make thirty students
+    share one bucket. Only a valid signed cookie of this course counts;
+    anything else falls back to the address.
+    """
+    course_id = request.path_params.get("course_id")
+    viewer = _optional_queue_viewer(request, course_id) if isinstance(course_id, str) else None
+    if viewer is not None:
+        return f"qs:{viewer.login}"
+    return f"ip:{get_remote_address(request) or 'unknown'}"
+
+
+def _origin(url: str | None) -> str | None:
+    if not url:
+        return None
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        # Например, «http://[»: такой Origin ничему не равен.
+        return None
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}".lower()
+
+
+def _check_queue_origin(request: Request) -> None:
+    """
+    Accept queue requests only from the service's own pages.
+
+    CORS here allows any origin with credentials, so another site (or a
+    neighbouring subdomain, where SameSite=Lax cookies still go) could sign
+    a student up, call the next one or read the names and the history. GETs
+    are checked too: a browser always sends Origin cross-origin. No Origin
+    (curl, tests) passes, and so does the request's own Host with any scheme:
+    behind a TLS proxy request.base_url is http while the page is https.
+
+    Raises:
+        QueueError: BAD_ORIGIN
+    """
+    origin = request.headers.get("origin")
+    if origin is None:
+        return
+    allowed = {_origin(FRONTEND_URL), _origin(PUBLIC_BASE_URL), _origin(str(request.base_url))}
+    allowed.discard(None)
+    normalized = _origin(origin)
+    host = request.headers.get("host", "").strip().lower()
+    if normalized in allowed or (normalized and host and normalized.split("://", 1)[1] == host):
+        return
+    # Чаще всего это фронтенд разработчика (npm run dev на :5173) при
+    # FRONTEND_URL по умолчанию: подсказка, что поменять.
+    hint = ""
+    if normalized and normalized.isprintable():
+        hint = f"; задайте FRONTEND_URL={normalized}, если это ваш фронтенд"
+    logger.warning(f"Запрос к очереди {request.url.path} с чужого Origin {origin!r} отклонён{hint}")
+    raise QueueError("BAD_ORIGIN")
+
+
+def _queue_result_redirect(course_id: str, status: str, **extra) -> RedirectResponse:
+    """Back to the frontend queue page (/course/:courseId/queue) after sign-in."""
+    params = {"status": status, **{k: v for k, v in extra.items() if v}}
+    base = FRONTEND_URL.rstrip("/")
+    return RedirectResponse(url=f"{base}/course/{quote(course_id, safe='')}/queue?{urlencode(params)}")
+
+
+def _parse_queue_state(state: str | None):
+    """
+    Decode the OAuth `state` of a queue sign-in, if it is one.
+
+    Returns:
+        the payload dict; ("expired", course_id) for a genuine queue state
+        older than JOIN_STATE_MAX_AGE; None for anything else (a /join
+        state, a forgery, garbage), which the regular /join flow handles
+    """
+    if not state:
+        return None
+    try:
+        payload = _decode_payload(queue_state_signer.unsign(state, max_age=JOIN_STATE_MAX_AGE))
+    except SignatureExpired as e:
+        # Подпись настоящая, но устарела: курс известен, и студента можно
+        # вернуть на страницу его очереди, а не на общую /join/error.
+        try:
+            payload = _decode_payload(e.payload)
+        except (ValueError, TypeError):
+            return None
+        if isinstance(payload, dict) and payload.get("purpose") == "queue" and isinstance(payload.get("course_id"), str):
+            return ("expired", payload["course_id"])
+        return None
+    except (BadSignature, ValueError, TypeError):
+        return None
+
+    if (
+        not isinstance(payload, dict)
+        or payload.get("purpose") != "queue"
+        or not isinstance(payload.get("course_id"), str)
+        or not isinstance(payload.get("nonce"), str)
+    ):
+        return None
+    return payload
+
+
+def _queue_student_record(
+    course_info: dict,
+    github: str,
+    *,
+    fresh: bool = False,
+    allow_stale_seconds: float = 0,
+) -> queue_roster.StudentRecord:
+    """
+    The student's row in the course spreadsheet (read-only, cached).
+
+    Raises:
+        QueueError: STUDENT_NOT_FOUND, STUDENT_AMBIGUOUS, SHEETS_UNAVAILABLE
+    """
+    try:
+        return _queue_roster.lookup(
+            course_info,
+            github,
+            queue_sheets_client,
+            fresh=fresh,
+            allow_stale_seconds=allow_stale_seconds,
+        )
+    except queue_roster.RosterError as e:
+        raise QueueError(e.code)
+    except queue_roster.RosterUnavailable:
+        raise QueueError("SHEETS_UNAVAILABLE")
+
+
+def _queue_viewer_for_login(course_id: str, course_info: dict, github: str, now: datetime) -> QueueViewer:
+    """
+    Who the student who has just signed in through GitHub is.
+
+    A student added to the spreadsheet a minute ago gets one fresh re-read.
+    If Sheets is down, a student who already stands in the queue still gets
+    in - with the name and group of their entry - so that a restart or a
+    lost cookie in the middle of a lesson does not lock them out.
+
+    Raises:
+        QueueError: STUDENT_NOT_FOUND, STUDENT_AMBIGUOUS, SHEETS_UNAVAILABLE
+    """
+    try:
+        try:
+            student = _queue_student_record(
+                course_info, github, allow_stale_seconds=QUEUE_ROSTER_STALE_SECONDS
+            )
+        except QueueError as e:
+            if e.code != "STUDENT_NOT_FOUND":
+                raise
+            student = _queue_student_record(
+                course_info, github, fresh=True, allow_stale_seconds=QUEUE_ROSTER_STALE_SECONDS
+            )
+    except QueueError as e:
+        if e.code != "SHEETS_UNAVAILABLE":
+            raise
+        entry = _defense_queue().active_entry(course_id, github, now)
+        if entry is None:
+            raise
+        return QueueViewer(github=github, login=normalize_login(github), group=entry["group"], name=entry["name"])
+    return QueueViewer(github=student.github, login=student.login, group=student.group, name=student.name)
+
+
+def _queue_oauth_callback(request: Request, queue_state, code: str | None, error: str | None) -> RedirectResponse:
+    """
+    Second half of the queue sign-in started by queue_login.
+
+    The login comes only from the code -> token -> GET /user exchange, the
+    name and group from the course spreadsheet. Every failure lands on the
+    queue page with status=error&reason=<code>.
+    """
+    if isinstance(queue_state, tuple):
+        _expired, course_id = queue_state
+        return _queue_result_redirect(course_id, "error", reason="state_expired")
+
+    course_id = queue_state["course_id"]
+    lab = queue_state.get("lab") if isinstance(queue_state.get("lab"), str) else None
+
+    # Nonce из state должен совпасть с cookie браузера, начавшего вход:
+    # иначе чужой code, подсунутый ссылкой, вошёл бы под чужим логином.
+    oauth_cookie = _queue_oauth_cookie_name(course_id)
+    cookie_nonce = request.cookies.get(oauth_cookie) or ""
+    if not secrets.compare_digest(cookie_nonce.encode("utf-8"), queue_state["nonce"].encode("utf-8")):
+        logger.warning(f"Queue sign-in for {course_id}: state does not match the queue_oauth cookie")
+        return _queue_result_redirect(course_id, "error", reason="state_mismatch", lab=lab)
+
+    def finish(status: str, **extra) -> RedirectResponse:
+        response = _queue_result_redirect(course_id, status, lab=lab, **extra)
+        response.delete_cookie(oauth_cookie, path="/")
+        return response
+
+    if error:
+        logger.info(f"Student declined GitHub OAuth for the defense queue of {course_id}: {error!r}")
+        return finish("error", reason="access_denied")
+    if not code:
+        return finish("error", reason="missing_code")
+
+    try:
+        course_info, settings, _source = _queue_student_context(course_id)
+    except QueueError as e:
+        return finish("error", reason=e.code)
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        return finish("error", reason="oauth_not_configured")
+
+    username = _exchange_code_for_username(code, _oauth_redirect_uri(request))
+    if username is None:
+        return finish("error", reason="oauth_exchange_failed")
+
+    now = _queue_now()
+    try:
+        viewer = _queue_viewer_for_login(course_id, course_info, username, now)
+    except QueueError as e:
+        logger.info(f"GitHub user '{username}' cannot enter the defense queue of {course_id}: {e.code}")
+        return finish("error", reason=e.code)
+
+    logger.info(f"Confirmed GitHub username '{username}' for the defense queue of {course_id}")
+    response = finish("ok")
+    _set_queue_session_cookie(response, viewer, course_id, settings.tz, now)
+    return response
+
+
+@app.get("/courses/{course_id}/queue/login")
+@limiter.limit("60/minute")
+def queue_login(request: Request, course_id: str, lab: str | None = None):
+    """
+    Start the student's GitHub sign-in to the course's queue.
+
+    A browser navigation, not a fetch: problems are sent back to the queue
+    page as status=error&reason=<code>, the way the callback reports them,
+    instead of a bare JSON error in the student's tab. `lab` is only carried
+    through to preselect the lab on return.
+    """
+    try:
+        _queue_student_context(course_id)
+    except QueueError as e:
+        return _queue_result_redirect(course_id, "error", reason=e.code)
+
+    if not GITHUB_OAUTH_CLIENT_ID or not GITHUB_OAUTH_CLIENT_SECRET:
+        logger.error("GITHUB_OAUTH_CLIENT_ID/GITHUB_OAUTH_CLIENT_SECRET is not configured")
+        return _queue_result_redirect(course_id, "error", reason="oauth_not_configured")
+
+    nonce = secrets.token_urlsafe(16)
+    if lab is not None and len(lab) > QUEUE_LAB_PARAM_MAX_LENGTH:
+        lab = None
+    state = queue_state_signer.sign(_encode_payload({
+        "purpose": "queue",
+        "course_id": course_id,
+        "nonce": nonce,
+        "lab": lab,
+    })).decode("ascii")
+    params = {
+        "client_id": GITHUB_OAUTH_CLIENT_ID,
+        "redirect_uri": _oauth_redirect_uri(request),
+        "scope": "read:user",
+        "state": state,
+    }
+    logger.info(f"Redirecting to GitHub OAuth for the defense queue of {course_id}")
+    response = RedirectResponse(url=f"https://github.com/login/oauth/authorize?{urlencode(params)}")
+    response.set_cookie(
+        key=_queue_oauth_cookie_name(course_id),
+        value=nonce,
+        httponly=True,
+        samesite="lax",
+        max_age=QUEUE_OAUTH_MAX_AGE,
+        path="/",
+        secure=False,
+    )
+    return response
+
+
+@app.post("/courses/{course_id}/queue/logout")
+@limiter.limit("20/minute", key_func=_queue_rate_key)
+def queue_logout(request: Request, course_id: str):
+    """Sign the student out of the course's queue (drops the queue cookie)."""
+    _check_queue_origin(request)
+    response = JSONResponse(content={"status": "logged_out"})
+    response.delete_cookie(_queue_cookie_name(course_id), path="/")
+    return response
+
+
+# --- Student ---------------------------------------------------------------
+
+
+class QueueSignupRequest(BaseModel):
+    """
+    Body of POST /courses/{course_id}/queue/entries.
+
+    There is deliberately no login or group here: the student is the one in
+    the signed queue cookie, and the group comes from the course spreadsheet.
+    """
+    session_id: QueueIdField
+    lab_id: str
+
+
+# Вошедший студент считается отдельно, а до входа - по адресу: вся группа
+# за одним NAT открывает страницу разом и опрашивает её раз в минуту.
+@app.get("/courses/{course_id}/queue")
+@limiter.limit("120/minute", key_func=_queue_rate_key)
+def queue_state(request: Request, course_id: str):
+    """
+    Today's queue of the course, polled by the student page.
+
+    Never reads Google Sheets or GitHub: the student's name and group come
+    from the queue cookie, everything else from the queue database.
+    """
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, source = _queue_student_context(course_id)
+    viewer = _optional_queue_viewer(request, course_id, now)
+    return _student_state(course_id, course_info, settings, source, viewer, now)
+
+
+@app.get("/courses/{course_id}/queue/labs")
+@limiter.limit("20/minute", key_func=_queue_rate_key)
+def queue_labs(request: Request, course_id: str):
+    """
+    The labs the student can pick when signing up, with their status.
+
+    Statuses come from the cached spreadsheet copy (`fetched_at` tells how
+    old it is) and from the queue history; the sign-up itself checks the
+    cell again.
+    """
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, _source = _queue_student_context(course_id)
+    viewer = require_queue_session(request, course_id, now)
+    student = _queue_student_record(
+        course_info, viewer.github, allow_stale_seconds=QUEUE_ROSTER_STALE_SECONDS
+    )
+    defended = _defense_queue().defended_labs(course_id, viewer.login, now)
+
+    labs = []
+    for lab_key, lab_config in visible_lab_items(course_info, now):
+        short_name = lab_config.get("short-name")
+        if not short_name:
+            # Без short-name у работы нет столбца в таблице.
+            continue
+        status = lab_cell_status(student.labs.get(str(short_name), ""), settings.defended_prefix)
+        if lab_key in defended:
+            status = LAB_DEFENDED
+        labs.append({"id": lab_key, "short_name": str(short_name), "status": status})
+
+    spreadsheet_id = (course_info.get("google") or {}).get("spreadsheet")
+    fetched_at = _queue_roster.fetched_at(spreadsheet_id)
+    return {"fetched_at": None if fetched_at is None else iso_utc(fetched_at), "labs": labs}
+
+
+@app.post("/courses/{course_id}/queue/entries")
+@limiter.limit("20/minute", key_func=_queue_rate_key)
+def queue_sign_up(request: Request, course_id: str, body: QueueSignupRequest):
+    """
+    Put the signed-in student at the end of a session's queue.
+
+    Only a lab that passed the service's check can be defended (cell `v...`,
+    see lab_cell_status). The spreadsheet is read before the queue
+    transaction, so a slow Sheets request never holds the database lock.
+    """
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, source = _queue_student_context(course_id)
+    viewer = require_queue_session(request, course_id, now)
+
+    resolved = find_visible_lab_config(course_info, body.lab_id, now)
+    if resolved is None or not resolved[1].get("short-name"):
+        raise QueueError("LAB_NOT_FOUND")
+    lab_key, short_name = resolved[0], str(resolved[1]["short-name"])
+
+    student = _queue_student_record(course_info, viewer.github)
+    status = lab_cell_status(student.labs.get(short_name, ""), settings.defended_prefix)
+    if status == LAB_NOT_PASSED:
+        # Отметка могла появиться только что (в другом процессе или руками
+        # преподавателя), а копия таблицы - старше: перечитываем один раз.
+        student = _queue_student_record(course_info, viewer.github, fresh=True)
+        status = lab_cell_status(student.labs.get(short_name, ""), settings.defended_prefix)
+    if status == LAB_DEFENDED:
+        raise QueueError("LAB_ALREADY_DEFENDED")
+    if status == LAB_NOT_PASSED:
+        raise QueueError("LAB_NOT_PASSED")
+
+    # Время записи и проверка окна - после всех обращений к сети (таблица,
+    # у guap ещё и расписание): место в очереди даёт момент транзакции, и
+    # время записи должно с ним совпадать, а запрос, начатый до конца пары и
+    # дошедший до базы после него, уже опоздал.
+    today = _today(course_id, settings, source, _queue_now())
+    now = _queue_now()
+    _defense_queue().sign_up(
+        course_id, body.session_id, student, lab_key, short_name, now, current_keys=_lesson_keys(today[1])
+    )
+    logger.info(f"Defense queue {course_id}: '{student.github}' signed up for {lab_key} (session {body.session_id})")
+    return _student_state(course_id, course_info, settings, source, viewer, now, today)
+
+
+@app.post("/courses/{course_id}/queue/leave")
+@limiter.limit("20/minute", key_func=_queue_rate_key)
+def queue_leave(request: Request, course_id: str):
+    """Leave the queue while still waiting; a called student is marked by the teacher."""
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, source = _queue_student_context(course_id)
+    viewer = require_queue_session(request, course_id, now)
+    _defense_queue().leave(course_id, viewer.login, now)
+    return _student_state(course_id, course_info, settings, source, viewer, now)
+
+
+@app.post("/courses/{course_id}/queue/skip")
+@limiter.limit("20/minute", key_func=_queue_rate_key)
+def queue_skip(request: Request, course_id: str):
+    """Let the student right behind go first (swap places); moving forward is impossible."""
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, source = _queue_student_context(course_id)
+    viewer = require_queue_session(request, course_id, now)
+    _defense_queue().skip(course_id, viewer.login, now)
+    return _student_state(course_id, course_info, settings, source, viewer, now)
+
+
+# --- Teacher ---------------------------------------------------------------
+
+
+class QueueManualSessionRequest(BaseModel):
+    """
+    Body of POST /admin/courses/{course_id}/queue/sessions.
+
+    Types are checked by hand: FastAPI would answer its own 422, while the
+    page translates the stable INVALID_GROUPS / INVALID_TIME.
+    """
+    groups: Any = None          # ["4431"], [] = every group of the course
+    closes_at: Any = None       # "HH:MM" in the course timezone, None = end of the day
+
+
+class QueueCallNextRequest(BaseModel):
+    """Body of call-next: the head the teacher sees, so a repeat or a second tab calls no one extra."""
+    expected_entry_id: QueueIdField | None = None
+
+
+class QueueOutcomeRequest(BaseModel):
+    """Body of .../outcome; checked by DefenseQueue.set_outcome to answer INVALID_OUTCOME, not 422."""
+    outcome: Any = None
+
+
+def _renew_admin_session(request: Request, response: Response) -> None:
+    """
+    Re-issue admin_session while the teacher keeps the queue page open.
+
+    The session lasts an hour, a lesson with defenses is longer. A stolen
+    cookie must not live forever, so the session ends at most
+    ADMIN_SESSION_MAX_LIFETIME after the password sign-in (the signed
+    admin_session_start cookie): the last renewal is one ADMIN_SESSION_MAX_AGE
+    before that, and without admin_session_start nothing is renewed.
+    Same cookie parameters as admin_login.
+    """
+    cookie = request.cookies.get("admin_session")
+    start = request.cookies.get(ADMIN_SESSION_START_COOKIE)
+    if not cookie or not start:
+        return
+    try:
+        login, signed_at = signer.unsign(cookie, max_age=ADMIN_SESSION_MAX_AGE, return_timestamp=True)
+        started_by = admin_start_signer.unsign(
+            start, max_age=ADMIN_SESSION_MAX_LIFETIME - ADMIN_SESSION_MAX_AGE
+        )
+    except BadSignature:
+        return
+    if started_by != login:
+        return
+    if time.time() - signed_at.timestamp() < ADMIN_SESSION_RENEW_AFTER_SECONDS:
+        return
+    response.set_cookie(
+        key="admin_session",
+        value=signer.sign(login).decode(),
+        httponly=True,
+        max_age=ADMIN_SESSION_MAX_AGE,
+        path="/",
+        secure=False,
+    )
+    # Сам опрос в журнал доступа не попадает (QueuePollAccessFilter), продление - да.
+    logger.info(f"admin_session of '{login.decode()}' renewed by {request.url.path}")
+
+
+def _admin_queue_action(request: Request, course_id: str, action) -> tuple[dict, dict]:
+    """
+    Run one teacher action and answer with the fresh day state.
+
+    Works from the database whatever the course status and config, so
+    entries already in the queue can be finished even after the course was
+    archived or its config broken.
+
+    Returns:
+        (day state as GET /admin/courses/{id}/queue, result of the action)
+    """
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, config_error = _queue_admin_context(course_id)
+    result = action(_defense_queue(), now)
+    return _admin_queue_state(course_id, course_info, settings, config_error, now), result
+
+
+@app.get("/admin/courses/{course_id}/queue")
+@limiter.limit("120/minute")
+def admin_queue_day(request: Request, response: Response, course_id: str, admin: str = Depends(require_admin)):
+    """Today's sessions of the course with every entry (polled by the teacher's page)."""
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, config_error = _queue_admin_context(course_id)
+    state = _admin_queue_state(course_id, course_info, settings, config_error, now)
+    _renew_admin_session(request, response)
+    return state
+
+
+@app.post("/admin/courses/{course_id}/queue/sessions")
+@limiter.limit("60/minute")
+def admin_queue_open_manual(
+    request: Request,
+    course_id: str,
+    body: QueueManualSessionRequest,
+    admin: str = Depends(require_admin),
+):
+    """
+    Open signup by hand from now on: a moved or an extra lesson.
+
+    `groups: []` opens one queue for every group of the course. Needs a
+    working queue (enabled, active course, valid config).
+    """
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, _source = _queue_student_context(course_id)
+    closes_at = parse_closes_at(body.closes_at, now, settings.tz)
+    session = _defense_queue().open_manual(course_id, settings, body.groups, closes_at, now)
+    logger.info(f"Defense queue {course_id}: manual session {session['id']} opened for {session['groups'] or 'all groups'}")
+    return {**_admin_queue_state(course_id, course_info, settings, None, now), "session": session}
+
+
+@app.post("/admin/courses/{course_id}/queue/sessions/{session_id}/close")
+@limiter.limit("60/minute")
+def admin_queue_close_signup(
+    request: Request, course_id: str, session_id: QueueIdPath, admin: str = Depends(require_admin)
+):
+    """Stop new signups; those already waiting can still be called."""
+    state, session = _admin_queue_action(
+        request, course_id, lambda queue, now: queue.close_signup(course_id, session_id, now)
+    )
+    return {**state, "session": session}
+
+
+@app.post("/admin/courses/{course_id}/queue/sessions/{session_id}/reopen")
+@limiter.limit("60/minute")
+def admin_queue_reopen_signup(
+    request: Request, course_id: str, session_id: QueueIdPath, admin: str = Depends(require_admin)
+):
+    """Undo "close signup" while the session's signup window lasts."""
+    state, session = _admin_queue_action(
+        request, course_id, lambda queue, now: queue.reopen_signup(course_id, session_id, now)
+    )
+    return {**state, "session": session}
+
+
+@app.post("/admin/courses/{course_id}/queue/sessions/{session_id}/finish")
+@limiter.limit("60/minute")
+def admin_queue_finish_session(
+    request: Request, course_id: str, session_id: QueueIdPath, admin: str = Depends(require_admin)
+):
+    """Finish the reception ("Завершить приём"): close signup and expire everyone still waiting."""
+    state, session = _admin_queue_action(
+        request, course_id, lambda queue, now: queue.finish_session(course_id, session_id, now)
+    )
+    return {**state, "session": session}
+
+
+@app.post("/admin/courses/{course_id}/queue/sessions/{session_id}/call-next")
+@limiter.limit("60/minute")
+def admin_queue_call_next(
+    request: Request,
+    course_id: str,
+    session_id: QueueIdPath,
+    body: QueueCallNextRequest = QueueCallNextRequest(),
+    admin: str = Depends(require_admin),
+):
+    """Call the head of the queue; several students may be called at once."""
+    state, entry = _admin_queue_action(
+        request,
+        course_id,
+        lambda queue, now: queue.call_next(course_id, session_id, now, body.expected_entry_id),
+    )
+    return {**state, "entry": entry}
+
+
+@app.post("/admin/courses/{course_id}/queue/entries/{entry_id}/outcome")
+@limiter.limit("60/minute")
+def admin_queue_set_outcome(
+    request: Request,
+    course_id: str,
+    entry_id: QueueIdPath,
+    body: QueueOutcomeRequest = QueueOutcomeRequest(),
+    admin: str = Depends(require_admin),
+):
+    """
+    Record how a defense ended (or fix a wrong click).
+
+    Only the queue history changes: the grade in the spreadsheet stays the
+    teacher's business.
+    """
+    state, entry = _admin_queue_action(
+        request, course_id, lambda queue, now: queue.set_outcome(course_id, entry_id, body.outcome, now)
+    )
+    return {**state, "entry": entry}
+
+
+@app.post("/admin/courses/{course_id}/queue/entries/{entry_id}/return")
+@limiter.limit("60/minute")
+def admin_queue_return(request: Request, course_id: str, entry_id: QueueIdPath, admin: str = Depends(require_admin)):
+    """Put a called or no-show student back at their old place (same day only)."""
+    state, entry = _admin_queue_action(
+        request, course_id, lambda queue, now: queue.return_to_queue(course_id, entry_id, now)
+    )
+    return {**state, "entry": entry}
+
+
+@app.get("/admin/courses/{course_id}/queue/history")
+@limiter.limit("120/minute")
+def admin_queue_history(
+    request: Request,
+    response: Response,
+    course_id: str,
+    day_from: str | None = Query(None, alias="from"),
+    day_to: str | None = Query(None, alias="to"),
+    group: str | None = None,
+    q: str | None = None,
+    lab: str | None = None,
+    admin: str = Depends(require_admin),
+):
+    """
+    Queue entries of a period (YYYY-MM-DD, inclusive, course timezone), newest first.
+
+    Without dates - the last 30 days. Works for an archived course and
+    with a broken config too: the history is in the database. At most
+    HISTORY_LIMIT entries; `truncated` says that there were more.
+
+    Raises:
+        QueueError: INVALID_PERIOD - not a date, a date out of
+        HISTORY_FIRST_DAY..HISTORY_LAST_DAY, `from` after `to`, or a period
+        longer than HISTORY_MAX_DAYS
+    """
+    _check_queue_origin(request)
+    now = _queue_now()
+    course_info, settings, _config_error = _queue_admin_context(course_id)
+    tz = _queue_tz(course_info, settings)
+    last = parse_history_day(day_to) if day_to else course_day(now, tz)
+    default_first = max(last - timedelta(days=QUEUE_HISTORY_DEFAULT_DAYS - 1), HISTORY_FIRST_DAY)
+    first = parse_history_day(day_from) if day_from else default_first
+    if first > last:
+        raise QueueError("INVALID_PERIOD")
+
+    entries, truncated = _defense_queue().history(
+        course_id, first, last, tz, now, group=group, query=q, lab_key=lab
+    )
+    _renew_admin_session(request, response)
+    return {"entries": entries, "from": first.isoformat(), "to": last.isoformat(), "truncated": truncated}

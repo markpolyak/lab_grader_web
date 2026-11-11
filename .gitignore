@@ -147,6 +147,9 @@ docker-compose.override.yml
 credentials.json
 google-credentials/
 
+# Defense queue database (QUEUE_DB_PATH, default data/queue.sqlite3)
+/data/
+
 # Spyder project settings
 .spyderproject
 .spyproject

@@ -29,6 +29,15 @@ course:
         - name: Поляк Марк Дмитриевич
           title: ст. преп.
           status: лабораторные работы
+    # Очередь на защиту по расписанию ГУАП (docs/COURSE_CONFIG.md, секция queue)
+    queue:
+        enabled: true
+        open-before-minutes: 15
+        schedule:
+            source: guap
+            teacher-id: 39614
+            subject: Операционные системы
+            lesson-types: [Лабораторное занятие]
     labs:
         "0":
             github-prefix: os-task0

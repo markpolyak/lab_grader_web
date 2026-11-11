@@ -71,6 +71,7 @@ service account. ID таблицы — часть URL между `/d/` и `/edit
 
 Нужен для всего, что опирается на подтверждённый логин студента (`/join/...`,
 командные лабораторные).
+Через этот же OAuth App и тот же колбэк студент входит в очередь на защиту.
 
 1. <https://github.com/settings/developers> → OAuth Apps → New OAuth App.
 2. Homepage URL: `http://localhost:8080` (или `http://localhost:5173` при
@@ -133,6 +134,15 @@ GITHUB_OAUTH_CLIENT_SECRET=...
 FRONTEND_URL=http://localhost:8080   # или http://localhost:5173 для npm run dev
 ```
 
+`FRONTEND_URL` нужен не только для входа через GitHub. Запросы очереди на
+защиту принимаются только с адреса frontend'а (заголовок `Origin`): если
+`FRONTEND_URL` не совпадает с адресом, на котором открыт frontend, любой
+запрос очереди, в том числе GET, получает `403 BAD_ORIGIN`. Страница
+очереди студента тогда не открывается даже без входа, а страница очереди
+в админке не загружается: все её запросы, включая опрос и историю, тоже
+получают `403 BAD_ORIGIN`. Значение по умолчанию `http://localhost:8080`
+подходит для `docker compose`, для `npm run dev` нужен `http://localhost:5173`.
+
 ## 6. Запуск
 
 ### Docker
@@ -157,6 +167,13 @@ cd frontend/courses-front
 npm install --legacy-peer-deps
 npm run dev            # http://localhost:5173
 ```
+
+Для такого запуска в `.env` должно стоять `FRONTEND_URL=http://localhost:5173`,
+иначе очередь на защиту отвечает `403 BAD_ORIGIN`: на странице очереди
+«Запрос отклонён: откройте страницу очереди по обычной ссылке сервиса», в
+логе backend - «Запрос к очереди ... с чужого Origin 'http://localhost:5173'
+отклонён; задайте FRONTEND_URL=http://localhost:5173, если это ваш фронтенд».
+После смены `.env` backend нужно перезапустить.
 
 Админка: `/admin` во frontend, логин и пароль — `ADMIN_LOGIN` /
 `ADMIN_PASSWORD`.

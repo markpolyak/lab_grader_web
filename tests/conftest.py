@@ -52,6 +52,28 @@ def disable_rate_limiting(request):
     patcher.stop()
 
 
+@pytest.fixture(autouse=True)
+def isolated_defense_queue(tmp_path, monkeypatch):
+    """
+    A fresh queue database and empty queue caches for every test.
+
+    Without it the defense queue endpoints would write to data/queue.sqlite3
+    of the working copy, and the spreadsheet and schedule caches (module
+    level, shared by the process) would leak from one test into another.
+    """
+    import main
+    from grading.queue_roster import reset_roster_cache
+    from grading.schedule import reset_schedule_caches
+
+    monkeypatch.setattr(main, "QUEUE_DB_PATH", str(tmp_path / "queue-db" / "queue.sqlite3"))
+    monkeypatch.setattr(main, "_QUEUE_STORE", None)
+    reset_roster_cache()
+    reset_schedule_caches()
+    yield
+    reset_roster_cache()
+    reset_schedule_caches()
+
+
 def pytest_configure(config):
     """Register custom pytest markers."""
     config.addinivalue_line(

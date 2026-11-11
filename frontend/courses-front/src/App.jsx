@@ -8,6 +8,8 @@ import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
 import { JoinLab } from "./components/JoinLab";
 import { LabListWrapper as AdminLabListWrapper } from "./components/admin/LabList/labListWrapper";
+import { AdminQueuePage } from "./components/admin/Queue";
+import { DefenseQueue } from "./components/queue";
 
 function App() {
   return (
@@ -30,8 +32,17 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route
+          path="/admin/courses/:courseId/queue"
+          element={
+            <ProtectedRoute returnHere>
+              <AdminQueuePage />
+            </ProtectedRoute>
+          }
+        />
         <Route path="/" element={<CourseListWrapper />} />
         <Route path="/course/:courseId" element={<GroupListWrapper />} />
+        <Route path="/course/:courseId/queue" element={<DefenseQueue />} />
         <Route
           path="/course/:courseId/group/:groupId"
           element={<LabListWrapper />}
