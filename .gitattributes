@@ -1,0 +1,4 @@
+# Preserve research model source bytes without automatic line-ending conversion.
+research/queue-study/source/** -text -whitespace
+# Result hashes refer to the exact bytes, including the CSV writer's CRLF.
+research/queue-study/results/** -text whitespace=cr-at-eol

@@ -1,3 +1,5 @@
+[Главная](../README.md) · [Навигация по документации](README.md)
+
 # Локальная разработка
 
 Как поднять сервис у себя: со своей Google-таблицей, своей GitHub-организацией
@@ -133,6 +135,8 @@ GITHUB_OAUTH_CLIENT_SECRET=...
 FRONTEND_URL=http://localhost:8080   # или http://localhost:5173 для npm run dev
 ```
 
+Для запуска очереди, полного сценария без ключей и стенда на публичных данных: [RUNBOOK](hackathon/suaios/queue/RUNBOOK.md).
+
 ## 6. Запуск
 
 ### Docker
@@ -150,12 +154,12 @@ docker compose up --build
 ```bash
 # backend
 pip install -r requirements-dev.txt
-uvicorn main:app --reload --port 8000
+uvicorn main:app --host 127.0.0.1 --port 8000
 
 # frontend (в другом терминале)
 cd frontend/courses-front
 npm install --legacy-peer-deps
-npm run dev            # http://localhost:5173
+VITE_API_BASE_URL=http://localhost:8000 VITE_PROXY_TARGET=http://127.0.0.1:8000 npm run dev -- --host localhost --port 5173 --strictPort
 ```
 
 Админка: `/admin` во frontend, логин и пароль — `ADMIN_LOGIN` /

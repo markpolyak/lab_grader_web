@@ -1,0 +1,120 @@
+{
+  "config": {
+    "name": "baseline",
+    "students": 30,
+    "labs": 10,
+    "weeks": 30,
+    "capacity": 20,
+    "distribution": "normal",
+    "probability_mean": 0.5,
+    "attendance": 1.0,
+    "deadline_spacing": 3,
+    "penalty": 1,
+    "difficulty": false,
+    "release_before_deadline": null,
+    "cancelled_week": 0,
+    "extra_capacity_week": 0
+  },
+  "seed": 2042,
+  "models": {
+    "random": {
+      "n_runs": 10000,
+      "n_students_total": 300000,
+      "averaged_over_runs": {
+        "mean": 32.794293333333336,
+        "median": 39.7771,
+        "std": 17.935436946879186,
+        "share45": 0.5973866666666667,
+        "share345": 0.6688699999999999,
+        "share5": 0.4463433333333333,
+        "zero_share": 0.06355666666666666,
+        "queue_rejects": 198.865,
+        "wanted": 762.9347,
+        "services": 564.0697,
+        "capacity_available": 600.0,
+        "completed_labs": 8.9547,
+        "max_consecutive_skips": 5.226,
+        "never_served_share": 0.0
+      },
+      "pooled": {
+        "mean": 32.794293333333336,
+        "median": 41.0,
+        "std": 18.32643386206444
+      },
+      "grade_counts": {
+        "2": 99339,
+        "3": 21445,
+        "4": 45313,
+        "5": 133903
+      },
+      "queue_reject_share": 0.26065795670324077,
+      "utilization": 0.9401161666666666
+    },
+    "clamp0": {
+      "n_runs": 10000,
+      "n_students_total": 300000,
+      "averaged_over_runs": {
+        "mean": 37.18073666666666,
+        "median": 42.33435,
+        "std": 13.35155186054809,
+        "share45": 0.72306,
+        "share345": 0.8087066666666667,
+        "share5": 0.45124333333333333,
+        "zero_share": 0.02399,
+        "queue_rejects": 273.8025,
+        "wanted": 860.3774,
+        "services": 586.5749,
+        "capacity_available": 600.0,
+        "completed_labs": 9.171653333333333,
+        "max_consecutive_skips": 4.6628,
+        "never_served_share": 0.0
+      },
+      "pooled": {
+        "mean": 37.18073666666667,
+        "median": 43.0,
+        "std": 14.387974293044945
+      },
+      "grade_counts": {
+        "2": 57388,
+        "3": 25694,
+        "4": 81545,
+        "5": 135373
+      },
+      "queue_reject_share": 0.31823534648864554,
+      "utilization": 0.9776248333333334
+    },
+    "clamp_minus1": {
+      "n_runs": 10000,
+      "n_students_total": 300000,
+      "averaged_over_runs": {
+        "mean": 36.85407,
+        "median": 41.8382,
+        "std": 12.971606171490393,
+        "share45": 0.7141233333333332,
+        "share345": 0.8087466666666667,
+        "share5": 0.42239,
+        "zero_share": 0.023040000000000005,
+        "queue_rejects": 275.3841,
+        "wanted": 862.3522,
+        "services": 586.9681,
+        "capacity_available": 600.0,
+        "completed_labs": 9.164253333333335,
+        "max_consecutive_skips": 4.7557,
+        "never_served_share": 0.0
+      },
+      "pooled": {
+        "mean": 36.85407,
+        "median": 42.0,
+        "std": 14.184948634677298
+      },
+      "grade_counts": {
+        "2": 57376,
+        "3": 28387,
+        "4": 87520,
+        "5": 126717
+      },
+      "queue_reject_share": 0.31934063599536244,
+      "utilization": 0.9782801666666666
+    }
+  }
+}

@@ -1,3 +1,5 @@
+[Главная](../README.md) · [Навигация по документации](README.md)
+
 # Course Logos
 
 This directory contains logo images for courses displayed in the web interface.

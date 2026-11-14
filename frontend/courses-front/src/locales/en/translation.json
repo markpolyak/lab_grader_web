@@ -244,5 +244,6 @@
       "closed": "Submissions are closed: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored.",
       "closedAt": "Submissions closed on {{moment}}: no new repository is created through this link. If you already have one, sign in with GitHub and your access will be restored."
     }
-  }
+  },
+  "defenseQueue": "Defense queue"
 }

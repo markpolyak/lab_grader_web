@@ -1,4 +1,4 @@
-import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
+import { BrowserRouter as Router, Routes, Route, useParams } from "react-router-dom";
 import { CourseList } from "./components/course-list";
 import { AdminLogin } from "./components/admin/AdminLogin";
 import { ProtectedRoute } from "./components/admin/ProtectedRoute";
@@ -8,6 +8,13 @@ import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
 import { JoinLab } from "./components/JoinLab";
 import { LabListWrapper as AdminLabListWrapper } from "./components/admin/LabList/labListWrapper";
+
+import { TeacherQueue } from "./components/DefenseQueue/TeacherQueue";
+
+function TeacherQueueRoute() {
+  const { courseId } = useParams();
+  return <TeacherQueue initialCourse={courseId} />;
+}
 
 function App() {
   return (
@@ -30,6 +37,8 @@ function App() {
             </ProtectedRoute>
           }
         />
+        <Route path="/admin/queue" element={<ProtectedRoute><TeacherQueue /></ProtectedRoute>} />
+        <Route path="/admin/courses/:courseId/queue" element={<ProtectedRoute><TeacherQueueRoute /></ProtectedRoute>} />
         <Route path="/" element={<CourseListWrapper />} />
         <Route path="/course/:courseId" element={<GroupListWrapper />} />
         <Route

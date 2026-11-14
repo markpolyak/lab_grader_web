@@ -954,3 +954,51 @@ class TestBulkGradeIgnoresJoinWindow:
             )
 
         assert response.status_code == 202
+
+
+class TestCourseUploadPathSafety:
+    @pytest.mark.parametrize('filename', [
+        '../escaped.yaml', 'nested/escaped.yaml', r'..\escaped.yaml',
+        'absolute',
+    ])
+    def test_rejects_paths_without_writing_files(self, client, admin_course_env, filename):
+        client.cookies.set('admin_session', valid_cookie())
+        if filename == 'absolute':
+            filename = str(admin_course_env.parent / 'absolute.yaml')
+        index = (admin_course_env / 'index.yaml').read_bytes()
+        before = sorted(p.relative_to(admin_course_env.parent) for p in admin_course_env.parent.rglob('*'))
+        response = client.post('/courses/upload', files={
+            'file': (filename, b'course:\n  name: Unsafe\n', 'application/x-yaml'),
+        })
+        assert response.status_code == 400
+        assert (admin_course_env / 'index.yaml').read_bytes() == index
+        assert sorted(p.relative_to(admin_course_env.parent) for p in admin_course_env.parent.rglob('*')) == before
+
+    def test_rejects_symlink_outside_courses(self, client, admin_course_env):
+        client.cookies.set('admin_session', valid_cookie())
+        target = admin_course_env.parent / 'outside.yaml'
+        (admin_course_env / 'linked.yaml').symlink_to(target)
+        response = client.post('/courses/upload', files={
+            'file': ('linked.yaml', b'course: {}\n', 'application/x-yaml'),
+        })
+        assert response.status_code == 400
+        assert not target.exists()
+
+    def test_accepts_plain_yml_filename(self, client, admin_course_env):
+        client.cookies.set('admin_session', valid_cookie())
+        content = b'course:\n  name: Safe\n'
+        response = client.post('/courses/upload', files={
+            'file': ('new-course.yml', content, 'application/x-yaml'),
+        })
+        assert response.status_code == 200
+        assert (admin_course_env / 'new-course.yml').read_bytes() == content
+
+    def test_existing_course_is_not_overwritten(self, client, admin_course_env):
+        client.cookies.set('admin_session', valid_cookie())
+        path = admin_course_env / 'test-course.yaml'
+        before = path.read_bytes()
+        response = client.post('/courses/upload', files={
+            'file': ('test-course.yaml', b'course: {}\n', 'application/x-yaml'),
+        })
+        assert response.status_code == 400
+        assert path.read_bytes() == before

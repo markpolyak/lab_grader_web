@@ -6,6 +6,7 @@ export function RegistrationFormWrapper() {
   const navigate = useNavigate();
   return (
     <RegistrationForm
+      key={`${courseId}:${groupId}`}
       courseId={courseId}
       groupId={groupId}
       labId={labId}

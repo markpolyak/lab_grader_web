@@ -1,0 +1,38 @@
+{
+  "2": {
+    "range": [
+      0,
+      24
+    ],
+    "count": 98962,
+    "percent": 32.98733333333333,
+    "color": "red"
+  },
+  "3": {
+    "range": [
+      25,
+      32
+    ],
+    "count": 21408,
+    "percent": 7.136,
+    "color": "orange"
+  },
+  "4": {
+    "range": [
+      33,
+      44
+    ],
+    "count": 45324,
+    "percent": 15.108,
+    "color": "lightblue"
+  },
+  "5": {
+    "range": [
+      45,
+      50
+    ],
+    "count": 134306,
+    "percent": 44.76866666666667,
+    "color": "green"
+  }
+}

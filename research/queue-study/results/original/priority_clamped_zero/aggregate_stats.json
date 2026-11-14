@@ -1,0 +1,25 @@
+{
+  "model": "priority_clamped_zero",
+  "description": "priority = max(0, deadline текущей работы - week); текущие и просроченные работы равны, порядок внутри класса случайный",
+  "averaged_over_runs": {
+    "mean_of_means": 37.18844333333333,
+    "mean_of_medians": 42.37435,
+    "mean_of_stds": 13.36725469007793
+  },
+  "pooled_over_runs": {
+    "mean": 37.18844333333333,
+    "median": 43.0,
+    "std": 14.388879239773642
+  },
+  "automat_pass_rate": {
+    "description": "доля студентов с итоговым баллом >= 25 (оценки 3/4/5)",
+    "threshold_score": 25,
+    "count": 242690,
+    "percent": 80.89666666666666,
+    "fail_count": 57310,
+    "fail_percent": 19.10333333333334
+  },
+  "n_runs": 10000,
+  "n_per_run": 30,
+  "n_total": 300000
+}

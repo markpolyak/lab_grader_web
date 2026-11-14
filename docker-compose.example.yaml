@@ -25,6 +25,7 @@ services:
       - ./google-credentials:/app/google-credentials/
       - ./courses:/app/courses  # Mount courses directory for easy editing
       - ./logs:/app/logs  # Persistent logs (survive container restarts)
+      - queue-data:/app/data  # SQLite + WAL, persistent queue storage
     environment:
       # Credentials and secrets
       CREDENTIALS_FILE: /app/google-credentials/credentials.json
@@ -32,6 +33,8 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
       SECRET_KEY: ${SECRET_KEY}
+      QUEUE_DB_PATH: /app/data/queue.sqlite3
+      QUEUE_WORKER_ENABLED: "1"
       # Публичный адрес сервиса - из него собирается секретная ссылка /j/{token}
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://labgrader.markpolyak.ru}
       # Адреса Caddy, которым можно доверять X-Forwarded-For: без этого все
@@ -71,3 +74,6 @@ networks:
 #
 # Or create a .env file with:
 #   BRANCH=feature-xyz
+
+volumes:
+  queue-data:

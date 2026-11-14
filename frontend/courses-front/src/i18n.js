@@ -7,10 +7,14 @@ import translationZh from "./locales/zh/translation.json";
 import { persistLanguage, readStoredLanguage } from "./language";
 
 
+import queueEN from "./locales/en/queue.json";
+import queueRU from "./locales/ru/queue.json";
+import queueZH from "./locales/zh/queue.json";
+
 const resources = {
-  en: { translation: translationEN },
-  ru: { translation: translationRU },
-  zh: { translation: translationZh },
+  en: { queue: queueEN, translation: translationEN },
+  ru: { queue: queueRU, translation: translationRU },
+  zh: { queue: queueZH, translation: translationZh },
 };
 
 i18n.use(initReactI18next).init({

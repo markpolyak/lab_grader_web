@@ -1,0 +1,33 @@
+{
+  "status": "passed",
+  "original_runs": 80000,
+  "finalist_runs": 780000,
+  "total_runs": 860000,
+  "finalist_student_outcomes": 24300000,
+  "scenario_count": 24,
+  "local_links_checked": 119,
+  "sqlite_version": "3.53.1",
+  "checks": [
+    {
+      "test": "research/queue-study/test_study.py",
+      "output": ".........\n----------------------------------------------------------------------\nRan 9 tests in 0.089s\n\nOK"
+    },
+    {
+      "test": "docs/hackathon/suaios/queue/test_schema.py",
+      "output": "..................\n----------------------------------------------------------------------\nRan 18 tests in 0.134s\n\nOK"
+    }
+  ],
+  "invariants": [
+    "score range and integer dtype",
+    "all 51 histogram bins and shares",
+    "per-run mean/median/population std and grade shares",
+    "pooled and averaged statistics",
+    "grade totals",
+    "service capacity and wanted=served+rejected",
+    "all paired CI values",
+    "eight models and target-three threshold",
+    "all exam scenarios from saved scores",
+    "model source hashes",
+    "local Markdown targets"
+  ]
+}

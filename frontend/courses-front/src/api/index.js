@@ -350,3 +350,21 @@ export async function gradeLab(courseId, groupId, labId, github) {
 }
 
 
+// Очередь защиты использует тот же адрес API и административную сессию.
+export async function queueRequest(path, { method = "GET", body, signal } = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    method, signal, credentials: "include",
+    headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(typeof data.detail === "string" ? data.detail : "Не удалось выполнить запрос. Повторите ещё раз.");
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+export const queueGroupPath = (courseId, groupId, admin = false) =>
+  `${admin ? "/admin" : ""}/courses/${encodeURIComponent(courseId)}/groups/${encodeURIComponent(groupId)}/queue`;

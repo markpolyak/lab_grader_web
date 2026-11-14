@@ -1,0 +1,25 @@
+{
+  "model": "odd_number",
+  "description": "Сначала нечётные номера студентов (нумерация с 1); внутри класса случайно",
+  "averaged_over_runs": {
+    "mean_of_means": 30.019823333333335,
+    "mean_of_medians": 35.54235,
+    "mean_of_stds": 19.667114996436
+  },
+  "pooled_over_runs": {
+    "mean": 30.019823333333335,
+    "median": 37.0,
+    "std": 19.921990957284418
+  },
+  "automat_pass_rate": {
+    "description": "доля студентов с итоговым баллом >= 25 (оценки 3/4/5)",
+    "threshold_score": 25,
+    "count": 178591,
+    "percent": 59.53033333333333,
+    "fail_count": 121409,
+    "fail_percent": 40.46966666666667
+  },
+  "n_runs": 10000,
+  "n_per_run": 30,
+  "n_total": 300000
+}

@@ -1,0 +1,25 @@
+{
+  "model": "surname_k",
+  "description": "Сначала условные фамилии на К: синтетические студенты с индексами 0, 10, 20; внутри класса случайно",
+  "averaged_over_runs": {
+    "mean_of_means": 32.46705,
+    "mean_of_medians": 39.32835,
+    "mean_of_stds": 18.117765472910328
+  },
+  "pooled_over_runs": {
+    "mean": 32.46705,
+    "median": 41.0,
+    "std": 18.496985185812488
+  },
+  "automat_pass_rate": {
+    "description": "доля студентов с итоговым баллом >= 25 (оценки 3/4/5)",
+    "threshold_score": 25,
+    "count": 198147,
+    "percent": 66.049,
+    "fail_count": 101853,
+    "fail_percent": 33.95099999999999
+  },
+  "n_runs": 10000,
+  "n_per_run": 30,
+  "n_total": 300000
+}

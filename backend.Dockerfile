@@ -27,7 +27,7 @@ COPY courses/ courses/
 COPY grading/ grading/
 
 # Change ownership to non-root user
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /app/data && chown -R appuser:appuser /app
 
 # Switch to non-root user
 USER appuser

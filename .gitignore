@@ -60,6 +60,9 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+queue.sqlite3
+queue.sqlite3-wal
+queue.sqlite3-shm
 
 # Flask stuff:
 instance/
@@ -130,6 +133,7 @@ celerybeat.pid
 # Environments
 .env
 .venv
+.venv-research/
 env/
 venv/
 ENV/
@@ -190,3 +194,11 @@ pnpm-debug.log*
 .vite/
 dist/
 .cache/logs/
+
+# Persistent defense queue and local SQLite backups
+/data/
+queue-backup-*.sqlite3
+queue-backup-*.sqlite3-*
+
+# macOS Finder metadata
+.DS_Store

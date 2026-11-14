@@ -36,3 +36,27 @@ jobs:
       - name: Run tests with coverage
         run: |
           pytest tests/ --cov=. --cov-report=term-missing --cov-fail-under=0
+
+  frontend:
+    name: Frontend tests and production build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/courses-front/package-lock.json
+      - run: npm ci --prefix frontend/courses-front --legacy-peer-deps
+      - run: npm test --prefix frontend/courses-front
+      - run: npm run build --prefix frontend/courses-front
+
+  docs:
+    name: Documentation links
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python scripts/check_docs.py

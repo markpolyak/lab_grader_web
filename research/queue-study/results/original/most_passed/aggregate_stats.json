@@ -1,0 +1,25 @@
+{
+  "model": "most_passed",
+  "description": "Сначала те, кто сдал больше всего лаб (current_lab по убыванию), при равенстве — случайно",
+  "averaged_over_runs": {
+    "mean_of_means": 31.06343,
+    "mean_of_medians": 45.4165,
+    "mean_of_stds": 21.88981376959969
+  },
+  "pooled_over_runs": {
+    "mean": 31.06343,
+    "median": 47.0,
+    "std": 21.983474550256307
+  },
+  "automat_pass_rate": {
+    "description": "доля студентов с итоговым баллом >= 25 (оценки 3/4/5)",
+    "threshold_score": 25,
+    "count": 185863,
+    "percent": 61.95433333333333,
+    "fail_count": 114137,
+    "fail_percent": 38.04566666666667
+  },
+  "n_runs": 10000,
+  "n_per_run": 30,
+  "n_total": 300000
+}

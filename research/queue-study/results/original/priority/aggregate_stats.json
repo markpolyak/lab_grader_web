@@ -1,0 +1,25 @@
+{
+  "model": "priority",
+  "description": "Очередь по приоритету: priority = deadline_текущей_лабы − week; сортировка по возрастанию (просроченные — первыми, ранние — в конце)",
+  "averaged_over_runs": {
+    "mean_of_means": 36.61768333333333,
+    "mean_of_medians": 41.5938,
+    "mean_of_stds": 12.810747239618669
+  },
+  "pooled_over_runs": {
+    "mean": 36.61768333333333,
+    "median": 42.0,
+    "std": 14.199119830693341
+  },
+  "automat_pass_rate": {
+    "description": "доля студентов с итоговым баллом >= 25 (оценки 3/4/5)",
+    "threshold_score": 25,
+    "count": 241493,
+    "percent": 80.49766666666666,
+    "fail_count": 58507,
+    "fail_percent": 19.50233333333334
+  },
+  "n_runs": 10000,
+  "n_per_run": 30,
+  "n_total": 300000
+}

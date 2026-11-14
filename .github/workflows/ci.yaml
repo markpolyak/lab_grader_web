@@ -15,6 +15,9 @@ jobs:
   build:
     name: Build frontend and backend images
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         service: [frontend, backend]
@@ -31,7 +34,7 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: |
-            ${{ env.DOCKER_REGISTRY }}/markpolyak/lab_grader_${{ matrix.service }}
+            ${{ env.DOCKER_REGISTRY }}/${{ github.repository_owner }}/lab_grader_${{ matrix.service }}
           tags: |
             type=ref,event=branch
             type=raw,value=latest,enable={{is_default_branch}}

@@ -1,0 +1,25 @@
+{
+  "model": "target_three",
+  "description": "Довести до 25 баллов: ближе к порогу идут раньше; достигшие порога больше не обслуживаются",
+  "averaged_over_runs": {
+    "mean_of_means": 21.3766,
+    "mean_of_medians": 25.0023,
+    "mean_of_stds": 8.965853530092765
+  },
+  "pooled_over_runs": {
+    "mean": 21.3766,
+    "median": 25.0,
+    "std": 9.20453904911412
+  },
+  "automat_pass_rate": {
+    "description": "доля студентов с итоговым баллом >= 25 (оценки 3/4/5)",
+    "threshold_score": 25,
+    "count": 223447,
+    "percent": 74.48233333333333,
+    "fail_count": 76553,
+    "fail_percent": 25.51766666666667
+  },
+  "n_runs": 10000,
+  "n_per_run": 30,
+  "n_total": 300000
+}

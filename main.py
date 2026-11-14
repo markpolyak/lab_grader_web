@@ -123,7 +123,7 @@ logger.info(f"Logging initialized. Log file: {log_file}")
 
 load_dotenv()
 app = FastAPI()
-COURSES_DIR = "courses"
+COURSES_DIR = os.getenv("COURSES_DIR", "courses")
 CREDENTIALS_FILE = os.getenv("CREDENTIALS_FILE", "credentials.json")  # Файл с учетными данными Google API
 
 SHEETS_SCOPE = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
@@ -159,7 +159,7 @@ def _start_background_job(func, *args, name: str) -> None:
 GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
 ADMIN_LOGIN = os.getenv("ADMIN_LOGIN")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
-SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
+SECRET_KEY = os.getenv("SECRET_KEY")
 
 # GitHub OAuth App for the /join student repo creation flow (see docs/REPO_GENERATION_PLAN.md).
 # Optional: existing deployments that don't use this feature can leave these unset;
@@ -202,6 +202,9 @@ if not ADMIN_LOGIN or not ADMIN_PASSWORD:
         "Приложение не может быть запущено без корректной конфигурации безопасности."
     )
 
+if not SECRET_KEY or SECRET_KEY == "super-secret-key":
+    raise RuntimeError("Задайте собственный SECRET_KEY: публичный ключ по умолчанию небезопасен")
+
 if not GITHUB_TOKEN:
     raise RuntimeError(
         "GITHUB_TOKEN должен быть установлен в переменных окружения. "
@@ -209,7 +212,11 @@ if not GITHUB_TOKEN:
     )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Разрешить запросы с любых источников
+    allow_origins=list(dict.fromkeys(value.rstrip('/') for value in (
+        FRONTEND_URL, PUBLIC_BASE_URL,
+        'http://localhost:5173', 'http://localhost:8080',
+        'http://127.0.0.1:5173', 'http://127.0.0.1:8080',
+    ) if value)),  # Cookie преподавателя доступны только согласованным frontend-origin.
     allow_credentials=True,
     allow_methods=["*"],  # Разрешить все HTTP-методы
     allow_headers=["*"],  # Разрешить все заголовки
@@ -422,7 +429,8 @@ def admin_login(request: Request, data: AuthRequest, response: Response):
             httponly=True,
             max_age=3600,
             path="/",
-            secure=False
+            secure=request.url.scheme == "https",
+            samesite="lax"
         )
         return {"authenticated": True}
     raise HTTPException(status_code=401, detail="Неверный логин или пароль")
@@ -652,6 +660,8 @@ def get_course(request: Request, course_id: str):
         "email": course_info.get("email", "Unknown"),
         "github-organization": course_info.get("github", {}).get("organization", "Unknown"),
         "google-spreadsheet": course_info.get("google", {}).get("spreadsheet", "Unknown"),
+        "queue_enabled": bool(course_info.get("queue", {}).get("enabled", False)),
+        "queue_registration_disabled": bool(course_info.get("queue", {}).get("registration_disabled", False)),
         "status": course_info["_meta"]["status"],
         "priority": course_info["_meta"]["priority"],
     }
@@ -813,6 +823,13 @@ def edit_course_put(request: Request, course_id: str, data: EditCourseRequest, a
 @limiter.limit("10/minute")
 def get_course_groups(request: Request, course_id: str):
     course_info = get_course_by_id(course_id)
+    from grading.defense_queue.public_sheet import public_sheet_config, list_public_groups
+    try:
+        source = public_sheet_config(course_info)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    if source is not None:
+        return list_public_groups(course_info)
     spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
     info_sheet = course_info.get("google", {}).get("info-sheet")
 
@@ -844,16 +861,15 @@ def get_course_labs(request: Request, course_id: str, group_id: str):
         raise HTTPException(status_code=400, detail="Missing spreadsheet ID or labs in config")
 
 
-    client = sheets_client()
-
+    from grading.defense_queue.public_sheet import public_sheet_config, read_public_grid
     try:
-        spreadsheet = client.open_by_key(spreadsheet_id)
-        sheet = spreadsheet.worksheet(group_id)
-
-
-        headers = sheet.row_values(2)[2:]
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Group not found in spreadsheet: {str(e)}")
+        if public_sheet_config(course_info) is not None:
+            headers = read_public_grid(course_info, group_id)[1][2:]
+        else:
+            spreadsheet = sheets_client().open_by_key(spreadsheet_id)
+            headers = spreadsheet.worksheet(group_id).row_values(2)[2:]
+    except Exception as error:
+        raise HTTPException(status_code=404, detail=f"Group not found in spreadsheet: {error}") from error
 
     available_labs = [lab for lab in labs if lab in headers]
     return available_labs
@@ -870,6 +886,8 @@ def register_student(request: Request, course_id: str, group_id: str, student: S
 
     try:
         course_info = get_course_by_id(course_id)
+        if course_info.get('queue', {}).get('registration_disabled', False):
+            raise HTTPException(status_code=409, detail='Для этого локального курса регистрация и запись оценок отключены')
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
         # Get column index (0-based in config, convert to 1-based for gspread)
         student_col_config = course_info.get("google", {}).get("student-name-column", 1)
@@ -982,6 +1000,8 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
     try:
         # Load course and lab configuration
         course_info = get_course_by_id(course_id)
+        if course_info.get('queue', {}).get('registration_disabled', False):
+            raise HTTPException(status_code=409, detail='Для этого локального курса регистрация и запись оценок отключены')
         org = course_info.get("github", {}).get("organization")
         spreadsheet_id = course_info.get("google", {}).get("spreadsheet")
 
@@ -1137,6 +1157,7 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
             }
 
         if outcome.status == "rejected":
+            _after_grade_queue_sync(course_id, group_id, course_info, target)
             response = {
                 "status": "rejected",
                 "result": outcome.current_grade,
@@ -1153,6 +1174,7 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         logger.info(f"Updating cell at row {target['row']}, column {target['col']} with result '{outcome.cell_value}'")
         target["sheet"].update_cell(target["row"], target["col"], outcome.cell_value)
         logger.info(f"Successfully updated grade for '{username}' in lab {lab_id}")
+        _after_grade_queue_sync(course_id, group_id, course_info, target)
 
         response = {
             "status": "updated",
@@ -1181,6 +1203,481 @@ def grade_lab(request: Request, course_id: str, group_id: str, lab_id: str, grad
         logger.exception(f"Unexpected error during grading: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
+
+
+# Очередь защиты: включается для курса через queue.enabled.
+def _sync_defense_queue(course_id, group_id, course, *, sheet=None, force=False):
+    from grading.defense_queue.runtime import sync_queue
+    from grading.defense_queue.sync import parse_queue_deadline
+    from grading.sheets_client import parse_deadline
+    if course.get('queue', {}).get('enabled'):
+        _ensure_queue_worker()
+    public_course = dict(course)
+    public_course['labs'] = {key: lab for key, lab in course.get('labs', {}).items()
+                             if find_visible_lab_config(course, str(key))}
+    queue_config = dict(course.get('queue', {}))
+    if 'required_labs' in queue_config:
+        queue_config['required_labs'] = [key for key in queue_config['required_labs']
+                                        if str(key) in public_course['labs']]
+    if 'required_labs_by_group' in queue_config:
+        queue_config['required_labs_by_group'] = {group: [key for key in keys if str(key) in public_course['labs']]
+                                                  for group, keys in queue_config['required_labs_by_group'].items()}
+    public_course['queue'] = queue_config
+
+    def fetch_grid():
+        from grading.defense_queue.public_sheet import public_sheet_config, read_public_grid
+        if public_sheet_config(course) is not None:
+            return read_public_grid(course, group_id)
+        target = sheet
+        if target is None:
+            spreadsheet_id = course.get('google', {}).get('spreadsheet')
+            if not spreadsheet_id:
+                raise ValueError('Для курса не задана Google-таблица')
+            target = sheets_client().open_by_key(spreadsheet_id).worksheet(group_id)
+        return target.get_all_values()
+
+    return sync_queue(course_id, group_id, public_course, fetch_grid=fetch_grid,
+                      parse_deadline=lambda value: parse_queue_deadline(value, course, parse_deadline),
+                      force=force)
+
+
+def _after_grade_queue_sync(course_id, group_id, course, target):
+    if not course.get('queue', {}).get('enabled', False):
+        return
+    try:
+        _sync_defense_queue(course_id, group_id, course, sheet=target.get('sheet'), force=True)
+    except Exception:
+        # Ошибка очереди не отменяет уже сохранённый результат проверки.
+        logger.exception('Queue sync pending for %s/%s', course_id, group_id)
+
+
+@app.get('/courses/{course_id}/groups/{group_id}/queue')
+@limiter.limit('600/minute')
+def get_defense_queue(request: Request, course_id: str, group_id: str, session_id: str | None = None, preview_lab: str | None = None):
+    import time
+    from grading.defense_queue.student_view import student_view
+    course = get_course_by_id(course_id)
+    if not course.get('queue', {}).get('enabled', False):
+        raise HTTPException(status_code=404, detail='Очередь для курса не включена')
+    try:
+        store, summary = _sync_defense_queue(course_id, group_id, course)
+        result = student_view(store, course_id, group_id, course,
+                            deadlines_available=summary['deadlines_available'],
+                            now=int(time.time()), session_id=session_id)
+        result['stale'] = summary.get('stale', False)
+        if preview_lab and not result.get('read_only') and result.get('session') and result['mode'] == 'priority':
+            resolved = find_visible_lab_config(course, preview_lab)
+            if resolved:
+                from grading.defense_queue.policy import priority_for
+                from grading.defense_queue.sync import course_timezone
+                from datetime import date, timezone
+                value = summary.get('deadlines', {}).get(resolved[0])
+                if value and value['available']:
+                    rank = None if value['value'] is None else priority_for(
+                        datetime.fromtimestamp(value['value'], timezone.utc), datetime.fromtimestamp(result['session']['starts_at'], timezone.utc),
+                        week_anchor=date.fromisoformat(course.get('queue', {}).get('semester_week_anchor', '1970-01-05')), timezone=course_timezone(course))
+                    position = 1 + sum(row['will_attend'] and (rank is None or row.get('priority') is not None and row['priority'] <= rank) for row in result['entries'])
+                    result['preview'] = {'position': position, 'lab_key': resolved[0], 'priority': rank}
+        return result
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except Exception:
+        logger.exception('Failed to read defense queue')
+        raise HTTPException(status_code=502, detail='Не удалось обновить очередь. Повторите позже')
+
+
+class QueueAttendanceRequest(StudentRegistration):
+    session_id: str = Field(..., min_length=1)
+    will_attend: bool
+
+
+@app.post('/courses/{course_id}/groups/{group_id}/queue/attendance')
+@limiter.limit('60/minute')
+def set_queue_attendance(request: Request, course_id: str, group_id: str, data: QueueAttendanceRequest):
+    import time
+    from grading.defense_queue.storage import QueueClosed
+    course = get_course_by_id(course_id)
+    if not course.get('queue', {}).get('enabled', False):
+        raise HTTPException(status_code=404, detail='Очередь для курса не включена')
+    try:
+        store, summary = _sync_defense_queue(course_id, group_id, course)
+        if summary.get('stale'):
+            raise HTTPException(status_code=503, detail='Допуск не удалось обновить. Повторите позже')
+        from grading.defense_queue.runtime import queue_view
+        queue_view(store, course_id, group_id, course, deadlines_available=summary['deadlines_available'], now=int(time.time()), session_id=data.session_id)
+        from grading.defense_queue.student_view import current_session
+        current = current_session(store,course_id,group_id,now=int(time.time()))
+        if current and (current['session_id'] != data.session_id or current['enrollment_mode'] == 'legacy'):
+            raise HTTPException(status_code=409,detail='Запись на следующее занятие откроется через 10 минут после окончания текущего')
+        full_name = f'{data.surname} {data.name} {data.patronymic}'.strip()
+        with store.connection() as con:
+            candidate = con.execute("""SELECT c.candidate_id,s.full_name FROM queue_candidates c
+                JOIN students s USING(student_id) WHERE c.course_id=? AND c.group_id=?
+                AND c.status='eligible' AND s.github_login=? COLLATE NOCASE""",
+                (course_id, group_id, data.github.strip())).fetchone()
+        if candidate is None or candidate['full_name'] != full_name:
+            raise HTTPException(status_code=403, detail='Допущенная работа с указанными ФИО и GitHub не найдена')
+        store.attendance(data.session_id, candidate['candidate_id'], data.will_attend, now=int(time.time()))
+        return {'status': 'updated', 'session_id': data.session_id, 'will_attend': data.will_attend}
+    except HTTPException:
+        raise
+    except QueueClosed as error:
+        raise HTTPException(status_code=409, detail=str(error))
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except Exception:
+        logger.exception('Failed to update attendance')
+        raise HTTPException(status_code=502, detail='Не удалось сохранить посещение. Повторите позже')
+
+
+class QueueSessionRequest(BaseModel):
+    session_id: str = Field(..., min_length=1, max_length=128)
+    teacher_key: str = Field(..., min_length=1)
+    starts_at: datetime
+    ends_at: datetime
+
+
+@app.post('/admin/courses/{course_id}/groups/{group_id}/queue/sessions')
+def create_queue_session(request: Request, course_id: str, group_id: str,
+                         data: QueueSessionRequest, admin: str = Depends(require_admin)):
+    import time
+    from grading.defense_queue.sync import course_timezone
+    from zoneinfo import ZoneInfo
+    course = get_course_by_id(course_id)
+    if not course.get('queue', {}).get('enabled', False):
+        raise HTTPException(status_code=404, detail='Очередь для курса не включена')
+    if data.starts_at.utcoffset() is None or data.ends_at.utcoffset() is None or data.ends_at <= data.starts_at:
+        raise HTTPException(status_code=422, detail='Нужен корректный интервал с часовым поясом')
+    try:
+        from grading.defense_queue.runtime import queue_store
+        store = queue_store()
+        store.configure_group(course_id, group_id, title=course.get('name', course_id), timezone=course_timezone(course))
+        store.create_session(data.session_id, course_id, group_id, data.teacher_key,
+                             starts_at=int(data.starts_at.timestamp()), ends_at=int(data.ends_at.timestamp()),
+                             local_date=data.starts_at.astimezone(ZoneInfo(course_timezone(course))).date().isoformat(),
+                             now=int(time.time()))
+        return {'status': 'created', 'session_id': data.session_id}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error))
+    except Exception:
+        logger.exception('Failed to create queue session')
+        raise HTTPException(status_code=409, detail='Не удалось создать занятие. Проверьте идентификатор и данные')
+
+
+# Панель преподавателя: все изменения требуют существующей admin_session.
+def _queue_admin_context(course_id, group_id=None, *, force=False):
+    from grading.defense_queue.runtime import queue_store
+    from grading.defense_queue.operations import effective_course
+    course = get_course_by_id(course_id)
+    if not course.get('queue', {}).get('enabled', False):
+        raise HTTPException(status_code=404, detail='Включите queue.enabled в конфигурации курса')
+    store = queue_store()
+    course = effective_course(store, course_id, course)
+    summary = None
+    if group_id is not None:
+        store, summary = _sync_defense_queue(course_id, group_id, course, force=force)
+    return store, course, summary
+
+
+def _queue_error(error):
+    from grading.defense_queue.storage import QueueClosed, QueueConflict
+    import sqlite3
+    if isinstance(error, HTTPException):
+        raise error
+    if isinstance(error, (QueueClosed, QueueConflict, sqlite3.IntegrityError)):
+        raise HTTPException(status_code=409, detail=str(error))
+    if isinstance(error, ValueError):
+        raise HTTPException(status_code=422, detail=str(error))
+    logger.exception('Queue operation failed')
+    raise HTTPException(status_code=502, detail='Операцию не удалось выполнить. Обновите список и повторите')
+
+
+@app.get('/admin/queue/sessions')
+def list_teacher_queue_sessions(request: Request, admin: str = Depends(require_admin)):
+    from grading.defense_queue.runtime import queue_store
+    from grading.defense_queue.timing import service_ends_at
+    import time
+    now = int(time.time())
+    store = queue_store()
+    with store.connection() as con:
+        rows = con.execute('''SELECT s.*,c.title AS course_title, EXISTS(SELECT 1 FROM queue_entries e WHERE e.session_id=s.session_id AND (e.called_at IS NOT NULL OR e.status IN ('defended','failed','no_show'))) AS service_started FROM sessions s JOIN courses c USING(course_id)
+                              ORDER BY starts_at DESC LIMIT 500''').fetchall()
+    from grading.defense_queue.operations import effective_course
+    courses = {}
+    result = []
+    for row in rows:
+        cid = row['course_id']
+        if cid not in courses:
+            try: courses[cid] = effective_course(store,cid,get_course_by_id(cid))
+            except HTTPException: courses[cid] = {}
+        course = courses[cid]
+        schedule = course.get('queue',{}).get('schedule',{}).get(row['group_id'],{})
+        result.append(dict(row, university=schedule.get('university') or course.get('university',''),
+                           can_move=not row['service_started'] and row['enrollment_status'] != 'cancelled',
+                           can_cancel=row['enrollment_status'] != 'cancelled' and now < service_ends_at(row),
+                           can_restore=row['enrollment_status'] == 'cancelled' and now < service_ends_at(row)))
+    return result
+
+
+@app.get('/admin/courses/{course_id}/groups/{group_id}/queue')
+def get_teacher_queue(request: Request, course_id: str, group_id: str, session_id: str,
+                      admin: str = Depends(require_admin)):
+    import time
+    from grading.defense_queue.operations import teacher_view
+    try:
+        store, course, summary = _queue_admin_context(course_id, group_id)
+        result = teacher_view(store, course_id, group_id, course, deadlines_available=summary['deadlines_available'],
+                              now=int(time.time()), session_id=session_id)
+        result['stale'] = summary.get('stale', False)
+        return result
+    except Exception as error:
+        _queue_error(error)
+
+
+class QueueActionRequest(BaseModel):
+    session_id: str
+    action: str
+    entry_id: int | None = None
+    candidate_id: int | None = None
+    outcome: str | None = None
+    request_id: str | None = None
+    student_id: int | None = None
+    command_id: int | None = None
+
+
+@app.post('/admin/courses/{course_id}/groups/{group_id}/queue/actions')
+def teacher_queue_action(request: Request, course_id: str, group_id: str, data: QueueActionRequest,
+                         admin: str = Depends(require_admin)):
+    import time
+    from grading.defense_queue import operations as op
+    try:
+        store, course, summary = _queue_admin_context(course_id, group_id)
+        now = int(time.time())
+        view = op.teacher_view(store, course_id, group_id, course, deadlines_available=summary['deadlines_available'],
+                               now=now, session_id=data.session_id)
+        if data.entry_id is not None and data.entry_id not in {row['entry_id'] for row in view['attempts']}:
+            raise ValueError('Попытка не относится к выбранному занятию')
+        undo_info = None
+        if data.action in ('call','uncall','pass','fail','absent','arrived','add_student','undo'):
+            from grading.defense_queue import rounds
+            if data.action == 'undo':
+                rounds.undo(store,data.session_id,data.command_id,now=time.time(),actor=admin)
+            else:
+                undo_info=rounds.execute(store,data.session_id,data.action,now=time.time(),actor=admin,
+                    request_id=data.request_id,entry_id=data.entry_id,student_id=data.student_id)
+                if data.action == 'pass':
+                    try:
+                        _sync_defense_queue(course_id,group_id,course,force=True)
+                    except Exception:
+                        logger.exception('Admission of the next lab will refresh later')
+        elif data.action in ('close_enrollment', 'open_enrollment'):
+            op.set_enrollment(store, data.session_id, closed=data.action == 'close_enrollment', now=now, actor=admin)
+        elif data.action == 'call_next':
+            op.call_next(store, data.session_id, now=now, actor=admin, request_id=data.request_id)
+        elif data.action in ('result', 'correct_result') and data.entry_id is not None:
+            operation = op.correct_result if data.action == 'correct_result' else op.record_result
+            operation(store, data.entry_id, data.outcome, now=now, actor=admin)
+            if data.outcome == 'defended':
+                # Следующая уже допущенная работа появляется в хвосте текущего приёма.
+                try:
+                    _sync_defense_queue(course_id, group_id, course, force=True)
+                    op.promote_next_labs(store, data.session_id, now=now, actor=admin)
+                except Exception:
+                    logger.exception('Next admitted lab will be picked up on the next sync')
+        elif data.action == 'withdraw' and data.entry_id is not None:
+            op.withdraw(store, data.entry_id, now=now, actor=admin)
+        elif data.action == 'add_tail' and data.candidate_id is not None:
+            op.add_to_tail(store, data.session_id, data.candidate_id, now=now, actor=admin)
+        else:
+            raise ValueError('Неизвестное действие или не передан участник')
+        result=op.teacher_view(store, course_id, group_id, course, deadlines_available=summary['deadlines_available'],
+                               now=now, session_id=data.session_id)
+        if undo_info is not None:
+            from grading.defense_queue.rounds import preferences
+            if undo_info.pop('_new',False):
+                # Start the visible undo window after any source refresh, not before network I/O.
+                expires=time.time()+preferences(store,course_id)['undo_seconds']
+                with store.transaction() as con:
+                    con.execute('UPDATE queue_undo SET expires_at=? WHERE command_id=?',(expires,undo_info['command_id']))
+                undo_info['expires_at']=expires
+            undo_info['remaining_ms']=max(0,int((undo_info['expires_at']-time.time())*1000))
+            result['undo']=undo_info
+        return result
+    except Exception as error:
+        _queue_error(error)
+
+
+@app.get('/admin/courses/{course_id}/queue/settings')
+def get_queue_settings(request: Request, course_id: str, group_id: str | None = None, admin: str = Depends(require_admin)):
+    try:
+        store, course, summary = _queue_admin_context(course_id, group_id)
+        from grading.defense_queue.rounds import preferences
+        from grading.defense_queue.policy import resolve_mode
+        mode = resolve_mode(deadlines_available=summary['deadlines_available'], random_override=course.get('queue', {}).get('random', False), fifo=course.get('queue', {}).get('fifo', False)) if summary else None
+        return {'mode_locked': mode.locked if mode else None, 'mode': mode.name if mode else None,
+                'preferences': preferences(store,course_id),
+                'sheet_deadlines': summary.get('sheet_deadlines', {}) if summary else {},
+                'timezone': summary.get('timezone') if summary else course.get('queue', {}).get('timezone', course.get('timezone', 'Europe/Moscow')),
+                'queue': course.get('queue', {}), 'labs': [{'key': str(key), 'title': value.get('short-name', str(key))}
+                                                        for key, value in course.get('labs', {}).items()]}
+    except Exception as error:
+        _queue_error(error)
+
+
+class QueuePreferencesRequest(BaseModel):
+    auto_repeat: bool
+    undo_seconds: int = Field(ge=1, le=10, strict=True)
+
+
+@app.put('/admin/courses/{course_id}/queue/preferences')
+def set_queue_preferences(request: Request, course_id: str, data: QueuePreferencesRequest,
+                          admin: str = Depends(require_admin)):
+    import time
+    from grading.defense_queue.rounds import save_preferences,preferences
+    from grading.defense_queue.sync import course_timezone
+    try:
+        store,course,_=_queue_admin_context(course_id)
+        with store.transaction() as con:
+            con.execute("INSERT INTO courses(course_id,title,timezone,schedule_source) VALUES (?,?,?,'manual') ON CONFLICT DO NOTHING",
+                        (course_id,course.get('name',course_id),course_timezone(course)))
+        save_preferences(store,course_id,auto_repeat=data.auto_repeat,undo_seconds=data.undo_seconds,now=int(time.time()))
+        return {'status':'updated','preferences':preferences(store,course_id)}
+    except Exception as error:
+        _queue_error(error)
+
+
+class QueueSettingsRequest(BaseModel):
+    random: bool = False
+    fifo: bool = False
+    opens_before_minutes: int = Field(default=15, ge=0, le=1440, strict=True)
+    deadlines: dict[str, str | None] = Field(default_factory=dict)
+
+
+@app.put('/admin/courses/{course_id}/queue/settings')
+def set_queue_settings(request: Request, course_id: str, data: QueueSettingsRequest,
+                       admin: str = Depends(require_admin)):
+    import time
+    from grading.defense_queue.operations import save_settings
+    from grading.sheets_client import parse_deadline
+    try:
+        store, course, _ = _queue_admin_context(course_id)
+        if any(key not in course.get('labs', {}) for key in data.deadlines):
+            raise ValueError('Дедлайн задан для неизвестной работы')
+        from grading.defense_queue.sync import parse_queue_deadline
+        for value in data.deadlines.values():
+            if value is not None and parse_queue_deadline(value, course, parse_deadline) is None:
+                raise ValueError('Дата должна иметь формат ГГГГ-ММ-ДД или ДД.ММ.ГГГГ')
+        # Обеспечить наличие родительского курса без чтения внешней таблицы.
+        from grading.defense_queue.sync import course_timezone
+        with store.transaction() as con:
+            con.execute('''INSERT INTO courses(course_id,title,timezone,schedule_source) VALUES (?,?,?,'manual')
+                           ON CONFLICT(course_id) DO NOTHING''', (course_id, course.get('name', course_id), course_timezone(course)))
+        save_settings(store, course_id, random=data.random, fifo=data.fifo, opens_before_minutes=data.opens_before_minutes, deadlines=data.deadlines, now=int(time.time()))
+        return {'status': 'updated'}
+    except Exception as error:
+        _queue_error(error)
+
+
+class QueueMoveRequest(BaseModel):
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    cancel: bool = False
+    restore: bool = False
+
+
+@app.patch('/admin/courses/{course_id}/groups/{group_id}/queue/sessions/{session_id}')
+def edit_queue_session(request: Request, course_id: str, group_id: str, session_id: str,
+                       data: QueueMoveRequest, admin: str = Depends(require_admin)):
+    import time
+    from grading.defense_queue import operations as op
+    from grading.defense_queue.sync import course_timezone
+    from zoneinfo import ZoneInfo
+    try:
+        store, course, _ = _queue_admin_context(course_id)
+        with store.connection() as con:
+            found = con.execute('SELECT 1 FROM sessions WHERE session_id=? AND course_id=? AND group_id=?', (session_id, course_id, group_id)).fetchone()
+        if not found:
+            raise ValueError('Занятие не найдено')
+        if data.cancel and data.restore or (data.cancel or data.restore) and (data.starts_at is not None or data.ends_at is not None):
+            raise ValueError('Выберите одно действие: отменить, восстановить или перенести')
+        if data.restore:
+            op.restore_session(store, session_id, now=int(time.time()), actor=admin)
+        elif data.cancel:
+            op.cancel_session(store, session_id, now=int(time.time()), actor=admin)
+        else:
+            if data.starts_at is None or data.starts_at.utcoffset() is None:
+                raise ValueError('Задайте начало с часовым поясом')
+            op.move_session(store, session_id, starts_at=int(data.starts_at.timestamp()), ends_at=int(data.starts_at.timestamp()) + 90 * 60,
+                            local_date=data.starts_at.astimezone(ZoneInfo(course_timezone(course))).date().isoformat(),
+                            now=int(time.time()), actor=admin)
+        return {'status': 'updated'}
+    except Exception as error:
+        _queue_error(error)
+
+
+class QueueScheduleRequest(BaseModel):
+    config: dict = Field(default_factory=dict)
+
+
+@app.put('/admin/courses/{course_id}/groups/{group_id}/queue/schedule')
+def set_queue_schedule(request: Request, course_id: str, group_id: str, data: QueueScheduleRequest,
+                       admin: str = Depends(require_admin)):
+    import time
+    from grading.defense_queue.operations import save_schedule
+    from grading.defense_queue.sync import course_timezone
+    try:
+        store, course, _ = _queue_admin_context(course_id)
+        store.configure_group(course_id, group_id, title=course.get('name', course_id), timezone=course_timezone(course))
+        save_schedule(store, course_id, group_id, data.config, now=int(time.time()))
+        return {'status': 'updated'}
+    except Exception as error:
+        _queue_error(error)
+
+
+def _fetch_queue_schedule(url):
+    import requests
+    response = requests.get(url, timeout=20)
+    response.raise_for_status()
+    response.encoding = "utf-8"
+    return response.text
+
+
+@app.post('/admin/courses/{course_id}/groups/{group_id}/queue/schedule/refresh')
+def refresh_queue_schedule(request: Request, course_id: str, group_id: str,
+                           admin: str = Depends(require_admin)):
+    import time
+    from grading.defense_queue.schedule import refresh_schedule
+    try:
+        store, course, _ = _queue_admin_context(course_id)
+        count = refresh_schedule(store, course_id, group_id, course, fetch=_fetch_queue_schedule, now=int(time.time()))
+        return {'status': 'updated', 'sessions': count}
+    except Exception as error:
+        _queue_error(error)
+
+
+_queue_worker = None
+_queue_worker_lock = threading.Lock()
+
+def _ensure_queue_worker():
+    global _queue_worker
+    if os.getenv('QUEUE_WORKER_ENABLED', '1') == '0':
+        return
+    from grading.defense_queue.runtime import queue_store
+    from grading.defense_queue.worker import QueueWorker
+    with _queue_worker_lock:
+        if _queue_worker is None:
+            _queue_worker = QueueWorker(queue_store(), iter_course_configs, _sync_defense_queue, _fetch_queue_schedule)
+            _queue_worker.start()
+
+@app.on_event('startup')
+def start_defense_queue_worker():
+    if any(course.get('queue', {}).get('enabled') for _, course in iter_course_configs()):
+        _ensure_queue_worker()
+
+@app.on_event('shutdown')
+def stop_defense_queue_worker():
+    if _queue_worker:
+        _queue_worker.stop()
 
 
 # ---------------------------------------------------------------------------
@@ -2416,10 +2913,15 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
     The course will be added with status='active', priority=0 by default
     The ID will be generated from filename (e.g., 'os-2025.yaml' -> 'os-2025')
     """
-    if not file.filename.endswith(".yaml") and not file.filename.endswith(".yml"):
+    filename = file.filename or ""
+    if not filename or any(char in filename for char in ("/", "\\", "\x00", ":")):
+        raise HTTPException(status_code=400, detail="Укажите только имя файла без пути")
+    if not filename.endswith(".yaml") and not filename.endswith(".yml"):
         raise HTTPException(status_code=400, detail="Только YAML файлы разрешены")
 
-    file_location = os.path.join(COURSES_DIR, file.filename)
+    file_location = os.path.join(COURSES_DIR, filename)
+    if os.path.dirname(os.path.realpath(file_location)) != os.path.realpath(COURSES_DIR):
+        raise HTTPException(status_code=400, detail="Файл должен находиться в папке курсов")
 
     if os.path.exists(file_location):
         raise HTTPException(status_code=400, detail="Файл с таким именем уже существует")
@@ -2435,8 +2937,11 @@ async def upload_course(request: Request, file: UploadFile = File(...), admin: s
         raise HTTPException(status_code=400, detail="Некорректная структура курса: отсутствует ключ 'course'")
 
     # Save course file
-    with open(file_location, "wb") as f:
-        f.write(content)
+    try:
+        with open(file_location, "xb") as f:
+            f.write(content)
+    except FileExistsError:
+        raise HTTPException(status_code=400, detail="Файл с таким именем уже существует")
 
     # Generate course ID from filename (e.g., 'operating-systems-2025.yaml' -> 'operating-systems-2025')
     course_id = file.filename.replace(".yaml", "").replace(".yml", "")

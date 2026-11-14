@@ -1,0 +1,47 @@
+{
+  "0": {
+    "range": [
+      0,
+      0
+    ],
+    "count": 20352,
+    "percent": 6.784,
+    "color": "gray"
+  },
+  "2": {
+    "range": [
+      1,
+      24
+    ],
+    "count": 81501,
+    "percent": 27.167,
+    "color": "red"
+  },
+  "3": {
+    "range": [
+      25,
+      32
+    ],
+    "count": 21293,
+    "percent": 7.097666666666667,
+    "color": "orange"
+  },
+  "4": {
+    "range": [
+      33,
+      44
+    ],
+    "count": 44169,
+    "percent": 14.723,
+    "color": "lightblue"
+  },
+  "5": {
+    "range": [
+      45,
+      50
+    ],
+    "count": 132685,
+    "percent": 44.22833333333333,
+    "color": "green"
+  }
+}

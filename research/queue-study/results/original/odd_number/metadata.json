@@ -1,0 +1,46 @@
+{
+  "model": "odd_number",
+  "description": "Сначала нечётные номера студентов (нумерация с 1); внутри класса случайно",
+  "params": {
+    "N_STUDENTS": 30,
+    "N_LABS": 10,
+    "N_WEEKS": 30,
+    "CAPACITY": 20,
+    "MAX_POINTS_PER_LAB": 5,
+    "DEADLINES": [
+      2,
+      5,
+      8,
+      11,
+      14,
+      17,
+      20,
+      23,
+      26,
+      29
+    ],
+    "GRADE_BINS": {
+      "2": [
+        0,
+        24
+      ],
+      "3": [
+        25,
+        32
+      ],
+      "4": [
+        33,
+        44
+      ],
+      "5": [
+        45,
+        50
+      ]
+    },
+    "pass_chance_dist": "normal",
+    "exam_bonus": 5,
+    "n_runs": 10000,
+    "base_seed": 42
+  },
+  "class": "models.arbitrary_models.OddNumberQueueModel"
+}

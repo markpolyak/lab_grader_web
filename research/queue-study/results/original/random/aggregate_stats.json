@@ -1,0 +1,25 @@
+{
+  "model": "random",
+  "description": "Каждую неделю все активные студенты перемешиваются случайно",
+  "averaged_over_runs": {
+    "mean_of_means": 32.832323333333335,
+    "mean_of_medians": 39.8554,
+    "mean_of_stds": 17.932062079123813
+  },
+  "pooled_over_runs": {
+    "mean": 32.832323333333335,
+    "median": 41.0,
+    "std": 18.32908384332004
+  },
+  "automat_pass_rate": {
+    "description": "доля студентов с итоговым баллом >= 25 (оценки 3/4/5)",
+    "threshold_score": 25,
+    "count": 201038,
+    "percent": 67.01266666666666,
+    "fail_count": 98962,
+    "fail_percent": 32.98733333333334
+  },
+  "n_runs": 10000,
+  "n_per_run": 30,
+  "n_total": 300000
+}
