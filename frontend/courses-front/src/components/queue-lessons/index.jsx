@@ -1,3 +1,4 @@
+import { translateLessonKind } from "../../lessonKind";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
@@ -122,7 +123,7 @@ export function QueueLessons({ courseId, onBack }) {
                       <Subject>{schedule.course_name}</Subject>
                       <RegistrationStatus closed={lesson.queue.closed} cancelled={lesson.cancelled} />
                       {lesson.original_starts_at && <Detail>{t("adminQueues.movedFrom", { date: dateFormatter.format(new Date(lesson.original_starts_at)) })}</Detail>}
-                      <Detail>{lesson.kind}</Detail>
+                      <Detail>{translateLessonKind(lesson.kind, t)}</Detail>
                       <Detail>{t("queueLessons.groups")}: {lesson.groups.join(", ") || "—"}</Detail>
                       {lesson.room && <Detail>{t("queueLessons.room")}: {lesson.room}</Detail>}
                     </LessonDetails>

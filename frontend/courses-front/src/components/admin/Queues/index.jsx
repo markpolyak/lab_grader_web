@@ -1,3 +1,4 @@
+import { translateLessonKind } from "../../../lessonKind";
 import { useEffect, useState } from "react";
 import { useQueueEvents } from "../../../hooks/useQueueEvents";
 import { useNavigate, useParams, useLocation } from "react-router-dom";
@@ -129,7 +130,7 @@ function QueueView({ courseId, queueId }) {
   function lessonCard(queue) {
     return <Panel key={queue.queue_id}>
       <Heading>{format(queue.lesson.starts_at)}</Heading>
-      <Muted>{queue.lesson.kind} · {t("queueLessons.groups")}: {queue.lesson.groups.join(", ")}</Muted>
+      <Muted>{translateLessonKind(queue.lesson.kind, t)} · {t("queueLessons.groups")}: {queue.lesson.groups.join(", ")}</Muted>
       {badges(queue.lesson, queue.closed)}
       <Muted>{t("adminQueues.entries", { count: queue.entries_count })}</Muted>
       <Actions><PrimaryButton onClick={() => navigate(`/admin/courses/${courseId}/queues/${queue.queue_id}`)}>{t("adminQueues.manage")}</PrimaryButton></Actions>
@@ -161,7 +162,7 @@ function QueueView({ courseId, queueId }) {
       {data && queueId && <>
         <Panel>
           <Heading>{format(data.lesson.starts_at)} — {format(data.lesson.ends_at)}</Heading>
-          <Muted>{data.lesson.kind} · {t("queueLessons.groups")}: {data.lesson.groups.join(", ")}</Muted>
+          <Muted>{translateLessonKind(data.lesson.kind, t)} · {t("queueLessons.groups")}: {data.lesson.groups.join(", ")}</Muted>
           {data.lesson.room && <Muted>{t("queueLessons.room")}: {data.lesson.room}</Muted>}
           {badges(data.lesson, data.closed)}
           <Actions>

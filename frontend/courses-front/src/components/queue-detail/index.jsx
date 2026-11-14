@@ -1,3 +1,4 @@
+import { translateLessonKind } from "../../lessonKind";
 import { useEffect, useState } from "react";
 import { useQueueEvents } from "../../hooks/useQueueEvents";
 import { useNavigate } from "react-router-dom";
@@ -75,7 +76,7 @@ export function QueueDetail({ courseId, lessonId, onBack }) {
           <>
             <Description>{snapshot.course_name}</Description>
             <Description>{dateTime.format(new Date(snapshot.lesson.starts_at))} · {t("queueDetail.moscowTime")}</Description>
-            <Description>{snapshot.lesson.kind} · {t("queueLessons.groups")}: {snapshot.lesson.groups.join(", ")}{snapshot.lesson.room ? ` · ${snapshot.lesson.room}` : ""}</Description>
+            <Description>{translateLessonKind(snapshot.lesson.kind, t)} · {t("queueLessons.groups")}: {snapshot.lesson.groups.join(", ")}{snapshot.lesson.room ? ` · ${snapshot.lesson.room}` : ""}</Description>
             <RegistrationStatus closed={snapshot.closed} cancelled={snapshot.lesson.cancelled} />
             {snapshot.lesson.original_starts_at && <Description>{t("adminQueues.movedFrom", { date: dateTime.format(new Date(snapshot.lesson.original_starts_at)) })}</Description>}
             <Panel aria-live="polite">

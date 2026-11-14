@@ -1,4 +1,5 @@
 {
+  "lessonKinds": {"laboratory": "Lab session", "practical": "Practical session"},
   "adminQueues": {
     "historyNotConfigured": "Queue history storage is not configured. The session has not been completed; the queue remains available.",
     "navigation": "Teacher navigation",
