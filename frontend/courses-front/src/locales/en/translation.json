@@ -362,6 +362,7 @@
     }
   },
   "queueTable": {
+    "joinedAt": "Joined at (MSK)",
     "position": "Position",
     "lab": "Lab",
     "actions": "Actions",

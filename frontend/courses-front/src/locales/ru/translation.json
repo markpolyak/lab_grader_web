@@ -362,6 +362,7 @@
     }
   },
   "queueTable": {
+    "joinedAt": "Время записи (МСК)",
     "position": "Место",
     "lab": "ЛР",
     "actions": "Действия",

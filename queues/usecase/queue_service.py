@@ -1,3 +1,4 @@
+import logging
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from threading import RLock
@@ -37,6 +38,8 @@ from ..repositories.mappers import (
     sync_record_with_lesson,
 )
 from ..repositories.storage.inmemory import InMemoryQueueRepository
+
+logger = logging.getLogger(__name__)
 
 ACTIVE_STATUSES = frozenset({EntryStatus.WAITING, EntryStatus.CALLED})
 TERMINAL_STATUSES = frozenset(
@@ -202,17 +205,24 @@ class QueueService:
         if type(week_start) is not date or week_start.weekday() != 0:
             raise ValueError("week_start должен быть датой понедельника")
         week_end = week_start + timedelta(days=7)
-        schedules = {
-            course_id: Schedule(
+        schedules = {}
+        for course_id, course in courses.items():
+            if course.get("_meta", {}).get("status", "active") != "active":
+                continue
+            university = course.get("university")
+            if university is None:
+                continue
+            if not isinstance(university, str):
+                logger.warning("Курс %s: поле university должно быть строкой; очередь пропущена", course_id)
+                continue
+            if university.strip().casefold() not in ("гуап", "suai"):
+                continue
+            schedules[course_id] = Schedule(
                 id=uuid5(NAMESPACE_URL, repr((course_id, week_start.isoformat()))),
                 course_id=course_id,
                 course_name=course["name"],
                 week_start=week_start,
             )
-            for course_id, course in courses.items()
-            if course.get("university", "").strip().casefold() in ("гуап", "suai")
-            and course.get("_meta", {}).get("status", "active") == "active"
-        }
 
         # Validate the entire input before changing existing schedules or queues.
         candidates = {course_id: {} for course_id in schedules}

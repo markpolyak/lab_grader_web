@@ -64,9 +64,12 @@ def test_invalid_move_does_not_change_existing_state(tmp_path):
     assert service.get_record(lesson.id).version == 0
 
 
-def test_defense_statuses_and_order_survive_restart(tmp_path):
+def test_defense_statuses_and_order_survive_restart(tmp_path, monkeypatch):
     service = build(tmp_path)
     lesson = service.schedules["os-2026"].lessons[0]
+    # Reconciliation must run during this lesson, including after restoration.
+    now = lesson.starts_at + timedelta(minutes=5)
+    monkeypatch.setattr("queues.usecase.queue_service._now", lambda: now)
     service.set_registration(lesson.id, closed=False)
     entries = [lesson.queue.add_entry(Student(f"Студент{i}", "Тестовый", "", f"demo-{i}"), "1") for i in range(3)]
     service.save_lesson(lesson.id)
@@ -80,9 +83,11 @@ def test_defense_statuses_and_order_survive_restart(tmp_path):
     assert record.entry_metadata[entries[0].id].result is None
 
 
-def test_absence_survives_restart_without_removing_student(tmp_path):
+def test_absence_survives_restart_without_removing_student(tmp_path, monkeypatch):
     service = build(tmp_path)
     lesson = service.schedules["os-2026"].lessons[0]
+    now = lesson.starts_at + timedelta(minutes=5)
+    monkeypatch.setattr("queues.usecase.queue_service._now", lambda: now)
     service.set_registration(lesson.id, closed=False)
     entry = lesson.queue.add_entry(Student("Иван", "Иванов", "", "absent-demo"), "1")
     service.call_next(lesson.id)

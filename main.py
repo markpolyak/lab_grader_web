@@ -196,11 +196,14 @@ async def lifespan(app: FastAPI):
     history = GoogleRepo(
         sheets_client, history_sheet,
     ) if history_sheet else None
-    history_by_course = {
-        course_id: GoogleRepo(sheets_client, spreadsheet_id)
-        for course_id, course in iter_course_configs()
-        if (spreadsheet_id := course.get("google", {}).get("queue-history-spreadsheet"))
-    }
+    history_by_course = {}
+    for course_id, course in iter_course_configs():
+        google = course.get("google", {})
+        if not isinstance(google, dict):
+            logger.warning("Курс %s: секция google должна быть словарём; настройки истории пропущены", course_id)
+            continue
+        if spreadsheet_id := google.get("queue-history-spreadsheet"):
+            history_by_course[course_id] = GoogleRepo(sheets_client, spreadsheet_id)
     queue_service = QueueService(FileQueueRepository())
     async def notify_archived(lesson_id):
         await websocketService.send_event(lesson_id, {

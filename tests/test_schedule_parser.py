@@ -5,7 +5,6 @@ from threading import Event
 
 import pytest
 import yaml
-from freezegun import freeze_time
 
 from queues.parser.parser import ScheduleConfig, ScheduleParser
 from queues.parser.vendor.suai_rasp.model import Lesson, Ref
@@ -142,9 +141,13 @@ def test_config_and_real_scheduler(tmp_path):
     assert parser.path_for(configs[0]).exists()
 
 
-@freeze_time("2026-11-07 12:00:00")
 def test_automatic_semester(tmp_path, monkeypatch):
     from queues.parser.vendor.suai_rasp import fetch, parse
+    # Patch the clock where it is read: freezegun ignores the `queues` package
+    # because its default ignore list includes the `queue` prefix.
+    clock = Mock(wraps=datetime)
+    clock.now.side_effect = lambda tz: datetime(2026, 11, 7, 12, tzinfo=timezone.utc).astimezone(tz)
+    monkeypatch.setattr("queues.parser.parser.datetime", clock)
     client = Mock()
     monkeypatch.setattr(fetch, "Fetcher", Mock(return_value=client))
     monkeypatch.setattr(parse, "parse_meta", lambda _: {

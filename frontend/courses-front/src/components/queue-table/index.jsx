@@ -2,6 +2,16 @@ import { useTranslation } from "react-i18next";
 import { PrimaryButton } from "../queue-detail/styled";
 import { ScrollArea, Table, Row, Name, EntryStatus, RowActions, AbsentButton } from "./styled";
 
+const signupTime = new Intl.DateTimeFormat("ru-RU", {
+  timeZone: "Europe/Moscow", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+});
+
+function formatSignupTime(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "—" : signupTime.format(date);
+}
+
 export function QueueTable({ entries, ownEntryId, onFinish, onAbsent, pending = false }) {
   const { t } = useTranslation();
   const nextWaitingId = entries.find((entry) => entry.status === "waiting")?.id;
@@ -12,10 +22,11 @@ export function QueueTable({ entries, ownEntryId, onFinish, onAbsent, pending = 
         <th scope="col">{t("queueDetail.fullName")}</th>
         <th scope="col">GitHub</th>
         <th scope="col">{t("queueTable.lab")}</th>
+        <th scope="col">{t("queueTable.joinedAt")}</th>
         {onFinish && <th scope="col">{t("queueTable.actions")}</th>}
       </tr></thead>
       <tbody>
-        {entries.length === 0 && <tr><td colSpan={onFinish ? 5 : 4}>{t("queueTable.empty")}</td></tr>}
+        {entries.length === 0 && <tr><td colSpan={onFinish ? 6 : 5}>{t("queueTable.empty")}</td></tr>}
         {entries.map((entry) => <Row key={entry.id} $status={entry.status} $absent={entry.absent} $own={entry.id === ownEntryId}>
           <td>{entry.position}</td>
           <td>
@@ -24,6 +35,7 @@ export function QueueTable({ entries, ownEntryId, onFinish, onAbsent, pending = 
           </td>
           <td>{entry.github}</td>
           <td>{entry.lab_name || entry.lab_id}</td>
+          <td>{formatSignupTime(entry.joined_at)}</td>
           {onFinish && <td>{(entry.status === "called" || entry.id === nextWaitingId) && <RowActions>
             {entry.status === "called" && <PrimaryButton disabled={pending}
             aria-label={`${t("queueTable.finish")} — ${entry.full_name}`}

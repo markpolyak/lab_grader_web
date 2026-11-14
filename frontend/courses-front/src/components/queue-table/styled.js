@@ -24,7 +24,8 @@ export const Table = styled.table`
   td:nth-child(2) { min-width: 130px; }
   td:nth-child(3) { min-width: 100px; }
   td:nth-child(4) { min-width: 42px; }
-  th:nth-child(5), td:nth-child(5) { min-width: 180px; }
+  td:nth-child(5) { white-space: nowrap; }
+  th:nth-child(6), td:nth-child(6) { min-width: 180px; }
   button { white-space: nowrap; }
 `;
 export const Row = styled.tr`

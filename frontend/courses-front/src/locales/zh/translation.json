@@ -365,6 +365,7 @@
     }
   },
   "queueTable": {
+    "joinedAt": "报名时间（莫斯科时间）",
     "position": "序号",
     "lab": "实验",
     "actions": "操作",
