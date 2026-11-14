@@ -144,3 +144,13 @@ def test_schedule_identity_and_old_week_archive():
         assert service._schedules[new.id].lessons
 
     asyncio.run(check())
+
+
+def test_history_configuration_uses_course_override_then_default():
+    service = QueueService()
+    default, override = AsyncMock(), AsyncMock()
+    assert not QueueHistoryService(service).is_configured("os")
+    configured = QueueHistoryService(service, history_by_course={"os": override})
+    assert configured.is_configured("os")
+    assert not configured.is_configured("other")
+    assert QueueHistoryService(service, default).is_configured("other")
