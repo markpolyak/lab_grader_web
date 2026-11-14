@@ -516,7 +516,13 @@ class QueueService:
             lesson = self._lessons.get(lesson_id)
             if record is None or lesson is None:
                 raise KeyError(f"Занятие {lesson_id} не найдено")
-            schedule = self.schedules.get(record.course_id)
+            # Hidden courses and old weeks have no published schedule, but
+            # their retained queues still need durable lifecycle updates.
+            schedule = next((
+                context for context in self._schedules.values()
+                if context.course_id == record.course_id
+                and any(item.id == lesson_id for item in context.lessons)
+            ), None)
             if schedule is None:
                 raise KeyError(f"Расписание курса {record.course_id} не найдено")
 
