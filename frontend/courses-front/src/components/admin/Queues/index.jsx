@@ -107,7 +107,7 @@ function QueueView({ courseId, queueId }) {
       navigate(`/admin/courses/${courseId}/queues`, { replace: true, state: { archived: true } });
     } catch (cause) {
       if (cause.status === 401) navigate("/admin", { replace: true });
-      else setError(t(cause.code === "ARCHIVE_PENDING" ? "adminQueues.archivePending" : "adminQueues.saveFailed"));
+      else setError(t(cause.code === "HISTORY_NOT_CONFIGURED" ? "adminQueues.historyNotConfigured" : cause.code === "ARCHIVE_PENDING" ? "adminQueues.archivePending" : "adminQueues.saveFailed"));
       try { setData(await fetchAdminQueue(courseId, queueId)); } catch { /* Keep the last snapshot. */ }
     } finally {
       setPending(false);

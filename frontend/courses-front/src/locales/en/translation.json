@@ -1,5 +1,6 @@
 {
   "adminQueues": {
+    "historyNotConfigured": "Queue history storage is not configured. The session has not been completed; the queue remains available.",
     "navigation": "Teacher navigation",
     "home": "Home",
     "courses": "Courses",

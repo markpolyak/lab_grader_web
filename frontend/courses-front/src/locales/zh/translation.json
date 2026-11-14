@@ -1,5 +1,6 @@
 {
   "adminQueues": {
+    "historyNotConfigured": "尚未配置队列历史记录存储。课次未结束，队列仍可正常使用。",
     "navigation": "教师导航",
     "home": "首页",
     "courses": "课程",

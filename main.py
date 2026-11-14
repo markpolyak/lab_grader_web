@@ -1018,6 +1018,8 @@ async def admin_complete_queue(request: Request, course_id: str, queue_id: uuid.
     service, _ = _get_current_schedule(request, course_id)
     if service.get_lesson(course_id, queue_id) is None:
         raise HTTPException(status_code=404, detail="Очередь не найдена")
+    if not request.app.state.queue_history_service.is_configured(course_id):
+        raise HTTPException(status_code=503, detail="HISTORY_NOT_CONFIGURED")
     try:
         schedule_id = await asyncio.to_thread(service.request_archive, queue_id)
     except RuntimeError:

@@ -27,6 +27,9 @@ class QueueHistoryService:
         self._history_retries: set[UUID] = set()
         self._lock = RLock()
 
+    def is_configured(self, course_id: str) -> bool:
+        return self._history_by_course.get(course_id, self._history) is not None
+
     async def save_history(self, schedule_id: UUID, lesson_id: UUID) -> None:
         with self._lock:
             if lesson_id in self._saving:
