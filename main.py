@@ -1287,7 +1287,7 @@ def get_lesson_queue(request: Request, course_id: str, lesson_id: uuid.UUID):
     """Участники занятия без GitHub-логинов, результатов и завершённых записей."""
     course_info = get_course_by_id(course_id)
     service, schedule = _get_current_schedule(request, course_id)
-    lesson = next((item for item in schedule.lessons if item.id == lesson_id), None)
+    lesson = service.get_lesson(course_id, lesson_id)
     if lesson is None:
         raise HTTPException(status_code=404, detail="LESSON_NOT_FOUND")
     labs = []
