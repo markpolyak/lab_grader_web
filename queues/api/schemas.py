@@ -135,15 +135,6 @@ class QueueJoinRequest(BaseModel):
         return self.full_name
 
 
-class QueueLeaveRequest(BaseModel):
-    github: str = Field(..., min_length=1)
-    entry_id: uuid.UUID
-
-
-class QueueLeaveResponse(BaseModel):
-    left: bool
-
-
 class QueueFinishRequest(BaseModel):
     outcome: DefenseResult | None = None
 

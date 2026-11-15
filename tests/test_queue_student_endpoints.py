@@ -180,7 +180,7 @@ def test_state_without_active_entry(endpoint):
     }
 
 
-def test_join_leave_and_state_flow(endpoint):
+def test_join_and_state_flow(endpoint):
     client, service = endpoint
     lesson = open_first_lesson(service)
 
@@ -196,22 +196,6 @@ def test_join_leave_and_state_flow(endpoint):
 
     state = client.get("/courses/os-2026/queue?github=student&group_id=4431")
     assert state.json()["entry"]["id"] == entry["id"]
-
-    left = client.post(
-        "/courses/os-2026/queue/leave",
-        json={"github": "student", "entry_id": entry["id"]},
-    )
-    assert left.status_code == 200
-    assert left.json() == {"left": True}
-    assert client.get(
-        "/courses/os-2026/queue?github=student&group_id=4431"
-    ).json()["entry"] is None
-
-    again = client.post(
-        "/courses/os-2026/queue/join",
-        json={"github": "student", "lesson_id": str(lesson.id), "lab_id": "1"},
-    )
-    assert again.status_code == 201
 
     service.call_next(lesson.id)
     called = client.get("/courses/os-2026/queue?github=student&group_id=4431")
@@ -311,27 +295,29 @@ def test_state_reports_missing_student_and_unavailable_sheets(endpoint, monkeypa
     ).status_code == 503
 
 
-def test_leave_rejects_foreign_and_unknown_entry(endpoint):
+def test_removed_public_leave_cannot_withdraw_students_ahead(endpoint):
     client, service = endpoint
     lesson = open_first_lesson(service)
-    entry = client.post(
-        "/courses/os-2026/queue/join",
-        json={"github": "student", "lesson_id": str(lesson.id), "lab_id": "1"},
-    ).json()["entry"]
+    for github in ("first", "second", "third"):
+        service.join(lesson.id, EligibleStudentLab(
+            student=Student("Иван", "Студент", "", github),
+            full_name="Студент Иван", group_id="4431", lab_id="1", lab_name="ЛР1",
+        ))
 
-    foreign = client.post(
-        "/courses/os-2026/queue/leave",
-        json={"github": "other", "entry_id": entry["id"]},
-    )
-    assert foreign.status_code == 403
-    assert foreign.json()["detail"] == "FORBIDDEN"
+    assert not client.cookies
+    path = f"/courses/os-2026/lessons/{lesson.id}/queue"
+    before = client.get(path).json()
+    for entry in before["waiting"][:2]:
+        response = client.post(
+            "/courses/os-2026/queue/leave",
+            json={"github": entry["github"], "entry_id": entry["id"]},
+        )
+        assert response.status_code == 404
 
-    unknown = client.post(
-        "/courses/os-2026/queue/leave",
-        json={"github": "student", "entry_id": str(uuid4())},
-    )
-    assert unknown.status_code == 404
-    assert unknown.json()["detail"] == "ENTRY_NOT_FOUND"
+    after = client.get(path).json()
+    assert after["waiting"] == before["waiting"]
+    assert after["version"] == before["version"]
+    assert "/courses/{course_id}/queue/leave" not in client.get("/openapi.json").json()["paths"]
 
 
 def test_reading_student_state_expires_unfinished_entry(endpoint, monkeypatch):

@@ -115,8 +115,6 @@ from queues.api.schemas import (
     QueueFinishRequest,
     QueueHistoryResponse,
     QueueJoinRequest,
-    QueueLeaveRequest,
-    QueueLeaveResponse,
     QueueRegistrationRequest,
     QueueRegistrationResponse,
     QueueUpdateRequest,
@@ -126,7 +124,6 @@ from queues.api.schemas import (
 from queues.domain.err import (
     AlreadyQueuedError,
     EntryNotFoundError,
-    EntryNotOwnedError,
     GroupNotAllowedError,
     InvalidStateError,
     QueueClosedError,
@@ -1407,27 +1404,6 @@ async def join_queue(request: Request, course_id: str, body: QueueJoinRequest):
             entry, metadata, lesson_id=lesson.id, position=position
         ),
     )
-
-
-@app.post("/courses/{course_id}/queue/leave", response_model=QueueLeaveResponse)
-@limiter.limit("30/minute")
-async def leave_queue(request: Request, course_id: str, body: QueueLeaveRequest):
-    """Выйти из своей ожидающей записи."""
-    service, _ = _get_current_schedule(request, course_id)
-    active = service.active_entry(course_id, body.github)
-    try:
-        await asyncio.to_thread(service.leave, course_id, body.entry_id, body.github)
-    except EntryNotFoundError:
-        raise HTTPException(status_code=404, detail="ENTRY_NOT_FOUND")
-    except EntryNotOwnedError:
-        raise HTTPException(status_code=403, detail="FORBIDDEN")
-    except InvalidStateError:
-        raise HTTPException(status_code=409, detail="INVALID_STATE")
-    if active is not None:
-        await websocketService.send_event(active[0].id, {
-            "type": "queue.updated", "queue_id": str(active[0].id),
-        })
-    return {"left": True}
 
 
 @app.get(

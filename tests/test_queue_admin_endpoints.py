@@ -798,6 +798,42 @@ def test_update_result_and_remove_entry(endpoint):
     ).status_code == 409
 
 
+@pytest.mark.parametrize("status", [EntryStatus.WAITING, EntryStatus.CALLED])
+def test_admin_can_remove_active_entry_but_anonymous_cannot(endpoint, status):
+    client, service = endpoint
+    lesson = service.schedules["os-2026"].lessons[0]
+    service.get_record(lesson.id).registration_mode = RegistrationMode.MANUALLY_OPENED
+    lesson.queue.closed = False
+    entry = lesson.queue.add_entry(Student("Иван", "Иванов", "", "student"), "1", "ЛР1")
+    service.save_lesson(lesson.id)
+    if status == EntryStatus.CALLED:
+        service.call_next(lesson.id)
+    record = service.get_record(lesson.id)
+    version = record.version
+    path = f"/admin/courses/os-2026/queues/{lesson.id}"
+
+    assert client.delete(path + f"/entries/{entry.id}").status_code == 401
+    assert record.entry_metadata[entry.id].status == status
+    assert record.version == version
+
+    authenticate(client)
+    response = client.delete(path + f"/entries/{entry.id}")
+    assert response.status_code == 200
+    assert response.json() == {"removed": True}
+    assert service.active_entry("os-2026", "student") is None
+    saved = service.repository.get(lesson.id)
+    assert saved.entry_metadata[entry.id].status == EntryStatus.WITHDRAWN
+    assert saved.entry_metadata[entry.id].finished_at is not None
+    assert saved.version == version + 1
+
+    detail = client.get(path).json()
+    assert detail["waiting"] == detail["called"] == []
+    assert detail["finished"][0]["id"] == str(entry.id)
+    history = client.get("/admin/courses/os-2026/queue-history").json()
+    assert history["entries"][0]["github"] == "student"
+    assert history["entries"][0]["status"] == "withdrawn"
+
+
 def test_complete_lesson_exports_and_removes_queue(endpoint, monkeypatch):
     from unittest.mock import AsyncMock
     from queues.usecase.queue_history_service import QueueHistoryService
