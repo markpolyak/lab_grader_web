@@ -140,7 +140,7 @@ Admin требует штатную admin cookie. Изменение прав д
 | `GET /courses/{course_id}/lessons/{lesson_id}/queue` | Снимок очереди |
 | `GET /courses/{course_id}/queue?github=...&group_id=...` | Активная запись и место |
 | `POST /courses/{course_id}/queue/join` | Записаться после проверки допуска |
-| `POST /courses/{course_id}/queue/leave` | Выйти из ожидающей записи |
+| `DELETE /admin/courses/{course_id}/queues/{queue_id}/entries/{entry_id}` | Снять студента с сохранением истории (только преподаватель) |
 | `GET /admin/courses/{course_id}/queues` | Очереди, включая сохранённые активные |
 | `PUT /admin/courses/{course_id}/queues/{queue_id}/registration` | Ручная регистрация |
 | `POST /admin/courses/{course_id}/queues/{queue_id}/call-next` | Вызвать следующего |

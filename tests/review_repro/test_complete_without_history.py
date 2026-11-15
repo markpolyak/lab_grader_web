@@ -80,9 +80,15 @@ def test_complete_without_history_sheet_does_not_freeze_queue(app):
             "lesson_ends_at": "2026-11-09T18:30:00+03:00",
         })
         assert extra.status_code == 201, extra.text
-        client.cookies.clear()
-        leave = client.post(f"/courses/{COURSE}/queue/leave",
-                            json={"github": "petrov", "entry_id": ids["petrov"]})
+        # Public leave was intentionally removed; the teacher withdraws the
+        # waiting student through the authenticated API, retaining history.
+        removed = client.delete(base + f"/entries/{ids['petrov']}")
+        assert removed.status_code == 200, removed.text
+        assert removed.json() == {"removed": True}
+        from uuid import UUID
+        from queues.domain.status import EntryStatus
+        saved = service.repository.get(lesson.id)
+        assert saved.entry_metadata[UUID(ids["petrov"])].status == EntryStatus.WITHDRAWN
         join_extra = _join(client, "petrov", extra.json()["queue_id"])
         jobs = [c.kwargs.get("id")
                 for c in main.ScheduleParser.return_value.scheduler.add_job.call_args_list]
@@ -99,7 +105,7 @@ def test_complete_without_history_sheet_does_not_freeze_queue(app):
         "complete": (complete.status_code, body(complete)),
         "archive_pending": detail.status_code == 200 and detail.json().get("archive_pending"),
         "call-next": (call_next.status_code, body(call_next)),
-        "leave (petrov)": (leave.status_code, body(leave)),
+        "admin remove (petrov)": (removed.status_code, body(removed)),
         "join extra lesson (petrov)": (join_extra.status_code, body(join_extra)),
         "scheduled jobs": jobs,
         "archive_pending after restart":
@@ -115,6 +121,6 @@ def test_complete_without_history_sheet_does_not_freeze_queue(app):
         assert detail.json()["archive_pending"] is False, \
             "отказ завершить занятие оставил очередь в archive_pending"
         assert call_next.status_code == 200, "преподаватель не может вызвать ожидающего"
-        assert leave.status_code == 200, "студент не может выйти из очереди"
+        assert removed.status_code == 200, "преподаватель не может снять ожидающего"
         assert detail_restart.json()["archive_pending"] is False, "после рестарта очередь заморожена"
     assert join_extra.status_code == 201, "студент не может записаться на доп. занятие того же дня"
