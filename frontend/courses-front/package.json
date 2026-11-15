@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "test": "node --test src/**/*.test.js",
+    "test": "node --test",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -24,7 +24,8 @@
     "rollup": "^4.34.7",
     "react-i18next": "^13.0.1",
     "i18next": "^23.0.1",
-    "styled-components": "^6.1.16"
+    "styled-components": "^6.1.16",
+    "dayjs": "^1.11.13"
   },
   "devDependencies": {
     "@eslint/js": "^9.19.0",

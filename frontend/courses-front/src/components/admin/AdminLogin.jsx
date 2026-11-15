@@ -26,7 +26,7 @@ export const AdminLogin = () => {
         } else {
             setError("Incorrect login or password");
         }
-  } catch (err) {
+  } catch {
         setError("Ошибка при подключении к серверу");
     }
 };

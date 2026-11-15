@@ -1,5 +1,11 @@
 # Deployment Scripts
 
+## seed-queue.py
+
+Локальное заполнение очереди тестовыми студентами без Google Sheets:
+см. [инструкцию по Docker и админке](../docs/SCHEDULE.md#тестовые-студенты-без-google-sheets).
+Перед запуском остановите backend, после — запустите его снова.
+
 This directory contains scripts for managing production deployments.
 
 ## switch-branch.sh

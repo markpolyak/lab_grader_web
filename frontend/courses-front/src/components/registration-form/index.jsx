@@ -2,8 +2,6 @@ import { useState } from "react";
 import { registerAndCheck, gradeLab } from "../../api";
 import { CardTitle, colors, MainContainer } from "../../../theme";
 import { Input, InputContainer, RegistrationButton } from "./styled";
-import Snackbar from "@mui/material/Snackbar";
-import Alert from "@mui/material/Alert";
 import { ButtonBack } from "../course-list/styled";
 import { Breadcrumb } from "../breadcrumb";
 

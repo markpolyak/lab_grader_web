@@ -1,0 +1,10 @@
+# Configure teachers here using the exact name or a unique fragment from the source.
+# semester: auto uses source metadata; teaching-weeks estimates the end date.
+# See docs/SCHEDULE.md. An empty list disables background requests.
+schedules:
+  - university: suai
+    teacher: "Поляк Марк Дмитриевич"
+    semester: auto
+    refresh-interval-days: 7
+    teaching-weeks: 18
+    timezone: Europe/Moscow

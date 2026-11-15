@@ -11,7 +11,7 @@ export function LabListWrapper() {
       onSelectLab={(labId) =>
         navigate(`/course/${courseId}/group/${groupId}/lab/${labId}`)
       }
-      onBack={() => navigate(`/course/${courseId}`)}
+      onBack={() => navigate(`/course/${courseId}/groups`)}
     />
   );
 }

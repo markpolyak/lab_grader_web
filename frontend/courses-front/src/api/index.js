@@ -1,6 +1,31 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
 const JOIN_REQUEST_TIMEOUT_MS = 10000;
 
+async function requestQueue(path, options = {}) {
+  const response = await fetch(`${API_BASE_URL}${path}`, options);
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    const error = new Error("Queue request failed");
+    error.status = response.status;
+    error.code = typeof data?.detail === "string" ? data.detail : "unknown";
+    throw error;
+  }
+  return data;
+}
+
+export const fetchLessonQueue = (courseId, lessonId, { signal } = {}) =>
+  requestQueue(`/courses/${encodeURIComponent(courseId)}/lessons/${encodeURIComponent(lessonId)}/queue`, { signal });
+
+export const fetchStudentQueue = (courseId, { github, group_id }, { signal } = {}) =>
+  requestQueue(`/courses/${encodeURIComponent(courseId)}/queue?${new URLSearchParams({ github, group_id })}`, { signal });
+
+export const joinLessonQueue = (courseId, { github, surname, name, patronymic, lesson_id, lab_id }) =>
+  requestQueue(`/courses/${encodeURIComponent(courseId)}/queue/join`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ github, surname, name, patronymic, lesson_id, lab_id }),
+  });
+
 // Публичные данные для страницы создания репозитория. Сам OAuth намеренно не
 // выполняется через fetch: браузер должен перейти на github.com и вернуться
 // через callback backend.
@@ -198,7 +223,7 @@ export const fetchCourses = async (status = "active") => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -213,7 +238,7 @@ export const fetchCourseDetails = async (courseId) => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -228,10 +253,23 @@ export const fetchGroups = async (courseId) => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
+  }
+  return response.json();
+};
+
+export const fetchCourseLessons = async (courseId, { signal } = {}) => {
+  const response = await fetch(
+    `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/lessons`,
+    { signal }
+  );
+  if (!response.ok) {
+    const error = new Error("Could not load course lessons");
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 };
@@ -245,7 +283,7 @@ export const fetchLabs = async (courseId, groupId) => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -271,7 +309,7 @@ export const registerAndCheck = async (courseId, groupId, formData) => {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);
@@ -323,7 +361,7 @@ export async function gradeLab(courseId, groupId, labId, github) {
     try {
       const data = await response.json();
       errorMessage = data.detail || data.message || errorMessage;
-    } catch (e) {
+    } catch {
       // Если не удалось распарсить JSON, используем сообщение по умолчанию
     }
     throw new Error(errorMessage);

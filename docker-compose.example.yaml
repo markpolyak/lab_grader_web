@@ -24,7 +24,9 @@ services:
     volumes:
       - ./google-credentials:/app/google-credentials/
       - ./courses:/app/courses  # Mount courses directory for easy editing
-      - ./logs:/app/logs  # Persistent logs (survive container restarts)
+      - backend-logs:/app/logs
+      - backend-queue-state:/app/queue_state
+      - backend-schedule:/app/schedule
     environment:
       # Credentials and secrets
       CREDENTIALS_FILE: /app/google-credentials/credentials.json
@@ -40,6 +42,8 @@ services:
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-}
       # Logging configuration
       LOG_DIR: /app/logs  # Directory for persistent log files
+      QUEUE_STATE_DIR: /app/queue_state
+      SCHEDULE_DIR: /app/schedule
       LOG_LEVEL: INFO  # Options: DEBUG, INFO, WARNING, ERROR (use DEBUG for detailed troubleshooting)
     labels:
       caddy: labgrader.markpolyak.ru
@@ -53,6 +57,11 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
     networks:
       - caddy-proxy
+
+volumes:
+  backend-logs:
+  backend-queue-state:
+  backend-schedule:
 
 networks:
   caddy-proxy:

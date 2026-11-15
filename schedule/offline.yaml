@@ -1,0 +1,3 @@
+# Для локальной работы с уже сохранёнными YAML без запросов к сайту ГУАП.
+# SCHEDULE_CONFIG=schedule/offline.yaml
+schedules: []

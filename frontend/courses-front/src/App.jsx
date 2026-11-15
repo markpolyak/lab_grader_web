@@ -1,8 +1,13 @@
 import { BrowserRouter as Router, Routes, Route } from "react-router-dom";
-import { CourseList } from "./components/course-list";
+import { AdminLayout } from "./components/admin/layout";
+import { AdminCourses } from "./components/admin/Queues/courseListWrapper";
+import { AdminQueues } from "./components/admin/Queues";
 import { AdminLogin } from "./components/admin/AdminLogin";
 import { ProtectedRoute } from "./components/admin/ProtectedRoute";
 import { CourseListWrapper } from "./components/course-list/courseListWrapper";
+import { CourseActionsWrapper } from "./components/course-actions/courseActionsWrapper";
+import { QueueLessonsWrapper } from "./components/queue-lessons/queueLessonsWrapper";
+import { QueueDetailWrapper } from "./components/queue-detail/queueDetailWrapper";
 import { GroupListWrapper } from "./components/group-list/groupListWrapper";
 import { LabListWrapper } from "./components/lab-list/labListWrapper";
 import { RegistrationFormWrapper } from "./components/registration-form/registrationFormWrapper";
@@ -13,25 +18,32 @@ function App() {
   return (
     <Router>
       <Routes>
-        <Route path="/admin" element={<AdminLogin />} />
+        <Route path="/admin" element={<AdminLayout />}>
+        <Route index element={<AdminLogin />} />
         <Route
-          path="/admin/courses"
+          path="courses"
           element={
             <ProtectedRoute>
-              <CourseList onSelectCourse={() => {}} isAdmin={true} />
+              <AdminCourses />
             </ProtectedRoute>
           }
         />
         <Route
-          path="/admin/courses/:courseId/labs"
+          path="courses/:courseId/labs"
           element={
             <ProtectedRoute>
               <AdminLabListWrapper />
             </ProtectedRoute>
           }
         />
+        <Route path="courses/:courseId/queues" element={<ProtectedRoute><AdminQueues /></ProtectedRoute>} />
+        <Route path="courses/:courseId/queues/:queueId" element={<ProtectedRoute><AdminQueues /></ProtectedRoute>} />
+        </Route>
         <Route path="/" element={<CourseListWrapper />} />
-        <Route path="/course/:courseId" element={<GroupListWrapper />} />
+        <Route path="/course/:courseId" element={<CourseActionsWrapper />} />
+        <Route path="/course/:courseId/queue" element={<QueueLessonsWrapper />} />
+        <Route path="/course/:courseId/queue/:lessonId" element={<QueueDetailWrapper />} />
+        <Route path="/course/:courseId/groups" element={<GroupListWrapper />} />
         <Route
           path="/course/:courseId/group/:groupId"
           element={<LabListWrapper />}
