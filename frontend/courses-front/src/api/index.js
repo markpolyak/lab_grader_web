@@ -42,6 +42,150 @@ export const fetchJoinLab = async (courseId, labId) => {
 export const getJoinStartUrl = (courseId, labId) =>
   `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}/start`;
 
+const defenseQueueUrl = (courseId, groupId, labId) =>
+  `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/groups/${encodeURIComponent(groupId)}/labs/${encodeURIComponent(labId)}/queue`;
+
+export const getQueueLoginUrl = (courseId, groupId, labId) =>
+  `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/groups/${encodeURIComponent(groupId)}/labs/${encodeURIComponent(labId)}/queue/login`;
+
+const requestDefenseQueue = async (url, options = {}) => {
+  // OAuth plan §1/§4: очередь работает без cookies — identity приходит
+  // в теле запроса (GitHub OAuth code), credentials не нужны.
+  let response;
+  try {
+    response = await fetch(url, options);
+  } catch (cause) {
+    const error = new Error("Queue request failed", { cause });
+    error.code = "unknown";
+    throw error;
+  }
+
+  let data = null;
+  try {
+    data = await response.json();
+  } catch {
+    // Error responses may have an empty body.
+  }
+
+  if (!response.ok) {
+    const detail = data && data.detail;
+    const error = new Error(
+      typeof detail === "string" && !/^[A-Z][A-Z_]*$/.test(detail)
+        ? detail
+        : "Queue request failed"
+    );
+    error.status = response.status;
+    error.code =
+      typeof detail === "string" && /^[A-Z][A-Z_]*$/.test(detail)
+        ? detail
+        : response.status === 401
+          ? "SESSION_REQUIRED"
+          : "unknown";
+    throw error;
+  }
+
+  return data;
+};
+
+export const fetchLabDetails = async (courseId, groupId, labId) => {
+  const url = `${API_BASE_URL}/courses/${encodeURIComponent(courseId)}/groups/${encodeURIComponent(groupId)}/labs/${encodeURIComponent(labId)}`;
+  const response = await fetch(url);
+  if (!response.ok) {
+    const error = new Error("Failed to fetch lab details");
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+};
+
+
+// --- Очередь через GitHub OAuth (PLAN_queue_oauth.md §3/§4) ----------------
+//
+// Identity per-request: фронт получает OAuth code (redirect back с
+// ?queue_code=...), POST'ит его в теле мутации вместе с ФИО/группой;
+// сервер обменивает код на подтверждённый username и сверяет с таблицей.
+// Никаких cookies и сессий.
+
+export const getQueueOAuthStartUrl = (courseId, groupId, labId) =>
+  `${defenseQueueUrl(courseId, groupId, labId)}/oauth/start`;
+
+export const fetchDefenseQueue = (courseId, groupId, labId, { studentName, studentGroup } = {}) => {
+  const url = new URL(defenseQueueUrl(courseId, groupId, labId));
+  if (studentName) url.searchParams.set("student_name", studentName);
+  if (studentGroup) url.searchParams.set("student_group", studentGroup);
+  return requestDefenseQueue(url.toString());
+};
+
+export const registerInQueue = ({ courseId, groupId, labId, code, studentName, studentGroup }) =>
+  requestDefenseQueue(`${defenseQueueUrl(courseId, groupId, labId)}/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code,
+      student_name: studentName,
+      student_group: studentGroup,
+    }),
+  });
+
+export const withdrawFromQueue = ({ courseId, groupId, labId, code, studentName, studentGroup }) =>
+  requestDefenseQueue(`${defenseQueueUrl(courseId, groupId, labId)}/withdraw`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code,
+      student_name: studentName,
+      student_group: studentGroup,
+    }),
+  });
+
+export const shiftInQueue = ({ courseId, groupId, labId, code, studentName, studentGroup, delta }) =>
+  requestDefenseQueue(`${defenseQueueUrl(courseId, groupId, labId)}/shift`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      code,
+      student_name: studentName,
+      student_group: studentGroup,
+      delta,
+    }),
+  });
+
+export const extractSessionNo = (session) => {
+  if (!session?.slot_id) return null;
+  const digits = session.slot_id.match(/\d+/g);
+  return digits ? parseInt(digits[digits.length - 1], 10) : null;
+};
+
+// --- Ручное открытие / досрочное закрытие записи (issue #10) ----------------
+//
+// Admin-only (require_admin cookie). Override хранится per (course, group) и
+// живёт до начала следующего локального дня: open -> синтетическая сессия
+// (внештатное занятие, регистрация разрешена); close -> стоп новым записям,
+// ожидающие остаются видимы; auto -> снова по расписанию.
+//
+// В отличие от студенческих queue-функций выше, эти идут через dev-прокси
+// /api/v1 (vite.config.js rewrite -> /admin на backend), same-origin, чтобы
+// admin-cookie уходил без CORS-обёртки — так же, как AdminQueuePage шлёт свои
+// и вытаскивает стабильные коды ошибок (SESSION_REQUIRED и т.п.).
+
+const adminQueueOverrideUrl = (courseId, groupId, action) =>
+  `/api/v1/admin/courses/${encodeURIComponent(courseId)}/groups/${encodeURIComponent(groupId)}/queue/${action}`;
+
+const adminQueueStateUrl = (courseId) =>
+  `/api/v1/admin/courses/${encodeURIComponent(courseId)}/queue/state`;
+
+export const fetchQueueState = (courseId) =>
+  requestDefenseQueue(adminQueueStateUrl(courseId));
+
+export const openQueue = (courseId, groupId) =>
+  requestDefenseQueue(adminQueueOverrideUrl(courseId, groupId, "open"), { method: "POST" });
+
+export const closeQueue = (courseId, groupId) =>
+  requestDefenseQueue(adminQueueOverrideUrl(courseId, groupId, "close"), { method: "POST" });
+
+export const autoQueue = (courseId, groupId) =>
+  requestDefenseQueue(adminQueueOverrideUrl(courseId, groupId, "auto"), { method: "POST" });
+
 
 // --- Секретная ссылка /j/{token} (docs/SECRET_JOIN_LINKS_PLAN.md §7, §10) ---
 //
@@ -92,10 +236,9 @@ export const getSecretJoinStartUrl = (token) =>
 
 // --- Командные лабораторные работы (docs/TEAM_ASSIGNMENTS_PLAN.md §8.2) ---
 //
-// Все три запроса идут с credentials: "include" - личность студента backend
-// берёт из подписанной cookie join_session, и только из неё. В dev-режиме
-// фронтенд на :8080 и backend на :8000 - это разные источники, поэтому без
-// этой опции cookie не уедет (так же сделано в админке, LabList/index.jsx).
+// Командные лабораторные: личность студента backend берёт из подписанной
+// cookie join_session (единственное место, где cookie ещё используется —
+// командный flow вне плана OAuth).
 
 const joinTeamsUrl = (courseId, labId) =>
   `${API_BASE_URL}/join/${encodeURIComponent(courseId)}/${encodeURIComponent(labId)}/teams`;
@@ -339,7 +482,6 @@ export async function gradeLab(courseId, groupId, labId, github) {
       if (typeof data.detail === "string") {
         errorMessage = data.detail;
       } else if (Array.isArray(data.detail)) {
-        // FastAPI validation errors: [{loc: [...], msg: "...", type: "..."}]
         errorMessage = data.detail.map(formatValidationError).join("\n");
       }
     }
@@ -348,5 +490,3 @@ export async function gradeLab(courseId, groupId, labId, github) {
 
   return data;
 }
-
-

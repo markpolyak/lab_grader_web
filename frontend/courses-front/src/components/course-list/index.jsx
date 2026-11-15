@@ -482,6 +482,21 @@ export const CourseList = ({ onSelectCourse, isAdmin = false }) => {
                   </Button>
 
                   <Button
+                    onClick={() => navigate(`/admin/courses/${course.id}/queue`)}
+                    style={{ backgroundColor: colors.buttonBackground, color: "#fff" }}
+                  >
+                    {t("adminQueue.buttonToday")}
+                  </Button>
+
+
+                  <Button
+                    onClick={() => navigate(`/admin/courses/${course.id}/schedule`)}
+                    style={{ backgroundColor: colors.buttonBackground, color: "#fff" }}
+                  >
+                    {t("schedule.title")}
+                  </Button>
+
+                  <Button
                     onClick={() => handleDeleteConfirmation(course.id)}
                     style={{ backgroundColor: colors.error, color: "#fff" }}
                   >

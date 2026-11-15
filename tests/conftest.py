@@ -232,3 +232,31 @@ def github_api_some_checks_fail():
             ]
         }
     }
+
+
+@pytest.fixture(autouse=True)
+def _reset_app_caches():
+    """Модульные кэши (оптимизация Sheets-лимитов) не должны перетекать
+    между тестами: клиент/spreadsheet/worksheet, строки очереди, история."""
+    yield
+    try:
+        import main as _main
+
+        _main._sheets_client_instance = None
+        _main._aux_cache.clear()
+        _main._queue_ready_done.clear()
+    except Exception:
+        pass
+    try:
+        from grading.queue import cache as _qcache
+
+        _qcache.reset_queue_cache()
+        _qcache._history_cache.clear()
+    except Exception:
+        pass
+    try:
+        from grading.queue import store as _qstore
+
+        _qstore.reset_ws_cache()
+    except Exception:
+        pass

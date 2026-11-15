@@ -40,7 +40,7 @@ export const buttonStyles = css`
   padding: 8px 12px;
   width: 89px;
   justify-content: center;
-  align-items: flex-end;
+  align-items: center;
   gap: 10px;
   border-radius: ${sizes.borderRadius};
   border: 1px solid ${colors.buttonBorder};

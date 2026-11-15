@@ -117,7 +117,8 @@ class StudentOutcome:
     status: str  # updated | rejected | pending | error
     cell_value: str | None = None  # Value to write: "v", "x", "v-3", "v@10,5-3"
     message: str = ""
-    passed: str | None = None  # "3/4 тестов пройдено"
+    passed: str | None = None  # "3/4 тестов пройдено" (human-readable summary)
+    ci_passed: bool = False  # Boolean CI verdict; ``passed`` is a summary string, not a bool
     checks: list[str] = field(default_factory=list)
     score: str | None = None  # Formatted score, if extracted
     current_grade: str | None = None  # Existing cell value when rejected
@@ -244,6 +245,7 @@ def evaluate_student(
             status="error",
             message=ci_evaluation.grade_result.message,
             error_code=ci_evaluation.grade_result.error_code,
+            ci_passed=ci_evaluation.ci_passed,
         )
 
     if ci_evaluation.grade_result.status == GradeStatus.PENDING:
@@ -252,6 +254,7 @@ def evaluate_student(
             status="pending",
             message=ci_evaluation.grade_result.message,
             passed=ci_evaluation.grade_result.passed,
+            ci_passed=ci_evaluation.ci_passed,
             checks=ci_evaluation.grade_result.checks,
         )
 
@@ -287,6 +290,7 @@ def evaluate_student(
                     status="error",
                     message=taskid_error.message,
                     error_code=taskid_error.error_code,
+                    ci_passed=ci_evaluation.ci_passed,
                 )
 
         penalty = 0
@@ -344,6 +348,7 @@ def evaluate_student(
             cell_value=context.current_cell_value,
             message=CELL_PROTECTED_MESSAGE,
             passed=ci_evaluation.grade_result.passed,
+            ci_passed=ci_evaluation.ci_passed,
             checks=ci_evaluation.grade_result.checks,
             score=formatted_score,
             current_grade=context.current_cell_value,
@@ -354,6 +359,7 @@ def evaluate_student(
         cell_value=final_result,
         message=final_message,
         passed=ci_evaluation.grade_result.passed,
+        ci_passed=ci_evaluation.ci_passed,
         checks=ci_evaluation.grade_result.checks,
         score=formatted_score,
     )

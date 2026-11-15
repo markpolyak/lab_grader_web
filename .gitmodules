@@ -1,0 +1,3 @@
+[submodule "vendor/suai-schedule-parser"]
+	path = vendor/suai-schedule-parser
+	url = https://github.com/markpolyak/suai-schedule-parser.git

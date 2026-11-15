@@ -20,6 +20,8 @@ jobs:
         service: [frontend, backend]
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Login to ghcr.io
         uses: docker/login-action@v3
         with:

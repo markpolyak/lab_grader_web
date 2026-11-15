@@ -1,4 +1,18 @@
-__pycache__/
-node_modules/
-.env
+# Node
+**/node_modules
+**/dist
+**/.vite
+
+# Python
+**/__pycache__
+**/.pytest_cache
+**/.venv
+**/venv
+
+# Git / IDE / misc
 .git
+.github
+.idea
+.vscode
+*.md
+!README.md
