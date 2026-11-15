@@ -871,3 +871,50 @@ def test_complete_lesson_google_failure_keeps_participants(endpoint, monkeypatch
     assert len(detail['entries']) == 1
     history.save.side_effect = None
     assert client.post(path + '/complete').json() == {'archived': True}
+
+
+def test_closed_registration_preserves_defenses_and_reopens_after_restart(endpoint, monkeypatch, tmp_path):
+    from grading.queue_eligibility import EligibleStudentLab
+    from queues.repositories.storage.file import FileQueueRepository
+
+    client, service = endpoint
+    service.repository = FileQueueRepository(tmp_path / "queues")
+    lesson = service.schedules["os-2026"].lessons[0]
+    path = f"/admin/courses/os-2026/queues/{lesson.id}"
+    monkeypatch.setattr(main, "_open_spreadsheet", lambda _: object())
+    monkeypatch.setattr(main, "resolve_eligible_lab", lambda course, sheet, github, lab, groups:
+                        EligibleStudentLab(Student("Иван", "Иванов", "", github),
+                                           "Иванов Иван", "4431", lab, "ЛР1"))
+    authenticate(client)
+    assert client.put(path + "/registration", json={"closed": False}).status_code == 200
+
+    def join(github):
+        return client.post("/courses/os-2026/queue/join", json={
+            "github": github, "lab_id": "1", "lesson_id": str(lesson.id)})
+
+    ids = [join(github).json()["entry"]["id"] for github in ("first", "second", "third")]
+    assert client.post(path + "/call-next").status_code == 200
+    assert client.post(path + "/call-next").status_code == 200  # two simultaneous defenses
+    before = client.get(path).json()
+    assert len(before["called"]) == 2 and len(before["waiting"]) == 1
+    assert client.put(path + "/registration", json={"closed": True}).status_code == 200
+    after = client.get(path).json()
+    assert after["closed"] is True and not after["lesson"]["cancelled"]
+    assert after["entries"] == before["entries"]  # no lost entries, results or order
+    rejected = join("new")
+    assert rejected.status_code == 409 and rejected.json()["detail"] == "QUEUE_CLOSED"
+    assert len(service.get_record(lesson.id).queue.entries) == 3
+    assert client.post(path + f"/entries/{ids[0]}/finish", json={"outcome": "defended"}).status_code == 200
+    assert client.post(path + "/call-next").status_code == 200  # remaining waiter still serviceable
+
+    restored = QueueService(FileQueueRepository(tmp_path / "queues"))
+    restored.load_saved_week(COURSES, Path(__file__).resolve().parents[1] / "schedule", week_start=MONDAY)
+    # The fixture already owns cleanup of this State attribute.
+    main.app.state.queue_service = restored
+    assert client.get(path).json()["closed"] is True
+    assert join("new").json()["detail"] == "QUEUE_CLOSED"
+    detail = client.get(path).json()
+    assert len(detail["called"]) == 2 and len(detail["finished"]) == 1
+    assert client.put(path + "/registration", json={"closed": False}).status_code == 200
+    assert join("new").status_code == 201
+    assert client.get(path).json()["waiting"][0]["github"] == "new"

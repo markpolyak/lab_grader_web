@@ -169,8 +169,8 @@ function QueueView({ courseId, queueId }) {
             <PrimaryButton disabled={pending} onClick={completeLesson}>
               {t(completing ? "adminQueues.archiving" : data.archive_pending ? "adminQueues.retryArchive" : "adminQueues.completeLesson")}
             </PrimaryButton>
-            {data.closed && !data.archive_pending && <SecondaryButton disabled={pending || data.lesson.cancelled} onClick={() => mutate(() => setQueueRegistration(courseId, queueId, false))}>
-              {t("adminQueues.openQueue")}
+            {!data.archive_pending && <SecondaryButton disabled={pending || data.lesson.cancelled} onClick={() => mutate(() => setQueueRegistration(courseId, queueId, !data.closed))}>
+              {t(data.closed ? "adminQueues.openQueue" : "adminQueues.closeQueue")}
             </SecondaryButton>}
             <SecondaryButton disabled={pending || data.archive_pending} onClick={() => { setStarts(localInput(data.lesson.starts_at)); setEnds(localInput(data.lesson.ends_at)); setDialog("move"); }}>{t("adminQueues.move")}</SecondaryButton>
             <SecondaryButton disabled={pending || data.archive_pending} onClick={() => setDialog("cancel")}>{t(data.lesson.cancelled ? "adminQueues.restore" : "adminQueues.cancelLesson")}</SecondaryButton>
