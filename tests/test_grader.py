@@ -6,13 +6,51 @@ from grading.grader import LabGrader, GradeResult, GradeStatus
 from grading.github_client import GitHubClient, CommitInfo
 
 
+def with_workflow_runs(mock_github):
+    """
+    Give every check run a check suite and a workflow run behind it.
+
+    Grading takes CI times from workflow runs, not from check runs, so a mock
+    that only lists check runs would leave every pass unverified. The workflow
+    run started when the check run says it completed, which keeps the penalty
+    tests' timelines meaningful. Tests that set check_suite themselves, or
+    their own workflow runs, are left alone.
+    """
+    def check_runs(org, repo, sha):
+        data = mock_github.get_check_runs.return_value
+        if data is None:
+            return None
+        return [
+            run if "check_suite" in run else {**run, "check_suite": {"id": 1000 + i}}
+            for i, run in enumerate(data)
+        ]
+
+    def workflow_runs(org, repo, sha):
+        return [
+            {
+                "id": 2000 + i,
+                "check_suite_id": run["check_suite"]["id"],
+                "path": ".github/workflows/classroom.yml",
+                "run_started_at": run.get("completed_at") or "2024-01-15T10:00:00Z",
+                "head_branch": "main",
+                "run_attempt": 1,
+            }
+            for i, run in enumerate(check_runs(org, repo, sha) or [])
+        ]
+
+    mock_github.get_check_runs.side_effect = check_runs
+    mock_github.get_workflow_runs.side_effect = workflow_runs
+    mock_github.list_workflow_files.return_value = [".github/workflows/classroom.yml"]
+    return mock_github
+
+
 class TestLabGraderCheckRepository:
     """Tests for LabGrader.check_repository."""
 
     @pytest.fixture
     def mock_github(self):
         """Create mock GitHub client."""
-        return MagicMock(spec=GitHubClient)
+        return with_workflow_runs(MagicMock(spec=GitHubClient))
 
     @pytest.fixture
     def grader(self, mock_github):
@@ -80,7 +118,7 @@ class TestMissingRepositoryIsNotAMissingFile:
 
     @pytest.fixture
     def mock_github(self):
-        return MagicMock(spec=GitHubClient)
+        return with_workflow_runs(MagicMock(spec=GitHubClient))
 
     @pytest.fixture
     def grader(self, mock_github):
@@ -143,7 +181,7 @@ class TestLabGraderCheckForbiddenFiles:
 
     @pytest.fixture
     def mock_github(self):
-        return MagicMock(spec=GitHubClient)
+        return with_workflow_runs(MagicMock(spec=GitHubClient))
 
     @pytest.fixture
     def grader(self, mock_github):
@@ -195,7 +233,7 @@ class TestLabGraderEvaluateCI:
 
     @pytest.fixture
     def mock_github(self):
-        return MagicMock(spec=GitHubClient)
+        return with_workflow_runs(MagicMock(spec=GitHubClient))
 
     @pytest.fixture
     def grader(self, mock_github):
@@ -280,7 +318,7 @@ class TestLabGraderSkippedAndMissingJobs:
 
     @pytest.fixture
     def mock_github(self):
-        return MagicMock(spec=GitHubClient)
+        return with_workflow_runs(MagicMock(spec=GitHubClient))
 
     @pytest.fixture
     def grader(self, mock_github):
@@ -399,7 +437,7 @@ class TestLabGraderGrade:
 
     @pytest.fixture
     def mock_github(self):
-        return MagicMock(spec=GitHubClient)
+        return with_workflow_runs(MagicMock(spec=GitHubClient))
 
     @pytest.fixture
     def grader(self, mock_github):
@@ -484,7 +522,7 @@ class TestLabGraderPenalty:
 
     @pytest.fixture
     def mock_github(self):
-        return MagicMock(spec=GitHubClient)
+        return with_workflow_runs(MagicMock(spec=GitHubClient))
 
     @pytest.fixture
     def grader(self, mock_github):
@@ -558,7 +596,7 @@ class TestLabGraderTaskId:
 
     @pytest.fixture
     def mock_github(self):
-        return MagicMock(spec=GitHubClient)
+        return with_workflow_runs(MagicMock(spec=GitHubClient))
 
     @pytest.fixture
     def grader(self, mock_github):

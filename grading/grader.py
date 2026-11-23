@@ -4,7 +4,10 @@ Lab grading orchestrator.
 This module provides the main LabGrader class that orchestrates
 all grading operations: GitHub checks, CI evaluation, and result formatting.
 """
+import json
 import logging
+import threading
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -21,6 +24,8 @@ from .ci_checker import (
     evaluate_ci_results,
     get_ci_config_jobs,
     format_ci_result_string,
+    parse_workflow_runs,
+    verify_successful_runs,
     CheckRun,
 )
 from .sheets_client import can_overwrite_cell
@@ -29,6 +34,22 @@ from .taskid import extract_taskid_from_logs, calculate_expected_taskid, validat
 from .score import extract_score_from_logs
 
 logger = logging.getLogger(__name__)
+
+CI_UNVERIFIED_MESSAGE = (
+    "⚠️ Не удалось подтвердить результаты CI: {details}. "
+    "Обратитесь к преподавателю."
+)
+
+# Workflow files of a lab's template change rarely; one lookup per template
+# every few minutes keeps bulk grading at one extra request per student.
+TEMPLATE_WORKFLOWS_TTL_SECONDS = 600
+_template_workflows_cache: dict[str, tuple[float, set[str]]] = {}
+_template_workflows_lock = threading.Lock()
+
+
+def clear_template_workflows_cache() -> None:
+    with _template_workflows_lock:
+        _template_workflows_cache.clear()
 
 
 class GradeStatus(Enum):
@@ -580,6 +601,26 @@ class LabGrader:
         for run in successful_runs:
             logger.info(f"  Success job: {run.name}")
 
+        # A pass is only as good as the workflow runs behind it: the check
+        # runs' own times and results can be written by the student's workflow.
+        success_time = None
+        if ci_result.passed:
+            success_time, unverified = self._verify_successful_runs(
+                org, repo_name, commit.sha, lab_config, successful_runs
+            )
+            if unverified is not None:
+                return CIEvaluation(
+                    grade_result=GradeResult(
+                        status=GradeStatus.ERROR,
+                        result=None,
+                        message=unverified,
+                        passed=None,
+                        checks=ci_result.summary,
+                        error_code="CI_UNVERIFIED",
+                    ),
+                    ci_passed=False,
+                )
+
         # Determine grade
         final_result = "v" if ci_result.passed else "x"
         result_string = format_ci_result_string(ci_result.passed_count, ci_result.total_count)
@@ -620,9 +661,99 @@ class LabGrader:
             ),
             ci_passed=ci_result.passed,
             successful_runs=successful_runs,
-            latest_success_time=ci_result.latest_success_time,
+            # Never ci_result.latest_success_time: that is the check runs'
+            # completed_at, which the student's workflow can rewrite.
+            latest_success_time=success_time,
             score=score_value,
         )
+
+    def _template_workflow_files(
+        self, lab_config: dict[str, Any]
+    ) -> tuple[set[str] | None, str | None]:
+        """
+        Workflow files of the lab's template, as (files, error).
+
+        files is None when the lab has no template-repo or its template has no
+        workflows: the workflow-file check is then skipped (a lab whose
+        students write the workflow themselves has nothing to compare with).
+        """
+        template = lab_config.get("template-repo")
+        if not template:
+            return None, None
+        if not isinstance(template, str) or template.count("/") != 1:
+            return None, "некорректно настроен template-repo лабораторной работы"
+
+        now = time.monotonic()
+        with _template_workflows_lock:
+            cached = _template_workflows_cache.get(template)
+            if cached and now - cached[0] < TEMPLATE_WORKFLOWS_TTL_SECONDS:
+                return (cached[1] or None), None
+
+        owner, repo = template.split("/")
+        files = self.github.list_workflow_files(owner, repo)
+        if files is None:
+            return None, "не удалось получить список workflow шаблона из GitHub"
+        allowed = set(files)
+        if not allowed:
+            logger.warning(
+                "Template %s has no workflow files: workflow file check skipped", template
+            )
+        with _template_workflows_lock:
+            _template_workflows_cache[template] = (now, allowed)
+        return (allowed or None), None
+
+    def _verify_successful_runs(
+        self,
+        org: str,
+        repo_name: str,
+        sha: str,
+        lab_config: dict[str, Any],
+        successful_runs: list[CheckRun],
+    ) -> tuple[datetime | None, str | None]:
+        """
+        Verify a passing CI against its workflow runs, as (success_time, error).
+
+        success_time is the latest run_started_at of the workflow runs behind
+        the successful check runs. error is a user-facing message when the pass
+        cannot be confirmed; the caller then withholds the grade.
+        """
+        allowed, template_error = self._template_workflow_files(lab_config)
+        if template_error:
+            return None, CI_UNVERIFIED_MESSAGE.format(details=template_error)
+
+        workflow_runs_data = self.github.get_workflow_runs(org, repo_name, sha)
+        if workflow_runs_data is None:
+            return None, CI_UNVERIFIED_MESSAGE.format(
+                details="не удалось получить запуски workflow из GitHub"
+            )
+
+        verification = verify_successful_runs(
+            successful_runs, parse_workflow_runs(workflow_runs_data), allowed
+        )
+        # Evidence kept on the server: the student cannot rewrite it later.
+        logger.info(
+            "CI evidence %s",
+            json.dumps({
+                "repo": f"{org}/{repo_name}",
+                "sha": sha,
+                "template_workflows": sorted(allowed) if allowed is not None else None,
+                "runs": verification.evidence,
+                "success_time": (
+                    verification.success_time.isoformat()
+                    if verification.success_time else None
+                ),
+                "problems": verification.problems,
+            }, ensure_ascii=False),
+        )
+        if verification.problems:
+            logger.warning(
+                "CI pass not verified for %s/%s@%s: %s",
+                org, repo_name, sha, "; ".join(verification.problems),
+            )
+            return None, CI_UNVERIFIED_MESSAGE.format(
+                details="; ".join(verification.problems)
+            )
+        return verification.success_time, None
 
     def evaluate_ci(
         self,
@@ -719,7 +850,19 @@ class LabGrader:
         penalty = 0
         penalty_max = lab_config.get("penalty-max", 0)
 
-        if deadline is not None and ci_evaluation.latest_success_time is not None:
+        if deadline is not None and ci_evaluation.latest_success_time is None:
+            # Without a confirmed time a deadline cannot be judged; grading it
+            # as on time is exactly what forged CI times would exploit.
+            return GradeResult(
+                status=GradeStatus.ERROR,
+                result=None,
+                message=CI_UNVERIFIED_MESSAGE.format(details="время прохождения CI неизвестно"),
+                passed=ci_evaluation.grade_result.passed,
+                checks=ci_evaluation.grade_result.checks,
+                error_code="CI_UNVERIFIED",
+            )
+
+        if deadline is not None:
             # Get penalty strategy from config (default: WEEKLY)
             strategy_name = lab_config.get("penalty-strategy", "weekly")
             try:

@@ -52,6 +52,32 @@ class CheckRun:
     conclusion: str | None  # "success", "failure", None (pending/running)
     html_url: str
     completed_at: datetime | None = None
+    id: int | None = None
+    check_suite_id: int | None = None
+
+
+@dataclass
+class WorkflowRun:
+    """A GitHub Actions workflow run: the trusted source of CI timing.
+
+    Its fields are set by GitHub when the run starts. A check run's
+    `completed_at` is not: the workflow token of the student's own repository
+    may rewrite it through the Checks API.
+    """
+    id: int | None
+    check_suite_id: int | None
+    path: str
+    run_started_at: datetime | None
+    head_branch: str | None = None
+    run_attempt: int | None = None
+
+
+@dataclass
+class RunVerification:
+    """Outcome of checking successful check runs against their workflow runs."""
+    success_time: datetime | None  # None unless every run was verified
+    problems: list[str] = field(default_factory=list)
+    evidence: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -80,21 +106,115 @@ def parse_check_runs(check_runs_data: list[dict[str, Any]]) -> list[CheckRun]:
     """
     result = []
     for run in check_runs_data:
-        completed_at = None
-        completed_str = run.get("completed_at")
-        if completed_str:
-            try:
-                completed_at = datetime.fromisoformat(completed_str.replace("Z", "+00:00"))
-            except (ValueError, TypeError):
-                pass
-
+        suite = run.get("check_suite")
         result.append(CheckRun(
             name=run.get("name", "Unnamed check"),
             conclusion=run.get("conclusion"),
             html_url=run.get("html_url", ""),
-            completed_at=completed_at,
+            completed_at=_parse_time(run.get("completed_at")),
+            id=run.get("id"),
+            check_suite_id=suite.get("id") if isinstance(suite, dict) else None,
         ))
     return result
+
+
+def _parse_time(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+
+
+def parse_workflow_runs(workflow_runs_data: list[dict[str, Any]]) -> list[WorkflowRun]:
+    """Parse raw GitHub API workflow_runs into WorkflowRun objects."""
+    return [
+        WorkflowRun(
+            id=run.get("id"),
+            check_suite_id=run.get("check_suite_id"),
+            path=run.get("path") or "",
+            run_started_at=_parse_time(run.get("run_started_at")),
+            head_branch=run.get("head_branch"),
+            run_attempt=run.get("run_attempt"),
+        )
+        for run in workflow_runs_data
+    ]
+
+
+def workflow_file(path: str) -> str:
+    """Workflow file of a run's `path`, without the "@ref" GitHub may append."""
+    return path.split("@", 1)[0]
+
+
+def verify_successful_runs(
+    successful_runs: list[CheckRun],
+    workflow_runs: list[WorkflowRun],
+    allowed_workflow_files: set[str] | None,
+) -> RunVerification:
+    """
+    Check every successful check run against the workflow run that produced it.
+
+    A check run counts only if GitHub links it (through its check suite) to a
+    workflow run and, when the lab's template is known, that run came from one
+    of the template's workflow files. The success time is the latest
+    `run_started_at` of those workflow runs - never a check run's
+    `completed_at`, which the student's own workflow can rewrite.
+
+    One unverified run makes the whole result unverified (success_time None):
+    the caller must then refuse to grade rather than grade on partial data.
+
+    Args:
+        successful_runs: Successful check runs that the grade relies on
+        workflow_runs: Every workflow run of the same commit
+        allowed_workflow_files: Workflow file paths of the lab's template,
+            or None when the template is unknown (the file check is skipped)
+    """
+    by_suite = {run.check_suite_id: run for run in workflow_runs if run.check_suite_id}
+    problems: list[str] = []
+    evidence: list[dict[str, Any]] = []
+    latest: datetime | None = None
+
+    for check in successful_runs:
+        workflow = by_suite.get(check.check_suite_id) if check.check_suite_id else None
+        evidence.append({
+            "check_run_id": check.id,
+            "name": check.name,
+            "conclusion": check.conclusion,
+            "completed_at": check.completed_at.isoformat() if check.completed_at else None,
+            "check_suite_id": check.check_suite_id,
+            "workflow_run_id": workflow.id if workflow else None,
+            "workflow_path": workflow.path if workflow else None,
+            "run_started_at": (
+                workflow.run_started_at.isoformat()
+                if workflow and workflow.run_started_at else None
+            ),
+            "head_branch": workflow.head_branch if workflow else None,
+            "run_attempt": workflow.run_attempt if workflow else None,
+        })
+        if workflow is None:
+            problems.append(f"{check.name}: проверка не связана ни с одним запуском workflow")
+            continue
+        if (
+            allowed_workflow_files is not None
+            and workflow_file(workflow.path) not in allowed_workflow_files
+        ):
+            problems.append(
+                f"{check.name}: запуск из файла {workflow_file(workflow.path)}, "
+                f"которого нет в шаблоне лабораторной работы"
+            )
+            continue
+        if workflow.run_started_at is None:
+            problems.append(f"{check.name}: у запуска workflow нет времени начала")
+            continue
+        if latest is None or workflow.run_started_at > latest:
+            latest = workflow.run_started_at
+
+    return RunVerification(
+        success_time=None if problems else latest,
+        problems=problems,
+        evidence=evidence,
+    )
 
 
 def is_job_pattern(configured_name: str) -> bool:

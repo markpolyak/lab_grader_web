@@ -28,7 +28,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from .github_client import GitHubClient
-from .grader import LabGrader, GradeStatus
+from .grader import CI_UNVERIFIED_MESSAGE, LabGrader, GradeStatus
 from .penalty import calculate_penalty, format_grade_with_penalty, PenaltyStrategy
 from .score import format_grade_with_score, format_score
 from .teams import is_team_lab
@@ -289,8 +289,16 @@ def evaluate_student(
                     error_code=taskid_error.error_code,
                 )
 
+        if context.deadline and ci_evaluation.latest_success_time is None:
+            # Same rule as LabGrader.grade: no confirmed time, no grade.
+            return StudentOutcome(
+                status="error",
+                message=CI_UNVERIFIED_MESSAGE.format(details="время прохождения CI неизвестно"),
+                error_code="CI_UNVERIFIED",
+            )
+
         penalty = 0
-        if context.deadline and ci_evaluation.latest_success_time:
+        if context.deadline:
             penalty_max = lab_config.get("penalty-max", 0)
             strategy_name = lab_config.get("penalty-strategy", "weekly")
             try:

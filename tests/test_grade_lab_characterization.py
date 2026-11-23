@@ -16,6 +16,19 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
+def _add_workflow_runs(url):
+    """The workflow run behind check suite 1: CI times are taken from it."""
+    responses.add(
+        responses.GET,
+        url,
+        json={"workflow_runs": [{
+            "id": 10, "check_suite_id": 1, "path": ".github/workflows/test.yml",
+            "run_started_at": "2024-01-15T10:00:00Z", "head_branch": "main", "run_attempt": 1,
+        }]},
+        status=200,
+    )
+
+
 class TestGradeLabCharacterization:
     """Characterization tests for grade_lab endpoint."""
 
@@ -74,11 +87,12 @@ class TestGradeLabCharacterization:
             f"https://api.github.com/repos/{org}/{repo_name}/commits/abc123/check-runs",
             json={
                 "check_runs": [
-                    {"name": "test", "conclusion": "success", "html_url": "http://test"}
+                    {"name": "test", "conclusion": "success", "html_url": "http://test", "check_suite": {"id": 1}}
                 ]
             },
             status=200
         )
+        _add_workflow_runs(f"https://api.github.com/repos/{org}/{repo_name}/actions/runs")
 
         # Setup worksheet mock
         mock_gspread['worksheet'].row_values.return_value = ["№", "ФИО", "GitHub", "ЛР1"]
@@ -138,12 +152,13 @@ class TestGradeLabCharacterization:
             f"https://api.github.com/repos/{org}/{repo_name}/commits/abc123/check-runs",
             json={
                 "check_runs": [
-                    {"name": "test", "conclusion": "success", "html_url": "http://test"},
-                    {"name": "build", "conclusion": "failure", "html_url": "http://build"}
+                    {"name": "test", "conclusion": "success", "html_url": "http://test", "check_suite": {"id": 1}},
+                    {"name": "build", "conclusion": "failure", "html_url": "http://build", "check_suite": {"id": 1}}
                 ]
             },
             status=200
         )
+        _add_workflow_runs(f"https://api.github.com/repos/{org}/{repo_name}/actions/runs")
 
         mock_gspread['worksheet'].row_values.return_value = ["№", "ФИО", "GitHub", "ЛР1"]
         mock_gspread['worksheet'].col_values.return_value = ["", "", "testuser"]
@@ -424,6 +439,7 @@ class TestGradeLabCharacterization:
             json={"check_runs": []},
             status=200
         )
+        _add_workflow_runs(f"https://api.github.com/repos/{org}/{repo_name}/actions/runs")
 
         from main import grade_lab, GradeRequest
         grade_request = GradeRequest(github="testuser")
@@ -473,9 +489,10 @@ class TestGradeLabCharacterization:
         responses.add(
             responses.GET,
             f"https://api.github.com/repos/{org}/{repo_name}/commits/abc123/check-runs",
-            json={"check_runs": [{"name": "test", "conclusion": "success", "html_url": "x"}]},
+            json={"check_runs": [{"name": "test", "conclusion": "success", "html_url": "x", "check_suite": {"id": 1}}]},
             status=200
         )
+        _add_workflow_runs(f"https://api.github.com/repos/{org}/{repo_name}/actions/runs")
 
         # User not in spreadsheet
         mock_gspread['worksheet'].row_values.return_value = ["№", "ФИО", "GitHub", "ЛР1"]
@@ -562,7 +579,8 @@ class TestGradeLabResponseFormat:
             responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo_name}/commits", json=[{"sha": "abc"}], status=200)
             responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo_name}/commits/abc", json={"files": []}, status=200)
             responses.add(responses.GET, f"https://api.github.com/repos/{org}/{repo_name}/commits/abc/check-runs",
-                         json={"check_runs": [{"name": "t", "conclusion": "success", "html_url": "x"}]}, status=200)
+                         json={"check_runs": [{"name": "t", "conclusion": "success", "html_url": "x", "check_suite": {"id": 1}}]}, status=200)
+            _add_workflow_runs(f"https://api.github.com/repos/{org}/{repo_name}/actions/runs")
 
             mock_gspread['worksheet'].row_values.return_value = ["", "", "GitHub"]
             mock_gspread['worksheet'].col_values.return_value = ["", "", "testuser"]
@@ -685,10 +703,11 @@ class TestGradeLabTeamLab:
             responses.GET,
             f"https://api.github.com/repos/{org}/{repo_name}/commits/abc123/check-runs",
             json={"check_runs": [
-                {"name": "test", "conclusion": "success", "html_url": "http://test"}
+                {"name": "test", "conclusion": "success", "html_url": "http://test", "check_suite": {"id": 1}}
             ]},
             status=200,
         )
+        _add_workflow_runs(f"https://api.github.com/repos/{org}/{repo_name}/actions/runs")
 
     @responses.activate
     def test_grades_the_team_repository_into_the_students_row(

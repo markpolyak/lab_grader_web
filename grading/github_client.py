@@ -266,6 +266,64 @@ class GitHubClient:
 
         return resp.json().get("check_runs", [])
 
+    def get_workflow_runs(
+        self,
+        org: str,
+        repo: str,
+        commit_sha: str
+    ) -> list[dict[str, Any]] | None:
+        """
+        Get every GitHub Actions workflow run for a commit (all pages).
+
+        A workflow run's `run_started_at` and `path` are set by GitHub when the
+        run starts and cannot be changed through the Checks API, unlike a check
+        run's `completed_at`. Each run names its check suite, which links it to
+        the check runs it produced.
+
+        Returns:
+            List of workflow run dicts from GitHub API, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{org}/{repo}/actions/runs"
+        per_page = 100
+        runs: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            resp = requests.get(
+                url,
+                headers=self.headers,
+                params={"head_sha": commit_sha, "per_page": per_page, "page": page},
+                timeout=self.DEFAULT_TIMEOUT,
+            )
+            if resp.status_code != 200:
+                return None
+            page_runs = resp.json().get("workflow_runs", [])
+            runs.extend(page_runs)
+            if len(page_runs) < per_page:
+                return runs
+            page += 1
+
+    def list_workflow_files(self, owner: str, repo: str) -> list[str] | None:
+        """
+        Paths of the workflow files in a repository's default branch.
+
+        Returns:
+            Paths like ".github/workflows/classroom.yml" ([] when the directory
+            does not exist), or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/contents/.github/workflows"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code == 404:
+            return []
+        if resp.status_code != 200:
+            return None
+        entries = resp.json()
+        if not isinstance(entries, list):
+            return None
+        return [
+            entry["path"] for entry in entries
+            if entry.get("type") == "file" and entry.get("path")
+        ]
+
     def repo_exists(self, org: str, repo: str) -> bool:
         """
         Check if a repository exists.
