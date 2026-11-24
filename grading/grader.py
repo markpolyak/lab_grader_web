@@ -47,9 +47,31 @@ _template_workflows_cache: dict[str, tuple[float, set[str]]] = {}
 _template_workflows_lock = threading.Lock()
 
 
+CI_FILES_MODIFIED_MESSAGE = (
+    "🚨 Нельзя изменять файлы CI из шаблона лабораторной работы: {files}. "
+    "Верните их к версии из шаблона."
+)
+CI_FILES_UNVERIFIED_MESSAGE = (
+    "⚠️ Не удалось проверить файлы CI: {details}. Обратитесь к преподавателю."
+)
+_template_ci_versions_cache: dict[str, tuple[float, dict[str, set[str]]]] = {}
+_template_ci_versions_lock = threading.Lock()
+_template_blob_cache: dict[str, bytes] = {}
+# Files that decide what CI runs; other files under .github/ (.keep,
+# dependabot.yml, issue templates) cannot change a template run.
+CI_FILE_PREFIXES = (".github/workflows/", ".github/actions/")
+
+
+def _normalize_line_endings(content: bytes) -> bytes:
+    return content.replace(b"\r\n", b"\n")
+
+
 def clear_template_workflows_cache() -> None:
     with _template_workflows_lock:
         _template_workflows_cache.clear()
+    with _template_ci_versions_lock:
+        _template_ci_versions_cache.clear()
+        _template_blob_cache.clear()
 
 
 class GradeStatus(Enum):
@@ -202,6 +224,127 @@ class LabGrader:
             error_code="REPO_NOT_FOUND",
         )
 
+    def _template_ci_versions(
+        self, template: str
+    ) -> tuple[dict[str, set[str]] | None, str | None]:
+        """
+        Every version of every file under the template's `.github/`, as
+        ({path: {blob sha, ...}}, error).
+
+        Any version counts, not only the current one: a student whose
+        repository predates a template update (or who has not merged the
+        propagated pull request yet) still has an older, unmodified file.
+        """
+        now = time.monotonic()
+        with _template_ci_versions_lock:
+            cached = _template_ci_versions_cache.get(template)
+            if cached and now - cached[0] < TEMPLATE_WORKFLOWS_TTL_SECONDS:
+                return cached[1], None
+
+        owner, repo = template.split("/")
+        commits = self.github.list_commits_touching(owner, repo, ".github")
+        if commits is None:
+            return None, "не удалось получить историю шаблона из GitHub"
+        versions: dict[str, set[str]] = {}
+        for sha in commits:
+            blobs = self.github.get_github_dir_blobs(owner, repo, sha)
+            if blobs is None:
+                return None, "не удалось получить файлы CI шаблона из GitHub"
+            for path, blob in blobs.items():
+                if path.startswith(CI_FILE_PREFIXES):
+                    versions.setdefault(path, set()).add(blob)
+        with _template_ci_versions_lock:
+            _template_ci_versions_cache[template] = (now, versions)
+        return versions, None
+
+    def check_ci_files(
+        self,
+        org: str,
+        repo_name: str,
+        lab_config: dict[str, Any],
+        sha: str,
+    ) -> GradeResult | None:
+        """
+        Refuse a commit whose CI files differ from every version of the lab
+        template's.
+
+        CI verification only trusts runs of the template's workflow files - by
+        path. A student who edits the file itself (tests replaced by `exit 0`,
+        a local action rewritten) keeps the path; comparing contents closes
+        that. Files the template never had are allowed: their runs are not
+        counted, and labs where students write CI themselves have no template.
+        Line endings are ignored (a checkout with autocrlf on Windows commits
+        CRLF without changing anything else).
+        """
+        template = lab_config.get("template-repo")
+        if not template:
+            return None
+        modified, details = self._modified_ci_files(template, org, repo_name, sha)
+        if details is not None:
+            return GradeResult(
+                status=GradeStatus.ERROR,
+                result=None,
+                message=CI_FILES_UNVERIFIED_MESSAGE.format(details=details),
+                passed=None,
+                error_code="CI_UNVERIFIED",
+            )
+        if not modified:
+            return None
+        logger.warning(
+            "CI files modified in %s/%s@%s: %s", org, repo_name, sha, ", ".join(modified)
+        )
+        return GradeResult(
+            status=GradeStatus.ERROR,
+            result=None,
+            message=CI_FILES_MODIFIED_MESSAGE.format(files=", ".join(modified)),
+            passed=None,
+            error_code="FORBIDDEN_MODIFICATION",
+        )
+
+    def _modified_ci_files(
+        self, template: Any, org: str, repo_name: str, sha: str
+    ) -> tuple[list[str], str | None]:
+        """CI files of the commit that match no template version, as (paths, error)."""
+        if not isinstance(template, str) or template.count("/") != 1:
+            return [], "некорректно настроен template-repo лабораторной работы"
+        versions, error = self._template_ci_versions(template)
+        if error is not None:
+            return [], error
+        if not versions:
+            return [], None
+        blobs = self.github.get_github_dir_blobs(org, repo_name, sha)
+        if blobs is None:
+            return [], "не удалось получить файлы CI репозитория из GitHub"
+
+        owner, repo = template.split("/")
+        modified = []
+        for path in sorted(p for p in blobs if p in versions):
+            if blobs[path] in versions[path]:
+                continue
+            content = self.github.get_blob(org, repo_name, blobs[path])
+            if content is None:
+                return [], "не удалось получить файлы CI репозитория из GitHub"
+            allowed = set()
+            for template_blob in versions[path]:
+                template_content = self._template_blob(owner, repo, template_blob)
+                if template_content is None:
+                    return [], "не удалось получить файлы CI шаблона из GitHub"
+                allowed.add(_normalize_line_endings(template_content))
+            if _normalize_line_endings(content) not in allowed:
+                modified.append(path)
+        return modified, None
+
+    def _template_blob(self, owner: str, repo: str, blob_sha: str) -> bytes | None:
+        # A blob's content never changes for its sha: cache without expiry.
+        with _template_ci_versions_lock:
+            if blob_sha in _template_blob_cache:
+                return _template_blob_cache[blob_sha]
+        content = self.github.get_blob(owner, repo, blob_sha)
+        if content is not None:
+            with _template_ci_versions_lock:
+                _template_blob_cache[blob_sha] = content
+        return content
+
     def check_forbidden_files(
         self,
         org: str,
@@ -222,6 +365,10 @@ class LabGrader:
         commit = self.github.get_latest_commit(org, repo_name)
         if commit is None:
             return None
+
+        ci_files_error = self.check_ci_files(org, repo_name, lab_config, commit.sha)
+        if ci_files_error:
+            return ci_files_error
 
         # Get forbidden patterns from config or defaults
         required_files = lab_config.get("files", [])
