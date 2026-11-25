@@ -438,6 +438,7 @@ class TestCreateFromFork:
         responses.add(
             responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
         )
+        responses.add(responses.GET, urls["template"], json={"has_issues": True}, status=200)
         actions_call = responses.add(responses.PUT, urls["actions"], status=204)
         responses.add(responses.PATCH, urls["repo"], status=200)
         add_access_mocks(urls, existing=True)
@@ -460,6 +461,7 @@ class TestCreateFromFork:
         responses.add(
             responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
         )
+        responses.add(responses.GET, urls["template"], json={"has_issues": True}, status=200)
         responses.add(responses.PUT, urls["actions"], status=500)  # fails again
         add_access_mocks(urls, existing=True)
 
@@ -663,7 +665,7 @@ class TestCreateFromFork:
         выглядела бы несданной. Обе настройки уходят одним PATCH."""
         urls = make_fork_urls()
         responses.add(responses.GET, urls["repo"], status=404)
-        responses.add(responses.GET, urls["template"], json={"private": True}, status=200)
+        responses.add(responses.GET, urls["template"], json={"private": True, "has_issues": True}, status=200)
         responses.add(responses.POST, urls["forks"], json={}, status=202)
         responses.add(responses.GET, urls["repo"], status=200)
         responses.add(responses.PUT, urls["actions"], status=204)
@@ -676,6 +678,7 @@ class TestCreateFromFork:
         assert patch_call.call_count == 1
         assert json.loads(patch_call.calls[0].request.body) == {
             "is_template": False,
+            "has_issues": True,
             "allow_forking": False,
         }
 
@@ -687,6 +690,7 @@ class TestCreateFromFork:
         responses.add(
             responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
         )
+        responses.add(responses.GET, urls["template"], json={"has_issues": True}, status=200)
         responses.add(responses.PUT, urls["actions"], status=204)
         patch_call = responses.add(responses.PATCH, urls["repo"], json={}, status=200)
         add_access_mocks(urls, existing=True)
@@ -1044,3 +1048,50 @@ class TestNetworkFailure:
 
         assert result.status == ProvisionStatus.ERROR
         assert result.error_code == "GITHUB_UNAVAILABLE"
+
+
+class TestForkIssuesFollowTemplate:
+    """GitHub выключает Issues на каждом форке; форк получает настройку шаблона."""
+
+    def _provision_new(self, template_json):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=404)
+        responses.add(responses.GET, urls["template"], json=template_json, status=200)
+        responses.add(responses.POST, urls["forks"], json={}, status=202)
+        responses.add(responses.GET, urls["repo"], status=200)
+        responses.add(responses.PUT, urls["actions"], status=204)
+        patch_call = responses.add(responses.PATCH, urls["repo"], json={}, status=200)
+        add_access_mocks(urls)
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+        assert result.status == ProvisionStatus.OK
+        return json.loads(patch_call.calls[0].request.body)
+
+    @responses.activate
+    @pytest.mark.parametrize("has_issues", [True, False])
+    def test_new_fork_copies_template(self, has_issues):
+        body = self._provision_new({"private": True, "has_issues": has_issues})
+
+        assert body["has_issues"] is has_issues
+
+    @responses.activate
+    def test_unknown_template_setting_is_left_alone(self):
+        body = self._provision_new({"private": True})
+
+        assert "has_issues" not in body
+
+    @responses.activate
+    def test_existing_fork_gets_template_setting(self):
+        urls = make_fork_urls()
+        responses.add(responses.GET, urls["repo"], status=200)
+        responses.add(
+            responses.GET, urls["repo"], json={"parent": {"full_name": TEMPLATE_REPO}}, status=200
+        )
+        responses.add(responses.GET, urls["template"], json={"has_issues": True}, status=200)
+        responses.add(responses.PUT, urls["actions"], status=204)
+        patch_call = responses.add(responses.PATCH, urls["repo"], json={}, status=200)
+        add_access_mocks(urls, existing=True)
+
+        result = make_provisioner().provision(ORG, GITHUB_PREFIX, TEMPLATE_REPO, USERNAME, mode="fork")
+
+        assert result.status == ProvisionStatus.OK
+        assert json.loads(patch_call.calls[0].request.body)["has_issues"] is True
