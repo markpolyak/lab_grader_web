@@ -324,6 +324,75 @@ class GitHubClient:
             if entry.get("type") == "file" and entry.get("path")
         ]
 
+    def get_github_dir_blobs(self, owner: str, repo: str, ref: str) -> dict[str, str] | None:
+        """
+        Every file under `.github/` at `ref`, as {path: git blob sha}.
+
+        Two requests: the root tree (not recursive - a repository with a large
+        dataset would truncate a recursive listing), then the `.github` subtree.
+
+        Returns:
+            {".github/workflows/classroom.yml": "<blob sha>", ...}; {} when there
+            is no `.github` directory; None on error or a truncated listing
+        """
+        base = f"{self.BASE_URL}/repos/{owner}/{repo}/git/trees"
+        resp = requests.get(f"{base}/{ref}", headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        entry = next(
+            (e for e in resp.json().get("tree", [])
+             if e.get("path") == ".github" and e.get("type") == "tree"),
+            None,
+        )
+        if entry is None:
+            return {}
+        resp = requests.get(
+            f"{base}/{entry['sha']}", headers=self.headers,
+            params={"recursive": "1"}, timeout=self.DEFAULT_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if data.get("truncated"):
+            return None
+        return {
+            f".github/{e['path']}": e["sha"]
+            for e in data.get("tree", []) if e.get("type") == "blob"
+        }
+
+    def get_blob(self, owner: str, repo: str, blob_sha: str) -> bytes | None:
+        """
+        Contents of a git blob.
+
+        Returns:
+            Raw bytes, or None on error
+        """
+        url = f"{self.BASE_URL}/repos/{owner}/{repo}/git/blobs/{blob_sha}"
+        resp = requests.get(url, headers=self.headers, timeout=self.DEFAULT_TIMEOUT)
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        if data.get("encoding") != "base64":
+            return None
+        try:
+            return base64.b64decode(data.get("content", ""))
+        except ValueError:
+            return None
+
+    def list_commits_touching(self, owner: str, repo: str, path: str) -> list[str] | None:
+        """
+        SHAs of the default branch's commits that changed `path`, newest first.
+
+        Returns:
+            Commit SHAs, or None on error
+        """
+        commits = self._get_all_pages(
+            f"{self.BASE_URL}/repos/{owner}/{repo}/commits", {"path": path}
+        )
+        if commits is None:
+            return None
+        return [c["sha"] for c in commits if c.get("sha")]
+
     def repo_exists(self, org: str, repo: str) -> bool:
         """
         Check if a repository exists.
