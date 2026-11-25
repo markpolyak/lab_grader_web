@@ -37,6 +37,13 @@ _repo_locks: dict[tuple[str, str], threading.Lock] = {}
 _repo_locks_guard = threading.Lock()
 
 
+def _template_has_issues(template: dict | None) -> bool | None:
+    """The template's Issues setting, or None when it is unknown."""
+    if not template or not isinstance(template.get("has_issues"), bool):
+        return None
+    return template["has_issues"]
+
+
 def _repo_lock(org: str, repo_name: str) -> threading.Lock:
     """Lock guarding provisioning of one repository."""
     key = (org.lower(), repo_name.lower())
@@ -227,7 +234,8 @@ class RepoProvisioner:
                 # may have created it and then failed on enable_actions (a
                 # student retrying /join lands here), and a fork made by hand
                 # never had them applied at all.
-                return self._repair_fork(org, repo_name)
+                template = self.github.get_repo(template_owner, template_name)
+                return self._repair_fork(org, repo_name, _template_has_issues(template))
             return None
 
         if not create:
@@ -464,7 +472,7 @@ class RepoProvisioner:
                 error_code="FORK_TIMEOUT",
             )
 
-        return self._repair_fork(org, repo_name)
+        return self._repair_fork(org, repo_name, _template_has_issues(template))
 
     @staticmethod
     def _created_repo_name(resp) -> str | None:
@@ -475,7 +483,9 @@ class RepoProvisioner:
             return None
         return payload.get("name") if isinstance(payload, dict) else None
 
-    def _repair_fork(self, org: str, repo_name: str) -> ProvisionResult | None:
+    def _repair_fork(
+        self, org: str, repo_name: str, has_issues: bool | None = None
+    ) -> ProvisionResult | None:
         """
         Bring a fork into the shape grading expects.
 
@@ -500,19 +510,21 @@ class RepoProvisioner:
                 error_code="ACTIONS_ENABLE_FAILED",
             )
 
-        # Three settings in one PATCH:
+        # Settings in one PATCH:
         #   is_template - the fork inherits the template flag, cosmetic but confusing;
         #   has_issues - GitHub turns Issues off on every fork whatever the parent
-        #     has, and labs that ask students to open an issue need them;
+        #     has; copied from the template (labs that ask students to open an
+        #     issue need them), left alone when the template could not be read;
         #   allow_forking - a student forking their own repository into their personal
         #     account would push there, and grade_lab only ever looks at
         #     {org}/{prefix}-{username}, so the work would look undone. Applies to
         #     private repositories, which fork mode guarantees (the template must be
         #     private, and a fork inherits its visibility).
         # None is worth failing an otherwise-working repository over - log and move on.
-        update_resp = self.github.update_repo(
-            org, repo_name, {"is_template": False, "has_issues": True, "allow_forking": False}
-        )
+        settings: dict[str, bool] = {"is_template": False, "allow_forking": False}
+        if has_issues is not None:
+            settings["has_issues"] = has_issues
+        update_resp = self.github.update_repo(org, repo_name, settings)
         if update_resp.status_code != 200:
             logger.error(
                 f"Failed to update is_template / has_issues / allow_forking on {org}/{repo_name}: "
