@@ -116,6 +116,21 @@ class TestModifiedFiles:
 
         gh.get_github_dir_blobs.assert_any_call("org", "lab1-student", "abc123")
 
+    @pytest.mark.parametrize("allowed", [[WORKFLOW], [".github/workflows/"]])
+    def test_allowed_modification(self, allowed):
+        gh = make_github({WORKFLOW: "edited"})
+
+        assert grade(gh, lab={**LAB, "ci-files-allow-modified": allowed}).result == "v"
+
+    def test_allowance_is_per_file(self):
+        gh = make_github({WORKFLOW: "blob-new", ".github/actions/run/action.yml": "edited"})
+        lab = {**LAB, "ci-files-allow-modified": [WORKFLOW]}
+
+        result = grade(gh, lab=lab)
+
+        assert result.error_code == "FORBIDDEN_MODIFICATION"
+        assert ".github/actions/run/action.yml" in result.message
+
     def test_line_endings_are_ignored(self):
         gh = make_github({WORKFLOW: "blob-crlf"})
 

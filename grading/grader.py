@@ -280,6 +280,13 @@ class LabGrader:
         if not template:
             return None
         modified, details = self._modified_ci_files(template, org, repo_name, sha)
+        allowed = [
+            p for p in lab_config.get("ci-files-allow-modified") or [] if isinstance(p, str)
+        ]
+        modified = [
+            path for path in modified
+            if not any(path == p or (p.endswith("/") and path.startswith(p)) for p in allowed)
+        ]
         if details is not None:
             return GradeResult(
                 status=GradeStatus.ERROR,
