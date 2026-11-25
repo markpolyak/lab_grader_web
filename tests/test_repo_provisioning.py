@@ -676,6 +676,7 @@ class TestCreateFromFork:
         assert patch_call.call_count == 1
         assert json.loads(patch_call.calls[0].request.body) == {
             "is_template": False,
+            "has_issues": True,
             "allow_forking": False,
         }
 
@@ -695,6 +696,7 @@ class TestCreateFromFork:
 
         assert result.status == ProvisionStatus.OK
         assert json.loads(patch_call.calls[0].request.body)["allow_forking"] is False
+        assert json.loads(patch_call.calls[0].request.body)["has_issues"] is True
 
     @responses.activate
     def test_is_template_clear_failure_is_not_fatal(self):

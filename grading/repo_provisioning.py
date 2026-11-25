@@ -500,20 +500,22 @@ class RepoProvisioner:
                 error_code="ACTIONS_ENABLE_FAILED",
             )
 
-        # Two settings in one PATCH:
+        # Three settings in one PATCH:
         #   is_template - the fork inherits the template flag, cosmetic but confusing;
+        #   has_issues - GitHub turns Issues off on every fork whatever the parent
+        #     has, and labs that ask students to open an issue need them;
         #   allow_forking - a student forking their own repository into their personal
         #     account would push there, and grade_lab only ever looks at
         #     {org}/{prefix}-{username}, so the work would look undone. Applies to
         #     private repositories, which fork mode guarantees (the template must be
         #     private, and a fork inherits its visibility).
-        # Neither is worth failing an otherwise-working repository over - log and move on.
+        # None is worth failing an otherwise-working repository over - log and move on.
         update_resp = self.github.update_repo(
-            org, repo_name, {"is_template": False, "allow_forking": False}
+            org, repo_name, {"is_template": False, "has_issues": True, "allow_forking": False}
         )
         if update_resp.status_code != 200:
             logger.error(
-                f"Failed to clear is_template / allow_forking on {org}/{repo_name}: "
+                f"Failed to update is_template / has_issues / allow_forking on {org}/{repo_name}: "
                 f"{update_resp.status_code} {update_resp.text[:500]}"
             )
 
