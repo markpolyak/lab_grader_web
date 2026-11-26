@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import {
@@ -14,12 +14,14 @@ import {
   TableCell,
   TableHead,
   TableRow,
+  TableSortLabel,
   TextField,
   Checkbox,
   FormControlLabel,
 } from "@mui/material";
 import { QuizMarkdown } from "../../quiz-markdown";
 import { BackButton, Container, PageTitle, Panel, TableWrapper } from "../LabList/styled";
+import { nextSort, readSortCookie, sortCookie, sortQuizzes } from "./sort";
 
 // Квизы курса (docs/QUIZ_PLAN.md §10.2): список, загрузка банка вопросов с
 // параметрами, предпросмотр с правильными ответами, удаление, запуск.
@@ -90,6 +92,27 @@ export const QuizList = () => {
   const [inRoom, setInRoom] = useState(false);
   const [leaderboard, setLeaderboard] = useState(true);
   const [snackbar, setSnackbar] = useState(null);
+  // Chosen column and direction, remembered in a cookie for the next visit.
+  const [sort, setSort] = useState(() => readSortCookie(document.cookie));
+  const sortedQuizzes = useMemo(() => quizzes && sortQuizzes(quizzes, sort), [quizzes, sort]);
+
+  const changeSort = (column) => {
+    const next = nextSort(sort, column);
+    setSort(next);
+    document.cookie = sortCookie(next);
+  };
+
+  const sortableHead = (column, label) => (
+    <TableCell sortDirection={sort && sort.column === column ? sort.direction : false}>
+      <TableSortLabel
+        active={!!sort && sort.column === column}
+        direction={sort && sort.column === column ? sort.direction : "asc"}
+        onClick={() => changeSort(column)}
+      >
+        {label}
+      </TableSortLabel>
+    </TableCell>
+  );
 
   const load = useCallback(() => {
     api(base)
@@ -277,16 +300,16 @@ export const QuizList = () => {
             <Table size="small">
               <TableHead>
                 <TableRow>
-                  <TableCell>{t("quizAdmin.columns.title")}</TableCell>
-                  <TableCell>{t("quizAdmin.columns.shortName")}</TableCell>
-                  <TableCell>{t("quizAdmin.columns.questions")}</TableCell>
-                  <TableCell>{t("quizAdmin.columns.points")}</TableCell>
-                  <TableCell>{t("quizAdmin.columns.seconds")}</TableCell>
+                  {sortableHead("title", t("quizAdmin.columns.title"))}
+                  {sortableHead("short_name", t("quizAdmin.columns.shortName"))}
+                  {sortableHead("questions", t("quizAdmin.columns.questions"))}
+                  {sortableHead("max_points", t("quizAdmin.columns.points"))}
+                  {sortableHead("seconds_per_question", t("quizAdmin.columns.seconds"))}
                   <TableCell />
                 </TableRow>
               </TableHead>
               <TableBody>
-                {quizzes.map((quiz) => (
+                {sortedQuizzes.map((quiz) => (
                   <TableRow key={quiz.id}>
                     <TableCell>
                       {quiz.title || quiz.id}
